@@ -264,6 +264,7 @@ function SolutionPane({
                 <span>步骤 {step.index}</span>
                 <strong>{step.title}</strong>
                 <ExplainableMathMarkdown
+                  className="problem-solution-content"
                   hoverEnabled
                   onTarget={onTarget}
                   source="solution"
@@ -280,7 +281,9 @@ function SolutionPane({
             {attempt.steps.map((step) => (
               <section className="comparison-step" key={step.index}>
                 <span>步骤 {step.index}</span>
+                <strong>{step.title}</strong>
                 <ExplainableMathMarkdown
+                  className="problem-solution-content"
                   onTarget={onTarget}
                   source="student_attempt"
                   step={step}
@@ -303,7 +306,10 @@ function SolutionPane({
               <div>
                 <span>使用公式</span>
                 {solution.usedFormulas.map((formula) => (
-                  <MathMarkdown key={formula}>{`$$${formula}$$`}</MathMarkdown>
+                  <MathMarkdown
+                    key={formula}
+                    className="solution-formula-list"
+                  >{`$$${formula}$$`}</MathMarkdown>
                 ))}
               </div>
             )}

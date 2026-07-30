@@ -2414,12 +2414,35 @@
   font-size: 9px;
 }
 
-.solution-insights strong,
-.solution-insights p {
+.solution-insights > div > strong,
+.solution-insights > div > p {
   margin: 0;
   color: var(--ink);
   font-size: 11px;
   line-height: 17px;
+}
+
+/* 使用公式块：恢复到正文尺寸，避免被父级 11px 字号压制 */
+.solution-insights .solution-formula-list,
+.solution-insights .solution-formula-list p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.solution-insights .solution-formula-list .katex-display {
+  margin: 0.6em 0;
+  max-width: 100%;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-size: 1.05em;
+}
+
+/* 多条公式之间留间距 */
+.solution-insights .solution-formula-list + .solution-formula-list {
+  margin-top: 6px;
 }
 
 .comparison-open-hint {
