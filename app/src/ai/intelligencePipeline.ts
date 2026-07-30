@@ -80,7 +80,11 @@ async function drainPendingIntelligence() {
         }
         if (errors.length) throw new Error(`所有用户解答 Provider 均失败：${errors.join('；')}`)
       } catch (error) {
-        await failStudentAttemptModelRun(activeRun, error)
+        try {
+          await failStudentAttemptModelRun(activeRun, error)
+        } catch (innerError) {
+          console.error('[Intelligence] failStudentAttemptModelRun 抛错', innerError)
+        }
       }
       if (completed) {
         try {
@@ -129,7 +133,11 @@ async function drainPendingIntelligence() {
       }
       if (errors.length) throw new Error(`所有推理分析 Provider 均失败：${errors.join('；')}`)
     } catch (error) {
-      await failReasoningModelRun(activeRun, error)
+      try {
+        await failReasoningModelRun(activeRun, error)
+      } catch (innerError) {
+        console.error('[Intelligence] failReasoningModelRun 抛错', innerError)
+      }
     }
     notifyIntelligenceStatus(reasoning.problemId)
   }
@@ -140,7 +148,13 @@ export function runIntelligenceWorker(): Promise<void> {
   activeWorker ??= (async () => {
     while (workerRequested) {
       workerRequested = false
-      await drainPendingIntelligence()
+      try {
+        await drainPendingIntelligence()
+      } catch (error) {
+        console.error('[Intelligence] drain 异常，将继续重试', error)
+        workerRequested = true
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
     }
   })().finally(() => {
     activeWorker = null

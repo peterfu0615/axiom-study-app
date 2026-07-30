@@ -87,7 +87,11 @@ async function drainPendingSolutions() {
         throw new Error(`所有 Solution Provider 均失败：${errors.join('；')}`)
       }
     } catch (error) {
-      await failSolutionModelRun(activeRun, error)
+      try {
+        await failSolutionModelRun(activeRun, error)
+      } catch (innerError) {
+        console.error('[Solution] failSolutionModelRun 抛错', innerError)
+      }
     }
     notifySolutionStatus(run.problemId)
   }
@@ -98,7 +102,13 @@ export function runSolutionWorker(): Promise<void> {
   activeWorker ??= (async () => {
     while (workerRequested) {
       workerRequested = false
-      await drainPendingSolutions()
+      try {
+        await drainPendingSolutions()
+      } catch (error) {
+        console.error('[Solution] drain 异常，将继续重试', error)
+        workerRequested = true
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
     }
   })().finally(() => {
     activeWorker = null

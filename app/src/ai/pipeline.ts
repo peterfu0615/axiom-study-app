@@ -160,7 +160,12 @@ async function drainPendingProblemAI() {
         throw new Error(`所有视觉 Provider 均失败：${errors.join('；')}`)
       }
     } catch (error) {
-      await failProblemAIModelRun(activeRun, error)
+      try {
+        await failProblemAIModelRun(activeRun, error)
+      } catch (innerError) {
+        // failProblemAIModelRun 自身抛出（如 DB 错误）不应杀死 worker
+        console.error('[ProblemAI] failProblemAIModelRun 抛错', innerError)
+      }
     }
     notifyProblemAIStatus(run.problemId)
   }
@@ -171,7 +176,14 @@ export function runProblemAIWorker(): Promise<void> {
   activeWorker ??= (async () => {
     while (workerRequested) {
       workerRequested = false
-      await drainPendingProblemAI()
+      try {
+        await drainPendingProblemAI()
+      } catch (error) {
+        // 单次 drain 异常不能杀死 worker：记录后短暂退避再继续
+        console.error('[ProblemAI] drain 异常，将继续重试', error)
+        workerRequested = true
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
     }
   })().finally(() => {
     activeWorker = null
