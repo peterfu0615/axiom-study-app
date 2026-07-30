@@ -281,7 +281,6 @@ function SolutionPane({
             {attempt.steps.map((step) => (
               <section className="comparison-step" key={step.index}>
                 <span>步骤 {step.index}</span>
-                <strong>{step.title}</strong>
                 <ExplainableMathMarkdown
                   className="problem-solution-content"
                   onTarget={onTarget}
