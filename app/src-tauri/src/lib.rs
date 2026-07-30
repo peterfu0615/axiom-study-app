@@ -122,9 +122,9 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            // 强制主窗口使用浅色主题，避免 macOS 系统深色模式下原生窗口背景变黑
+            // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_theme(Some(tauri::Theme::Light));
+                let _ = window.set_theme(None);
             }
             Ok(())
         })
