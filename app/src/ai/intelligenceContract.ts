@@ -52,17 +52,16 @@ export const studentAttemptJSONSchema = {
   additionalProperties: false,
   required: ['raw_markdown', 'steps'],
   properties: {
-    raw_markdown: { type: 'string', minLength: 1 },
+    raw_markdown: { type: 'string' },
     steps: {
       type: 'array',
-      minItems: 1,
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['index', 'content_markdown', 'confidence'],
         properties: {
           index: { type: 'integer', minimum: 1 },
-          content_markdown: { type: 'string', minLength: 1 },
+          content_markdown: { type: 'string' },
           confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 },
         },
       },
@@ -206,6 +205,8 @@ export const STUDENT_ATTEMPT_PROMPT = String.raw`
 你是中国中学数学手写答案 OCR 模型。只识别学生实际写下的内容，不判断答案是否正确。
 
 只返回符合 JSON Schema 的 JSON 对象，不要代码围栏、前言或解释。公式必须使用 LaTeX Markdown；无法辨认的内容使用简短的 [?]，不得臆造。raw_markdown 保存完整答案，steps 按书写顺序拆分，index 从 1 连续递增，confidence 为 0 到 1 或 null。
+
+若作答区域为空白或未检测到任何手写内容，仍必须返回符合 Schema 的 JSON：raw_markdown 设为 "未检测到作答内容"，steps 设为包含单个步骤的数组，其 index 为 1、content_markdown 为 "未检测到作答内容"、confidence 为 0。不得返回空字符串或空数组。
 `.trim()
 
 export const REASONING_ANALYSIS_PROMPT = String.raw`

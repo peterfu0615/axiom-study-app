@@ -286,7 +286,7 @@ export function CaptureWorkspace() {
 
   return (
     <main className="workspace">
-      <header className="workspace-header" data-tauri-drag-region>
+      <header className="workspace-header">
         <div>
           <p className="eyebrow">采集工作台</p>
           <h1>添加错题</h1>

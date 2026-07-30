@@ -1,4 +1,5 @@
 import Database from '@tauri-apps/plugin-sql'
+import { invoke } from '@tauri-apps/api/core'
 import {
   PROBLEM_ANALYSIS_PROMPT_VERSION,
   PROBLEM_ANALYSIS_SCHEMA_VERSION,
@@ -63,15 +64,46 @@ import {
   type PersistedProblemImage,
 } from './native'
 
-let databasePromise: Promise<Database> | null = null
 const browserDocuments: SourceDocument[] = []
 const browserProblemRegions = new Map<string, ProblemRegion[]>()
 const browserStudentAttempts = new Map<string, StudentAttempt>()
 const browserReasoningAnalyses = new Map<string, ReasoningAnalysis>()
 
+interface ExecuteResult {
+  rowsAffected: number
+  lastInsertId: number
+}
+
+interface DatabaseLike {
+  execute(sql: string, params?: unknown[]): Promise<ExecuteResult>
+  select<T>(sql: string, params?: unknown[]): Promise<T>
+}
+
+let dbInstancePromise: Promise<DatabaseLike> | null = null
+
 function database() {
-  databasePromise ??= Database.load('sqlite:axiom.db')
-  return databasePromise
+  dbInstancePromise ??= (async () => {
+    // 1. 通过 tauri-plugin-sql 触发启动时迁移（仍保留其内置连接池仅用于此目的）
+    //    该调用会创建 axiom.db 并应用全部 migrations。
+    const pluginDb = await Database.load('sqlite:axiom.db')
+    // 同步设置 WAL 模式与 busy_timeout，确保多连接池之间共享同一日志模式
+    try {
+      await pluginDb.execute('PRAGMA journal_mode=WAL')
+      await pluginDb.execute('PRAGMA busy_timeout=10000')
+    } catch {
+      // 忽略：Rust 端 init_db 已设置过这些 PRAGMA
+    }
+
+    // 2. 所有数据操作走单一 sqlx 连接（Rust 端 db_execute / db_select），
+    //    彻底避免 tauri-plugin-sql 多连接池导致的事务交错与锁竞争。
+    return {
+      execute: (sql: string, params: unknown[] = []) =>
+        invoke<ExecuteResult>('db_execute', { sql, params }),
+      select: <T>(sql: string, params: unknown[] = []) =>
+        invoke<T>('db_select', { sql, params }),
+    } satisfies DatabaseLike
+  })()
+  return dbInstancePromise
 }
 
 // tauri-plugin-sql 的每个 db.execute() 都是独立 IPC 调用，SQLite 实际为单连接。
@@ -91,7 +123,7 @@ function withTransactionLock<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 async function inDatabaseTransaction<T>(
-  db: Database,
+  db: DatabaseLike,
   operation: () => Promise<T>,
 ): Promise<T> {
   return withTransactionLock(async () => {
@@ -306,7 +338,7 @@ export async function listRecentSourceDocuments(
 }
 
 async function replaceCandidateProblems(
-  db: Database,
+  db: DatabaseLike,
   sourceDocumentId: string,
   blocks: ProblemBlock[],
 ) {
@@ -559,7 +591,7 @@ function createAIModelRun(
 }
 
 async function insertAIModelRuns(
-  db: Database,
+  db: DatabaseLike,
   runs: NewAIModelRun[],
 ) {
   if (!runs.length) return
@@ -633,7 +665,7 @@ function createSolutionModelRun(problem: SavedProblem): SolutionModelRun {
 }
 
 async function insertSolutionModelRun(
-  db: Database,
+  db: DatabaseLike,
   run: SolutionModelRun,
 ) {
   await db.execute(
@@ -658,7 +690,7 @@ async function insertSolutionModelRun(
 }
 
 async function insertIntelligenceModelRun(
-  db: Database,
+  db: DatabaseLike,
   run: StudentAttemptModelRun | ReasoningModelRun | ExplainModelRun,
 ) {
   const promptAndSchema =
@@ -689,7 +721,7 @@ async function insertIntelligenceModelRun(
 }
 
 async function selectSavedProblemsByIds(
-  db: Database,
+  db: DatabaseLike,
   ids: string[],
 ): Promise<SavedProblem[]> {
   const placeholders = ids.map((_, index) => `$${index + 1}`).join(', ')

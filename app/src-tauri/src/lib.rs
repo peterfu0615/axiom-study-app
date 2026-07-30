@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+mod db;
 mod models;
 
 use tauri::Manager;
@@ -112,7 +113,9 @@ pub fn run() {
             commands::remove_problem_image,
             commands::remove_problem_diagram,
             ai::analyze_problem_with_openai_compatible,
-            ai::analyze_problem_with_antigravity_cli
+            ai::analyze_problem_with_antigravity_cli,
+            db::db_execute,
+            db::db_select
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -122,6 +125,14 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // 初始化单连接 SQLite 事务池，确保所有数据操作走同一连接，
+            // 避免 tauri-plugin-sql 多连接池导致的事务嵌套与锁竞争。
+            let handle = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                if let Err(e) = db::init_db(&handle).await {
+                    log::error!("初始化数据库连接失败：{e}");
+                }
+            });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_theme(None);

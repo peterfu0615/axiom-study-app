@@ -239,9 +239,13 @@ function SolutionPane({
             {content}
           </ExplainableMathMarkdown>
         ) : status === 'pending' || status === 'processing' ? (
-          <div className="comparison-placeholder">
-            <Icon name="ai" size={18} />
-            <span>AI 正在整理内容</span>
+          <div className="comparison-placeholder comparison-scanning">
+            <span className="ai-scan-icon">
+              <Icon name="ai" size={18} />
+            </span>
+            <span className="ai-scanning-text">
+              {isSolution ? 'AI 正在生成正解' : 'AI 正在识别我的解答'}
+            </span>
           </div>
         ) : status === 'failed' ? (
           <div className="comparison-placeholder error">
@@ -252,9 +256,9 @@ function SolutionPane({
               </button>
             )}
           </div>
-        ) : (
+        ) : modal && (isSolution ? solution?.steps?.length : attempt?.steps?.length) ? null : (
           <div className="comparison-placeholder">
-            {isSolution ? '重新运行题目 AI 后自动生成正解' : '添加用户作答区域后自动识别'}
+            {isSolution ? '暂无正解' : '暂无我的解答'}
           </div>
         )}
         {modal && isSolution && solution?.steps?.length ? (
@@ -739,7 +743,7 @@ export function SolutionComparison({
                   <span className="comparison-kicker">AI 分析失败</span>
                   <h3>用户解题过程暂未完成评估</h3>
                 </div>
-                <p>{reasoning.errorMessage || 'Provider 未返回错误详情。'}</p>
+                <p>{reasoning.errorMessage || '未返回错误详情。'}</p>
               </section>
             )}
             {copyMessage && <p aria-live="polite" className="solution-copy-message">{copyMessage}</p>}

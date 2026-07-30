@@ -175,7 +175,7 @@ export function ProblemCropEditor({
 
   return (
     <main className="workspace editor-workspace problem-crop-workspace">
-      <header className="editor-header" data-tauri-drag-region>
+      <header className="editor-header">
         <button
           className="back-button"
           disabled={saving}

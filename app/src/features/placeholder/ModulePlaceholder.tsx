@@ -39,7 +39,7 @@ export function ModulePlaceholder({
   const module = modules[section]
   return (
     <main className="workspace placeholder-workspace">
-      <header className="workspace-header" data-tauri-drag-region>
+      <header className="workspace-header">
         <div>
           <p className="eyebrow">{module.eyebrow}</p>
           <h1>{module.title}</h1>

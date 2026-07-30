@@ -404,7 +404,7 @@ export function DocumentEditor({
 
   return (
     <main className="workspace editor-workspace">
-      <header className="editor-header" data-tauri-drag-region>
+      <header className="editor-header">
         <button className="back-button" onClick={onBack} type="button">
           ‹ 返回采集
         </button>

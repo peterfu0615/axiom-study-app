@@ -507,7 +507,7 @@ export function ProblemLibrary() {
 
   return (
     <main className="workspace library-workspace">
-      <header className="workspace-header" data-tauri-drag-region>
+      <header className="workspace-header">
         <div>
           <p className="eyebrow">知识资产</p>
           <h1>错题库</h1>
@@ -664,7 +664,7 @@ export function ProblemLibrary() {
               </div>
 
               {editing ? (
-                <>
+                <div className="problem-detail-content">
                   <ProblemImage
                     alt={selected.title}
                     className="problem-detail-image"
@@ -717,7 +717,7 @@ export function ProblemLibrary() {
                       />
                     </label>
                   </div>
-                </>
+                </div>
               ) : (
                 <>
                   <div className="problem-detail-tabs" role="tablist">
@@ -741,6 +741,7 @@ export function ProblemLibrary() {
                     </button>
                   </div>
 
+                  <div className="problem-detail-content">
                   {detailTab === 'content' ? (
                     <div className="problem-learning-page">
                       <section className="problem-reading-section">
@@ -867,7 +868,7 @@ export function ProblemLibrary() {
                               <strong>AI 解析失败</strong>
                               <p>
                                 {activeModelRun?.errorMessage ||
-                                  'Provider 未返回错误详情。题目图片和用户编辑未受影响。'}
+                                  '未返回错误详情，题目图片和用户编辑未受影响。'}
                               </p>
                             </div>
                             <button
@@ -1124,11 +1125,12 @@ export function ProblemLibrary() {
                             ))}
                           </ul>
                         ) : (
-                          <p>暂无模型调用记录。</p>
+                          <p>暂无调用记录。</p>
                         )}
                       </section>
                     </div>
                   )}
+                  </div>
                 </>
               )}
             </>

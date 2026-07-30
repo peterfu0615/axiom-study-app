@@ -31,6 +31,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <div className="window-drag-strip" data-tauri-drag-region />
       <Sidebar active={section} onChange={setSection} />
       {section === 'capture' ? (
         <CaptureWorkspace />

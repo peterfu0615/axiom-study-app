@@ -1,5 +1,4 @@
 import { Icon } from './Icon'
-import { useTheme } from '../platform/theme'
 import axiomWordmark from '../../../icons/axiom_text.png'
 
 export type AppSection =
@@ -27,7 +26,6 @@ export function Sidebar({
   active: AppSection
   onChange: (section: AppSection) => void
 }) {
-  const { resolvedTheme, toggle } = useTheme()
   return (
     <aside className="sidebar">
       <div className="traffic-light-space" data-tauri-drag-region />
@@ -54,17 +52,6 @@ export function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <button
-          className="nav-item"
-          onClick={toggle}
-          type="button"
-          aria-label={
-            resolvedTheme === 'dark' ? '切换到浅色模式' : '切换到深色模式'
-          }
-        >
-          <Icon name={resolvedTheme === 'dark' ? 'sun' : 'moon'} />
-          <span>{resolvedTheme === 'dark' ? '浅色模式' : '深色模式'}</span>
-        </button>
         <button
           className={`nav-item ${active === 'settings' ? 'active' : ''}`}
           onClick={() => onChange('settings')}

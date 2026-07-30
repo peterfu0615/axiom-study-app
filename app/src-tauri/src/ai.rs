@@ -556,9 +556,19 @@ fn analyze_problem_with_antigravity_cli_blocking(
         }
     };
     if raw_output.is_empty() {
+        // 将 envelope 原文与 stderr 一并暴露，便于排查 CLI 返回 SUCCESS 但内容为空的根因
+        let stderr_excerpt: String = stderr_text.trim().chars().take(800).collect();
+        let envelope_excerpt: String = envelope_output.chars().take(800).collect();
+        let diagnostic = if !stderr_excerpt.is_empty() {
+            format!("（envelope: {envelope_excerpt}; stderr: {stderr_excerpt}）")
+        } else if !envelope_excerpt.is_empty() {
+            format!("（envelope: {envelope_excerpt}）")
+        } else {
+            String::new()
+        };
         return Ok(json!({
             "rawOutput": "",
-            "errorMessage": "Antigravity CLI 未返回内容"
+            "errorMessage": format!("Antigravity CLI 未返回内容{diagnostic}")
         }));
     }
     if is_vision_unsupported(&raw_output) {
