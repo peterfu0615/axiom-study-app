@@ -55,6 +55,7 @@ struct GithubAsset {
 
 /// 检查更新返回的完整信息，前端用于展示版本号、更新日志和下载。
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     /// 最新版本号（不含 v 前缀），如 `0.2.0`
     pub version: String,
@@ -92,7 +93,7 @@ pub fn get_app_version() -> String {
 
 /// 检查 GitHub 最新 release。返回 `Some(UpdateInfo)` 表示有更新，`None` 表示已是最新。
 /// 网络错误或仓库不存在时返回 `Err`，调用方应静默处理。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     let current = env!("CARGO_PKG_VERSION");
     let url = format!("https://api.github.com/repos/{UPDATE_OWNER}/{UPDATE_REPO}/releases/latest");
@@ -165,7 +166,7 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
 
 /// 下载并安装更新。下载进度通过 `update://progress` 事件报告。
 /// 完成后退出当前进程，由 detached 脚本完成替换和重启。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn download_and_install_update(
     app: AppHandle,
     download_url: String,
