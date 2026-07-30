@@ -82,6 +82,24 @@ fn versioned_diagram_image_name(problem_id: &str) -> String {
     format!("{problem_id}-diagram-{}.jpg", Uuid::new_v4())
 }
 
+/// 校验 problem_id 是否可作为输出文件名前缀。
+///
+/// `problem_id` 仅用作输出文件名前缀（与随机 UUID 拼接），
+/// 不需要是合法 UUID；前端会传入形如 `<uuid>-answer`、`<uuid>-diagram-<region_id>`
+/// 的复合标识符。但为防止目录穿越和非法字符，仍需做路径安全校验。
+fn sanitize_problem_id(problem_id: &str) -> Result<String, String> {
+    if problem_id.is_empty()
+        || problem_id.contains('/')
+        || problem_id.contains('\\')
+        || problem_id.contains("..")
+        || problem_id.contains('\0')
+        || problem_id.contains(|c: char| c.is_control())
+    {
+        return Err("题目 ID 无效".to_string());
+    }
+    Ok(problem_id.to_string())
+}
+
 fn validate_normalized_rect(rect: &NormalizedRect) -> Result<(), String> {
     let values = [rect.x, rect.y, rect.width, rect.height];
     if values.iter().any(|value| !value.is_finite()) {
@@ -349,9 +367,9 @@ pub fn crop_problem_image(
 ) -> Result<PersistedProblemImage, String> {
     validate_normalized_rect(&rect)?;
 
-    let safe_problem_id = Uuid::parse_str(&problem_id)
-        .map_err(|_| "题目 ID 无效".to_string())?
-        .to_string();
+    // problem_id 仅用作输出文件名前缀，不需要是合法 UUID；
+    // 但仍需校验路径安全，防止目录穿越或非法字符。
+    let safe_problem_id = sanitize_problem_id(&problem_id)?;
     let input = Path::new(&source_path)
         .canonicalize()
         .map_err(|error| format!("无法读取校正后的页面图片：{error}"))?;
@@ -472,9 +490,9 @@ pub fn crop_problem_diagram(
 ) -> Result<PersistedProblemImage, String> {
     validate_normalized_rect(&rect)?;
 
-    let safe_problem_id = Uuid::parse_str(&problem_id)
-        .map_err(|_| "题目 ID 无效".to_string())?
-        .to_string();
+    // problem_id 仅用作输出文件名前缀，不需要是合法 UUID；
+    // 但仍需校验路径安全，防止目录穿越或非法字符。
+    let safe_problem_id = sanitize_problem_id(&problem_id)?;
     let input = Path::new(&source_path)
         .canonicalize()
         .map_err(|error| format!("无法读取题块图片：{error}"))?;

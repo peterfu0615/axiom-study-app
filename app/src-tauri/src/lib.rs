@@ -124,7 +124,7 @@ pub fn run() {
             }
             // 强制主窗口使用浅色主题，避免 macOS 系统深色模式下原生窗口背景变黑
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_theme(tauri::Theme::Light);
+                let _ = window.set_theme(Some(tauri::Theme::Light));
             }
             Ok(())
         })
