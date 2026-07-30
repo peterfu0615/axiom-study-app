@@ -1,4 +1,6 @@
 :root {
+  /* 强制使用浅色外观，避免 macOS 深色模式下 webview 出现黑色背景 */
+  color-scheme: light;
   /* Axiom brand palette: FFD50A is reserved for primary actions and focus. */
   --brand: #ffd50a;
   --brand-hover: #e6bd00;

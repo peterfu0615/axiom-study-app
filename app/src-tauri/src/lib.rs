@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod models;
 
+use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -120,6 +121,10 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+            // 强制主窗口使用浅色主题，避免 macOS 系统深色模式下原生窗口背景变黑
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_theme(tauri::Theme::Light);
             }
             Ok(())
         })
