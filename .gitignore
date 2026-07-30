@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# IDE / 工具本地工作区（不发布）
+.trae/
+.vscode/
+.idea/
+
+# 本地快照工具（仅用于与 AI 协作时导出代码快照，不进入仓库）
+app_snapshot/
+export_snapshot.py
+
+# 临时构建产物（已在 app/.gitignore 与 app/src-tauri/.gitignore 覆盖）
+/target/
+/dist/
