@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "subject",
+    "problem_type",
+    "stem_markdown",
+    "choices",
+    "sub_questions",
+    "diagram",
+    "knowledge_points",
+    "confidence",
+    "warnings"
+  ],
+  "properties": {
+    "title": { "type": ["string", "null"] },
+    "subject": { "type": ["string", "null"] },
+    "problem_type": { "type": ["string", "null"] },
+    "stem_markdown": { "type": ["string", "null"] },
+    "choices": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "text"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "sub_questions": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "content"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 1 },
+          "content": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "diagram": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["exists", "kind", "bbox"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "kind": {
+          "type": ["string", "null"],
+          "enum": ["geometry", "function", "chart", "table", "other", null]
+        },
+        "bbox": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "width": { "type": "number", "minimum": 0, "maximum": 1 },
+            "height": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "knowledge_points": {
+      "type": ["array", "null"],
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "warnings": {
+      "type": ["array", "null"],
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

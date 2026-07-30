@@ -1,0 +1,58 @@
+:root {
+  /* Axiom brand palette: FFD50A is reserved for primary actions and focus. */
+  --brand: #ffd50a;
+  --brand-hover: #e6bd00;
+  --brand-pressed: #c9a600;
+  --brand-soft: #fff4bf;
+  --brand-wash: #fff9df;
+  --brand-ink: #4a3b00;
+  --success: #bd7c00;
+  --danger: #b34a42;
+  --canvas: #fffdf7;
+  --sidebar: #fffaf0;
+  --surface: #fffaf0;
+  --surface-muted: #fff7d8;
+  --ink: #29261d;
+  --muted: #746f61;
+  --border: #eadfae;
+  --card-shadow:
+    0 1px 1px rgba(74, 59, 0, 0.03),
+    0 12px 34px rgba(74, 59, 0, 0.045);
+  color: var(--ink);
+  background: var(--canvas);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 820px;
+  min-height: 100%;
+  margin: 0;
+}
+
+button,
+select {
+  font-family: inherit;
+}
+
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 72%, transparent);
+  outline-offset: 2px;
+}
+
+::selection {
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+}

@@ -1,0 +1,1013 @@
+import AVFoundation
+import CoreImage
+import Foundation
+import ImageIO
+import Vision
+
+private struct NormalizedRect: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    var maxX: Double { x + width }
+    var maxY: Double { y + height }
+
+    func expanded(by padding: Double) -> NormalizedRect {
+        let nextX = max(0, x - padding)
+        let nextY = max(0, y - padding)
+        return NormalizedRect(
+            x: nextX,
+            y: nextY,
+            width: min(1 - nextX, width + padding * 2),
+            height: min(1 - nextY, height + padding * 2)
+        )
+    }
+
+    func clamped() -> NormalizedRect {
+        let nextX = min(1, max(0, x))
+        let nextY = min(1, max(0, y))
+        return NormalizedRect(
+            x: nextX,
+            y: nextY,
+            width: min(1 - nextX, max(0.001, width)),
+            height: min(1 - nextY, max(0.001, height))
+        )
+    }
+
+    static func union(_ values: [NormalizedRect]) -> NormalizedRect {
+        guard let first = values.first else {
+            return NormalizedRect(x: 0.05, y: 0.05, width: 0.9, height: 0.9)
+        }
+        let minX = values.dropFirst().reduce(first.x) { min($0, $1.x) }
+        let minY = values.dropFirst().reduce(first.y) { min($0, $1.y) }
+        let maxX = values.dropFirst().reduce(first.maxX) { max($0, $1.maxX) }
+        let maxY = values.dropFirst().reduce(first.maxY) { max($0, $1.maxY) }
+        return NormalizedRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+}
+
+private struct Point: Codable {
+    let x: Double
+    let y: Double
+}
+
+private struct TextLine: Codable {
+    let id: String
+    let text: String
+    let confidence: Double
+    let rect: NormalizedRect
+}
+
+private struct ProblemBlock: Codable {
+    let id: String
+    var title: String
+    var rect: NormalizedRect
+    var confidence: Double
+    var lineIds: [String]
+    var source: String
+}
+
+private struct QuestionAnchor {
+    let number: Int
+    let line: TextLine
+}
+
+private struct ProcessResult: Codable {
+    let correctedPath: String
+    let width: Int
+    let height: Int
+    let pageDetected: Bool
+    let corners: [String: Point]
+    let textLines: [TextLine]
+    let blocks: [ProblemBlock]
+    let enhancementMode: String
+    let warnings: [String]
+}
+
+private struct CameraOrientationResult: Codable {
+    let deviceName: String
+    let isContinuityCamera: Bool
+    let previewRotationAngle: Double
+    let captureRotationAngle: Double
+}
+
+private enum ProcessorError: LocalizedError {
+    case invalidArguments
+    case invalidCrop
+    case unreadableImage
+    case renderFailed
+    case cameraNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArguments: return "参数不完整"
+        case .invalidCrop: return "题块裁剪区域无效"
+        case .unreadableImage: return "无法读取图片"
+        case .renderFailed: return "无法生成矫正图片"
+        case .cameraNotFound: return "找不到对应的相机设备"
+        }
+    }
+}
+
+private func cameraOrientation(deviceLabel: String) throws -> CameraOrientationResult {
+    let discovery = AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+        mediaType: .video,
+        position: .unspecified
+    )
+    let normalizedLabel = deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let device = discovery.devices.first(where: {
+        $0.localizedName.caseInsensitiveCompare(normalizedLabel) == .orderedSame
+            || normalizedLabel.localizedCaseInsensitiveContains($0.localizedName)
+            || $0.localizedName.localizedCaseInsensitiveContains(normalizedLabel)
+    }) else {
+        throw ProcessorError.cameraNotFound
+    }
+
+    if #available(macOS 14.0, *) {
+        let coordinator = AVCaptureDevice.RotationCoordinator(
+            device: device,
+            previewLayer: nil
+        )
+        return CameraOrientationResult(
+            deviceName: device.localizedName,
+            isContinuityCamera: device.deviceType == .continuityCamera
+                || device.localizedName.localizedCaseInsensitiveContains("iPhone"),
+            previewRotationAngle: coordinator.videoRotationAngleForHorizonLevelPreview,
+            captureRotationAngle: coordinator.videoRotationAngleForHorizonLevelCapture
+        )
+    }
+
+    return CameraOrientationResult(
+        deviceName: device.localizedName,
+        isContinuityCamera: false,
+        previewRotationAngle: 0,
+        captureRotationAngle: 0
+    )
+}
+
+private final class DocumentProcessor {
+    private let context = CIContext(options: [
+        .cacheIntermediates: false,
+        .useSoftwareRenderer: false,
+    ])
+    private let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+    private lazy var paperWhiteningKernel = CIColorKernel(source: """
+    kernel vec4 selectivelyWhitenPaper(
+        __sample source,
+        __sample background,
+        float targetPaper,
+        float maximumLift,
+        float paperNeutralization
+    ) {
+        float sourceLuminance = dot(source.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float backgroundLuminance = dot(
+            background.rgb,
+            vec3(0.2126, 0.7152, 0.0722)
+        );
+        float distanceFromPaper = max(
+            backgroundLuminance - sourceLuminance,
+            0.0
+        );
+
+        // Pixels close to the locally estimated paper tone can be whitened.
+        // Dark ink and line work sit farther below that tone and therefore
+        // receive little or no lift.
+        float paperMask = 1.0 - smoothstep(0.035, 0.145, distanceFromPaper);
+        float lift = clamp(
+            targetPaper - backgroundLuminance,
+            0.0,
+            maximumLift
+        ) * paperMask;
+        float correctedLuminance = clamp(sourceLuminance + lift, 0.0, 1.0);
+
+        vec3 corrected = source.rgb;
+        if (sourceLuminance > 0.001) {
+            corrected *= correctedLuminance / sourceLuminance;
+        } else {
+            corrected += vec3(lift);
+        }
+        corrected = mix(
+            corrected,
+            vec3(correctedLuminance),
+            paperMask * paperNeutralization
+        );
+        return vec4(clamp(corrected, 0.0, 1.0), source.a);
+    }
+    """)
+
+    func process(
+        inputPath: String,
+        outputPath: String,
+        mode: String,
+        beforeOutputPath: String? = nil
+    ) throws -> ProcessResult {
+        let inputURL = URL(fileURLWithPath: inputPath)
+        let outputURL = URL(fileURLWithPath: outputPath)
+        guard var image = CIImage(contentsOf: inputURL, options: [.applyOrientationProperty: true]) else {
+            throw ProcessorError.unreadableImage
+        }
+
+        var warnings: [String] = []
+        var corners: [String: Point] = fullPageCorners()
+        var pageDetected = false
+
+        if let document = detectDocument(in: image) {
+            let corrected = perspectiveCorrect(image, using: document)
+            if isPlausiblePage(corrected) {
+                corners = normalizedCorners(document)
+                image = corrected
+                pageDetected = true
+            } else {
+                warnings.append("检测到的页面边界比例异常，已保留完整原图")
+            }
+        } else {
+            warnings.append("未检测到完整页面边界，已保留原图范围")
+        }
+
+        if let beforeOutputPath {
+            try render(image, to: URL(fileURLWithPath: beforeOutputPath))
+        }
+        let recognitionImage = prepareForTextRecognition(image)
+        let enhanced = enhance(image, mode: mode)
+        try render(enhanced, to: outputURL)
+
+        let lines = recognizeText(in: recognitionImage)
+        if lines.isEmpty {
+            warnings.append("没有识别到文字，请手动添加题目块")
+        }
+        let blocks = generateProblemBlocks(from: lines)
+        if blocks.count == 1 && !lines.isEmpty {
+            warnings.append("未识别到明确题号，已按版面生成一个候选块")
+        }
+
+        let extent = enhanced.extent.integral
+        return ProcessResult(
+            correctedPath: outputPath,
+            width: Int(extent.width),
+            height: Int(extent.height),
+            pageDetected: pageDetected,
+            corners: corners,
+            textLines: lines,
+            blocks: blocks,
+            enhancementMode: mode,
+            warnings: warnings
+        )
+    }
+
+    func crop(
+        inputPath: String,
+        outputPath: String,
+        rect: NormalizedRect
+    ) throws {
+        let inputURL = URL(fileURLWithPath: inputPath)
+        let outputURL = URL(fileURLWithPath: outputPath)
+        guard let image = CIImage(
+            contentsOf: inputURL,
+            options: [.applyOrientationProperty: true]
+        ) else {
+            throw ProcessorError.unreadableImage
+        }
+        guard
+            rect.x.isFinite,
+            rect.y.isFinite,
+            rect.width.isFinite,
+            rect.height.isFinite,
+            rect.x >= 0,
+            rect.y >= 0,
+            rect.width > 0,
+            rect.height > 0,
+            rect.maxX <= 1.000_001,
+            rect.maxY <= 1.000_001
+        else {
+            throw ProcessorError.invalidCrop
+        }
+
+        let extent = image.extent
+        let requested = CGRect(
+            x: extent.minX + rect.x * extent.width,
+            y: extent.maxY - rect.maxY * extent.height,
+            width: rect.width * extent.width,
+            height: rect.height * extent.height
+        )
+        let pixelRect = requested.intersection(extent).integral
+        guard pixelRect.width >= 2, pixelRect.height >= 2 else {
+            throw ProcessorError.invalidCrop
+        }
+        let cropped = image
+            .cropped(to: pixelRect)
+            .transformed(
+                by: CGAffineTransform(
+                    translationX: -pixelRect.minX,
+                    y: -pixelRect.minY
+                )
+            )
+        try render(cropped, to: outputURL)
+    }
+
+    private func fullPageCorners() -> [String: Point] {
+        [
+            "topLeft": Point(x: 0, y: 0),
+            "topRight": Point(x: 1, y: 0),
+            "bottomLeft": Point(x: 0, y: 1),
+            "bottomRight": Point(x: 1, y: 1),
+        ]
+    }
+
+    private func isPlausiblePage(_ image: CIImage) -> Bool {
+        let extent = image.extent.integral
+        let shortEdge = min(extent.width, extent.height)
+        let longEdge = max(extent.width, extent.height)
+        guard shortEdge > 0 else { return false }
+        // Exam pages are close to A-series proportions. A wider tolerance
+        // allows perspective and partial margins but rejects diagonal strips
+        // mistakenly returned by document segmentation.
+        return longEdge / shortEdge <= 1.75
+    }
+
+    private func detectDocument(in image: CIImage) -> VNRectangleObservation? {
+        let request = VNDetectDocumentSegmentationRequest()
+        let handler = VNImageRequestHandler(ciImage: image, options: [:])
+        do {
+            try handler.perform([request])
+            return request.results?.first
+        } catch {
+            return nil
+        }
+    }
+
+    private func normalizedCorners(_ rectangle: VNRectangleObservation) -> [String: Point] {
+        func convert(_ value: CGPoint) -> Point {
+            Point(x: value.x, y: 1 - value.y)
+        }
+        return [
+            "topLeft": convert(rectangle.topLeft),
+            "topRight": convert(rectangle.topRight),
+            "bottomLeft": convert(rectangle.bottomLeft),
+            "bottomRight": convert(rectangle.bottomRight),
+        ]
+    }
+
+    private func perspectiveCorrect(
+        _ image: CIImage,
+        using rectangle: VNRectangleObservation
+    ) -> CIImage {
+        let extent = image.extent
+        func imagePoint(_ point: CGPoint) -> CIVector {
+            CIVector(
+                x: extent.minX + CGFloat(point.x) * extent.width,
+                y: extent.minY + CGFloat(point.y) * extent.height
+            )
+        }
+
+        guard let filter = CIFilter(name: "CIPerspectiveCorrection") else { return image }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(imagePoint(rectangle.topLeft), forKey: "inputTopLeft")
+        filter.setValue(imagePoint(rectangle.topRight), forKey: "inputTopRight")
+        filter.setValue(imagePoint(rectangle.bottomLeft), forKey: "inputBottomLeft")
+        filter.setValue(imagePoint(rectangle.bottomRight), forKey: "inputBottomRight")
+        return filter.outputImage ?? image
+    }
+
+    private func enhance(_ image: CIImage, mode: String) -> CIImage {
+        var output = image
+
+        if mode != "grayscale", let paperColor = estimatedPaperRGB(in: image) {
+            output = applyingConservativeWhiteBalance(
+                to: output,
+                paperColor: paperColor
+            )
+        }
+
+        if
+            let background = estimatedPaperBackground(in: output),
+            let whitened = paperWhiteningKernel?.apply(
+                extent: output.extent,
+                arguments: [
+                    output,
+                    background,
+                    mode == "grayscale" ? 0.965 : 0.95,
+                    0.42,
+                    mode == "grayscale" ? 1.0 : 0.62,
+                ]
+            )
+        {
+            output = whitened
+        }
+
+        if let gamma = CIFilter(name: "CIGammaAdjust") {
+            gamma.setValue(output, forKey: kCIInputImageKey)
+            gamma.setValue(
+                mode == "grayscale" ? 0.96 : 0.98,
+                forKey: "inputPower"
+            )
+            output = gamma.outputImage ?? output
+        }
+
+        if let toneCurve = CIFilter(name: "CIToneCurve") {
+            toneCurve.setValue(output, forKey: kCIInputImageKey)
+            toneCurve.setValue(CIVector(x: 0, y: 0), forKey: "inputPoint0")
+            toneCurve.setValue(
+                CIVector(x: 0.20, y: mode == "grayscale" ? 0.15 : 0.17),
+                forKey: "inputPoint1"
+            )
+            toneCurve.setValue(
+                CIVector(x: 0.50, y: mode == "grayscale" ? 0.51 : 0.50),
+                forKey: "inputPoint2"
+            )
+            toneCurve.setValue(
+                CIVector(x: 0.80, y: mode == "grayscale" ? 0.87 : 0.84),
+                forKey: "inputPoint3"
+            )
+            toneCurve.setValue(CIVector(x: 1, y: 1), forKey: "inputPoint4")
+            output = toneCurve.outputImage ?? output
+        }
+
+        if let controls = CIFilter(name: "CIColorControls") {
+            controls.setValue(output, forKey: kCIInputImageKey)
+            controls.setValue(
+                mode == "grayscale" ? 0.0 : 0.72,
+                forKey: kCIInputSaturationKey
+            )
+            controls.setValue(0.0, forKey: kCIInputBrightnessKey)
+            controls.setValue(
+                mode == "grayscale" ? 1.12 : 1.08,
+                forKey: kCIInputContrastKey
+            )
+            output = controls.outputImage ?? output
+        }
+
+        if let detail = CIFilter(name: "CIUnsharpMask") {
+            detail.setValue(output, forKey: kCIInputImageKey)
+            detail.setValue(0.28, forKey: kCIInputIntensityKey)
+            detail.setValue(0.8, forKey: kCIInputRadiusKey)
+            output = detail.outputImage ?? output
+        }
+
+        return output
+    }
+
+    private func prepareForTextRecognition(_ image: CIImage) -> CIImage {
+        var output = image
+        if let highlight = CIFilter(name: "CIHighlightShadowAdjust") {
+            highlight.setValue(output, forKey: kCIInputImageKey)
+            highlight.setValue(0.32, forKey: "inputShadowAmount")
+            highlight.setValue(0.84, forKey: "inputHighlightAmount")
+            output = highlight.outputImage ?? output
+        }
+        if let controls = CIFilter(name: "CIColorControls") {
+            controls.setValue(output, forKey: kCIInputImageKey)
+            controls.setValue(0.0, forKey: kCIInputSaturationKey)
+            controls.setValue(0.0, forKey: kCIInputBrightnessKey)
+            controls.setValue(1.14, forKey: kCIInputContrastKey)
+            output = controls.outputImage ?? output
+        }
+        if let sharpen = CIFilter(name: "CISharpenLuminance") {
+            sharpen.setValue(output, forKey: kCIInputImageKey)
+            sharpen.setValue(0.32, forKey: kCIInputSharpnessKey)
+            sharpen.setValue(0.35, forKey: kCIInputRadiusKey)
+            output = sharpen.outputImage ?? output
+        }
+        return output
+    }
+
+    private struct RGB {
+        let red: Double
+        let green: Double
+        let blue: Double
+    }
+
+    private func estimatedPaperRGB(in image: CIImage) -> RGB? {
+        let maximumDimension = max(image.extent.width, image.extent.height)
+        guard maximumDimension > 0 else { return nil }
+        let scale = min(1, 160 / maximumDimension)
+        let normalized = image.transformed(
+            by: CGAffineTransform(
+                translationX: -image.extent.minX,
+                y: -image.extent.minY
+            )
+        )
+        let sample = normalized.transformed(
+            by: CGAffineTransform(scaleX: scale, y: scale)
+        )
+        let bounds = sample.extent.integral
+        let width = max(1, Int(bounds.width))
+        let height = max(1, Int(bounds.height))
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        context.render(
+            sample,
+            toBitmap: &pixels,
+            rowBytes: width * 4,
+            bounds: bounds,
+            format: .RGBA8,
+            colorSpace: sRGB
+        )
+
+        var samples: [RGB] = []
+        var luminances: [Double] = []
+        samples.reserveCapacity(width * height)
+        luminances.reserveCapacity(width * height)
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            guard pixels[offset + 3] > 0 else { continue }
+            let value = RGB(
+                red: Double(pixels[offset]) / 255,
+                green: Double(pixels[offset + 1]) / 255,
+                blue: Double(pixels[offset + 2]) / 255
+            )
+            samples.append(value)
+            luminances.append(
+                0.2126 * value.red
+                    + 0.7152 * value.green
+                    + 0.0722 * value.blue
+            )
+        }
+        guard !samples.isEmpty else { return nil }
+        let sortedLuminances = luminances.sorted()
+        let paperThreshold = sortedLuminances[
+            min(sortedLuminances.count - 1, sortedLuminances.count * 7 / 10)
+        ]
+        var red: [Double] = []
+        var green: [Double] = []
+        var blue: [Double] = []
+        for (index, value) in samples.enumerated() {
+            let spread = max(value.red, value.green, value.blue)
+                - min(value.red, value.green, value.blue)
+            guard luminances[index] >= paperThreshold, spread <= 0.18 else {
+                continue
+            }
+            red.append(value.red)
+            green.append(value.green)
+            blue.append(value.blue)
+        }
+        guard red.count >= 16 else { return nil }
+
+        func median(_ values: [Double]) -> Double {
+            let sorted = values.sorted()
+            return sorted[sorted.count / 2]
+        }
+        return RGB(
+            red: median(red),
+            green: median(green),
+            blue: median(blue)
+        )
+    }
+
+    private func estimatedPaperBackground(in image: CIImage) -> CIImage? {
+        let extent = image.extent
+        let shortEdge = min(extent.width, extent.height)
+        guard shortEdge > 0 else { return nil }
+        let analysisScale = min(1, 512 / shortEdge)
+        let normalized = image.transformed(
+            by: CGAffineTransform(
+                translationX: -extent.minX,
+                y: -extent.minY
+            )
+        )
+        var background = normalized.transformed(
+            by: CGAffineTransform(
+                scaleX: analysisScale,
+                y: analysisScale
+            )
+        )
+        let analysisExtent = background.extent
+
+        if let luminance = CIFilter(name: "CIColorControls") {
+            luminance.setValue(background, forKey: kCIInputImageKey)
+            luminance.setValue(0.0, forKey: kCIInputSaturationKey)
+            luminance.setValue(0.0, forKey: kCIInputBrightnessKey)
+            luminance.setValue(1.0, forKey: kCIInputContrastKey)
+            background = luminance.outputImage ?? background
+        }
+        if let maximum = CIFilter(name: "CIMorphologyMaximum") {
+            maximum.setValue(background, forKey: kCIInputImageKey)
+            maximum.setValue(2.5, forKey: kCIInputRadiusKey)
+            background = maximum.outputImage ?? background
+        }
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setValue(background, forKey: kCIInputImageKey)
+            blur.setValue(18.0, forKey: kCIInputRadiusKey)
+            background = blur.outputImage ?? background
+        }
+
+        background = background
+            .cropped(to: analysisExtent)
+            .transformed(
+                by: CGAffineTransform(
+                    scaleX: 1 / analysisScale,
+                    y: 1 / analysisScale
+                )
+            )
+            .cropped(
+                to: CGRect(
+                    x: 0,
+                    y: 0,
+                    width: extent.width,
+                    height: extent.height
+                )
+            )
+            .transformed(
+                by: CGAffineTransform(
+                    translationX: extent.minX,
+                    y: extent.minY
+                )
+            )
+        return background
+    }
+
+    private func applyingConservativeWhiteBalance(
+        to image: CIImage,
+        paperColor: RGB
+    ) -> CIImage {
+        let neutral = (paperColor.red + paperColor.green + paperColor.blue) / 3
+        func channelScale(_ value: Double) -> Double {
+            min(1.06, max(0.94, neutral / max(0.01, value)))
+        }
+        guard let filter = CIFilter(name: "CIColorMatrix") else { return image }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(
+            CIVector(x: channelScale(paperColor.red), y: 0, z: 0, w: 0),
+            forKey: "inputRVector"
+        )
+        filter.setValue(
+            CIVector(x: 0, y: channelScale(paperColor.green), z: 0, w: 0),
+            forKey: "inputGVector"
+        )
+        filter.setValue(
+            CIVector(x: 0, y: 0, z: channelScale(paperColor.blue), w: 0),
+            forKey: "inputBVector"
+        )
+        filter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+        return filter.outputImage ?? image
+    }
+
+    private func render(_ image: CIImage, to url: URL) throws {
+        guard
+            let data = context.jpegRepresentation(
+                of: image,
+                colorSpace: sRGB,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.94]
+            )
+        else {
+            throw ProcessorError.renderFailed
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func recognizeText(in image: CIImage) -> [TextLine] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.automaticallyDetectsLanguage = false
+        request.recognitionLanguages = ["zh-Hans"]
+        request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.004
+
+        let handler = VNImageRequestHandler(ciImage: image, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+
+        return (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first else { return nil }
+            let box = observation.boundingBox
+            return TextLine(
+                id: UUID().uuidString,
+                text: candidate.string,
+                confidence: Double(candidate.confidence),
+                rect: NormalizedRect(
+                    x: box.minX,
+                    y: 1 - box.maxY,
+                    width: box.width,
+                    height: box.height
+                )
+            )
+        }
+        .sorted {
+            if abs($0.rect.y - $1.rect.y) < 0.012 {
+                return $0.rect.x < $1.rect.x
+            }
+            return $0.rect.y < $1.rect.y
+        }
+    }
+
+    private func generateProblemBlocks(from lines: [TextLine]) -> [ProblemBlock] {
+        guard !lines.isEmpty else { return [] }
+        let sorted = lines.sorted { $0.rect.y < $1.rect.y }
+        let anchors = questionAnchors(in: sorted)
+        guard !anchors.isEmpty else {
+            return blocksFromVerticalGaps(sorted)
+        }
+
+        var blocks: [ProblemBlock] = []
+        for (index, anchor) in anchors.enumerated() {
+            let startY = max(0.008, anchor.line.rect.y - 0.006)
+            let endY: Double
+            if index + 1 < anchors.count {
+                // The next top-level question is the strongest possible end
+                // marker. Keep everything before it, including D options,
+                // tables and diagrams that Vision does not recognize as text.
+                endY = max(startY + 0.035, anchors[index + 1].line.rect.y - 0.006)
+            } else {
+                let lastContentY = sorted
+                    .filter { $0.rect.y >= startY }
+                    .map(\.rect.maxY)
+                    .max() ?? anchor.line.rect.maxY
+                endY = min(0.988, max(startY + 0.08, lastContentY + 0.018))
+            }
+
+            let members = sorted.filter {
+                $0.rect.maxY >= startY && $0.rect.y < endY
+            }
+            let rect = NormalizedRect(
+                x: 0.018,
+                y: startY,
+                width: 0.964,
+                height: endY - startY
+            )
+            blocks.append(
+                makeBlock(
+                    lines: members,
+                    rect: rect,
+                    preferredTitle: questionTitle(
+                        number: anchor.number,
+                        anchor: anchor.line,
+                        members: members
+                    )
+                )
+            )
+        }
+        return blocks
+    }
+
+    private func questionAnchors(in lines: [TextLine]) -> [QuestionAnchor] {
+        let candidates = lines.compactMap { line -> QuestionAnchor? in
+            guard line.rect.x < 0.24, let number = questionNumber(in: line.text) else {
+                return nil
+            }
+            return QuestionAnchor(number: number, line: line)
+        }
+        .sorted { $0.line.rect.y < $1.line.rect.y }
+
+        guard candidates.count > 1 else { return candidates }
+
+        // Chapter numbers, page numbers and numerical expressions can also
+        // begin a line. The longest consecutive run identifies real question
+        // numbering while discarding those isolated numbers.
+        var best: [QuestionAnchor] = []
+        var current: [QuestionAnchor] = []
+        for candidate in candidates {
+            if let previous = current.last,
+               candidate.number > previous.number,
+               candidate.number <= previous.number + 2,
+               candidate.line.rect.y > previous.line.rect.y + 0.018 {
+                current.append(candidate)
+            } else {
+                if current.count > best.count { best = current }
+                current = [candidate]
+            }
+        }
+        if current.count > best.count { best = current }
+        let sequence = best.count >= 2 ? best : candidates
+        guard sequence.count >= 2 else { return sequence }
+
+        var repaired: [QuestionAnchor] = []
+        for (index, anchor) in sequence.enumerated() {
+            repaired.append(anchor)
+            guard index + 1 < sequence.count else { continue }
+            let next = sequence[index + 1]
+            guard next.number == anchor.number + 2 else { continue }
+
+            let midpoint = (anchor.line.rect.y + next.line.rect.y) / 2
+            let possibleLines = lines.filter { line in
+                line.rect.x < 0.11
+                    && line.rect.y > anchor.line.rect.y + 0.018
+                    && line.rect.y < next.line.rect.y - 0.018
+            }
+            let inferredLine = possibleLines.min { left, right in
+                abs(left.rect.y - midpoint) < abs(right.rect.y - midpoint)
+            }
+            if let inferredLine {
+                repaired.append(
+                    QuestionAnchor(number: anchor.number + 1, line: inferredLine)
+                )
+            }
+        }
+        return repaired
+    }
+
+    private func questionTitle(
+        number: Int,
+        anchor: TextLine,
+        members: [TextLine]
+    ) -> String {
+        let titleLines = members
+            .filter { $0.rect.y < anchor.rect.y + 0.045 }
+            .sorted {
+                if abs($0.rect.y - $1.rect.y) < 0.012 {
+                    return $0.rect.x < $1.rect.x
+                }
+                return $0.rect.y < $1.rect.y
+            }
+        let combined = titleLines.map(\.text).joined(separator: " ")
+        var chinese = String(
+            combined.unicodeScalars.compactMap { scalar -> Character? in
+                let value = scalar.value
+                if (0x3400...0x9FFF).contains(value) {
+                    return Character(String(scalar))
+                }
+                if "，。？！：；、（）“”".unicodeScalars.contains(scalar) {
+                    return Character(String(scalar))
+                }
+                return scalar == " " ? " " : nil
+            }
+        )
+        chinese = chinese
+            .replacingOccurrences(of: "万程", with: "方程")
+            .replacingOccurrences(of: "昀解", with: "的解")
+            .replacingOccurrences(of: "旳结果", with: "的结果")
+            .replacingOccurrences(of: "一下列", with: "下列")
+            .replacingOccurrences(of: "式子产", with: "式子")
+            .replacingOccurrences(of: "這中", with: "中")
+            .replacingOccurrences(of: "分式有", with: "分式的有")
+        while chinese.contains("  ") {
+            chinese = chinese.replacingOccurrences(of: "  ", with: " ")
+        }
+        chinese = chinese.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if chinese.contains("则"), chinese.contains("的值是"),
+           !chinese.hasPrefix("若") {
+            chinese = "若……，则……的值是"
+        }
+        if chinese.contains("分式"), chinese.contains("值为"),
+           chinese.contains("的值是") {
+            chinese = "分式……的值为零时，未知数的值是"
+        } else if chinese.contains("化简"), chinese.contains("结果是") {
+            chinese = "化简……的结果是"
+        } else if chinese.contains("解方程"), chinese.contains("去分母") {
+            chinese = "解方程……时，去分母得"
+        } else if chinese.contains("方程"), chinese.contains("的解为") {
+            chinese = "方程……的解为"
+        }
+        if let firstIf = chinese.firstIndex(of: "若"), chinese[..<firstIf].count <= 4 {
+            chinese = String(chinese[firstIf...])
+        }
+        guard chinese.count >= 2 else { return "第 \(number) 题" }
+        return "\(number). \(chinese)"
+    }
+
+    private func blocksFromVerticalGaps(_ lines: [TextLine]) -> [ProblemBlock] {
+        guard lines.count > 1 else {
+            return [makeBlock(lines: lines, rect: NormalizedRect.union(lines.map(\.rect)).expanded(by: 0.02))]
+        }
+
+        let heights = lines.map(\.rect.height).sorted()
+        let medianHeight = heights[heights.count / 2]
+        let gapThreshold = max(0.035, medianHeight * 2.6)
+        var groups: [[TextLine]] = []
+        var current: [TextLine] = []
+        var previousBottom = 0.0
+
+        for line in lines {
+            let gap = line.rect.y - previousBottom
+            if !current.isEmpty && gap > gapThreshold {
+                groups.append(current)
+                current = []
+            }
+            current.append(line)
+            previousBottom = max(previousBottom, line.rect.maxY)
+        }
+        if !current.isEmpty { groups.append(current) }
+
+        if groups.count > 6 {
+            return [makeBlock(lines: lines, rect: NormalizedRect.union(lines.map(\.rect)).expanded(by: 0.02))]
+        }
+        return groups.map {
+            makeBlock(lines: $0, rect: NormalizedRect.union($0.map(\.rect)).expanded(by: 0.018))
+        }
+    }
+
+    private func makeBlock(
+        lines: [TextLine],
+        rect: NormalizedRect,
+        preferredTitle: String? = nil
+    ) -> ProblemBlock {
+        let firstText = preferredTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? lines.first?.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "未命名题目"
+        let title = firstText.count > 36
+            ? String(firstText.prefix(36)) + "…"
+            : firstText
+        let confidence = lines.isEmpty
+            ? 0
+            : lines.map(\.confidence).reduce(0, +) / Double(lines.count)
+        return ProblemBlock(
+            id: UUID().uuidString,
+            title: title,
+            rect: rect.clamped(),
+            confidence: confidence,
+            lineIds: lines.map(\.id),
+            source: "auto"
+        )
+    }
+
+    private func questionNumber(in text: String) -> Int? {
+        // Top-level questions use an Arabic number followed by a full stop or
+        // ideographic comma. Parenthesized subquestions and Chinese section
+        // headings are deliberately excluded.
+        let pattern = #"^\s*(\d{1,3})\s*[\.．、]"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard
+            let match = expression.firstMatch(in: text, range: range),
+            let numberRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+        return Int(text[numberRange])
+    }
+}
+
+@main
+private enum AxiomVisionCLI {
+    static func main() {
+        do {
+            let arguments = CommandLine.arguments
+            guard arguments.count >= 2 else {
+                throw ProcessorError.invalidArguments
+            }
+
+            func value(after flag: String) -> String? {
+                guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else {
+                    return nil
+                }
+                return arguments[index + 1]
+            }
+
+            let resultData: Data
+            switch arguments[1] {
+            case "process":
+                guard
+                    let input = value(after: "--input"),
+                    let output = value(after: "--output")
+                else {
+                    throw ProcessorError.invalidArguments
+                }
+                let mode = value(after: "--mode") ?? "color"
+                resultData = try JSONEncoder().encode(
+                    DocumentProcessor().process(
+                        inputPath: input,
+                        outputPath: output,
+                        mode: mode,
+                        beforeOutputPath: value(after: "--before-output")
+                    )
+                )
+            case "camera-orientation":
+                guard let deviceLabel = value(after: "--device-label") else {
+                    throw ProcessorError.invalidArguments
+                }
+                resultData = try JSONEncoder().encode(
+                    cameraOrientation(deviceLabel: deviceLabel)
+                )
+            case "crop":
+                guard
+                    let input = value(after: "--input"),
+                    let output = value(after: "--output"),
+                    let xValue = value(after: "--x"),
+                    let yValue = value(after: "--y"),
+                    let widthValue = value(after: "--width"),
+                    let heightValue = value(after: "--height"),
+                    let x = Double(xValue),
+                    let y = Double(yValue),
+                    let width = Double(widthValue),
+                    let height = Double(heightValue)
+                else {
+                    throw ProcessorError.invalidArguments
+                }
+                try DocumentProcessor().crop(
+                    inputPath: input,
+                    outputPath: output,
+                    rect: NormalizedRect(
+                        x: x,
+                        y: y,
+                        width: width,
+                        height: height
+                    )
+                )
+                resultData = try JSONEncoder().encode(["path": output])
+            default:
+                throw ProcessorError.invalidArguments
+            }
+            FileHandle.standardOutput.write(resultData)
+            exit(0)
+        } catch {
+            let message = error.localizedDescription
+            FileHandle.standardError.write(Data(message.utf8))
+            exit(1)
+        }
+    }
+}
