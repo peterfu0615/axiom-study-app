@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.0-beta.1），留空则从 tag 推断'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS bundle
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 约束 #4：不假设 runner 架构，必须检测 arm64 ──
+      - name: Detect runner architecture
+        id: arch
+        run: |
+          arch=$(uname -m)
+          echo "Detected runner architecture: $arch"
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+          case "$arch" in
+            arm64) triple=aarch64-apple-darwin ;;
+            x86_64) triple=x86_64-apple-darwin ;;
+            *) echo "::error::Unsupported architecture: $arch"; exit 1 ;;
+          esac
+          echo "triple=$triple" >> "$GITHUB_OUTPUT"
+
+      - name: Verify vision binary for detected architecture
+        run: |
+          triple="${{ steps.arch.outputs.triple }}"
+          bin="src-tauri/binaries/axiom-vision-$triple"
+          if [ ! -f "$bin" ]; then
+            echo "::error::Missing vision binary: $bin"
+            echo "arm64 runner 需要 binaries/axiom-vision-aarch64-apple-darwin"
+            echo "x86_64 runner 需要 binaries/axiom-vision-x86_64-apple-darwin"
+            exit 1
+          fi
+          echo "Found: $bin"
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 签名公证（可选）──
+      # 约束 #6：未签名 DMG 只能作为 Beta Release。
+      # 当配置了 APPLE_* secrets 时执行签名 + 公证；否则产出未签名 Beta 包。
+      - name: Setup signing (if configured)
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        run: |
+          echo "signing=enabled" >> "$GITHUB_OUTPUT"
+          echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
+          # 导入证书到临时钥匙串
+          cert_path="$RUNNER_TEMP/build.p12"
+          keychain="$RUNNER_TEMP/build.keychain"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$cert_path"
+          security create-keychain -p "$RUNNER_TEMP_PASSWORD" "$keychain" || true
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$RUNNER_TEMP_PASSWORD" "$keychain"
+          security import "$cert_path" -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          echo "APPLE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+        env:
+          RUNNER_TEMP_PASSWORD: ${{ secrets.RUNNER_TEMP_PASSWORD }}
+
+      - name: Build release bundle (signed)
+        if: ${{ steps.signing.outputs.signing == 'enabled' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
+
+      - name: Build release bundle (unsigned Beta)
+        if: ${{ steps.signing.outputs.signing != 'enabled' }}
+        run: |
+          echo "::warning::No signing secrets configured. Producing UNSIGNED Beta build."
+          echo "::warning::Unsigned DMG cannot be notarized and will trigger Gatekeeper warnings."
+          npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
+
+      - name: Notarize (if signed)
+        if: ${{ steps.signing.outputs.signing == 'enabled' }}
+        run: |
+          # 提交公证并 staple
+          dmg="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/dmg/Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Resolve artifact paths
+        id: artifacts
+        run: |
+          arch="${{ steps.arch.outputs.arch }}"
+          triple="${{ steps.arch.outputs.triple }}"
+          base="src-tauri/target/$triple/release/bundle"
+          dmg="$base/dmg/Axiom_${{ steps.version.outputs.version }}_${arch}.dmg"
+          app="$base/macos/Axiom.app"
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "app_dir=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Zip .app (for non-DMG users)
+        run: |
+          cd "$(dirname "${{ steps.artifacts.outputs.app_dir }}")"
+          zip -r -y "$GITHUB_WORKSPACE/app/Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}.app.zip" Axiom.app
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-dmg
+          path: app/src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/dmg/*.dmg
+
+      - name: Upload .app.zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-app
+          path: app/Axiom-*.app.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine version & pre-release flag
+        id: meta
+        run: |
+          version="${{ github.event.inputs.version }}"
+          if [ -z "$version" ]; then version="${GITHUB_REF_NAME#v}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Beta / pre-release 判定：版本号含 -beta / -rc / -alpha 等标记
+          if [[ "$version" =~ -(beta|rc|alpha|dev) ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Axiom ${{ steps.meta.outputs.version }}
+          body: |
+            ## Axiom ${{ steps.meta.outputs.version }}
+
+            ### 安装说明
+
+            1. 下载 `.dmg` 文件
+            2. 打开 DMG，拖动 Axiom 到「应用程序」文件夹
+            3. **首次打开**：右键点击 Axiom →「打开」→ 确认（Gatekeeper 拦截时需此操作）
+
+            > ⚠️ **Beta Release**：此版本为未签名构建，macOS 会显示「无法验证开发者」提示。
+            > 如需消除提示，可在终端执行：`xattr -dr com.apple.quarantine /Applications/Axiom.app`
+            >
+            > 正式版将使用 Apple Developer ID 签名 + 公证，届时双击即可打开。
+
+            ### 架构
+            - `aarch64`：Apple Silicon（M1/M2/M3/M4）
+            - `x86_64`：Intel Mac
+
+            请选择与你的 Mac 匹配的版本。
+          files: |
+            artifacts/*/*.dmg
+            artifacts/*/*.app.zip
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          generate_release_notes: true

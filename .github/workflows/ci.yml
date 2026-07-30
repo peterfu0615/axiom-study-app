@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint + typecheck + test)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  rust:
+    name: Rust (check + test)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        # 不假设 runner 架构：用 rustup 默认安装的 stable，匹配 runner 原生架构。
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Detect architecture
+        # 约束：不假设 runner 架构，必须检测 arm64 / x86_64。
+        id: arch
+        run: |
+          arch=$(uname -m)
+          echo "Detected architecture: $arch"
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+          case "$arch" in
+            arm64) triple=aarch64-apple-darwin ;;
+            x86_64) triple=x86_64-apple-darwin ;;
+            *) echo "Unsupported architecture: $arch"; exit 1 ;;
+          esac
+          echo "triple=$triple" >> "$GITHUB_OUTPUT"
+
+      - name: Verify vision binary matches architecture
+        # externalBin 要求 binaries/axiom-vision-{triple} 存在，缺失则提前失败而非构建到一半报错。
+        run: |
+          triple="${{ steps.arch.outputs.triple }}"
+          bin="binaries/axiom-vision-$triple"
+          if [ ! -f "$bin" ]; then
+            echo "::error::Missing vision binary for $triple: $bin"
+            echo "Build arm64 on an arm64 runner, or add an x86_64 binary for Intel builds."
+            exit 1
+          fi
+          echo "Found vision binary: $bin"
+
+      - name: Cargo fmt check
+        run: cargo fmt -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Cargo check
+        run: cargo check
+
+      - name: Cargo test
+        run: cargo test --lib
