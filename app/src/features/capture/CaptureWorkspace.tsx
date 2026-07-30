@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Toast } from '../../components/Toast'
+import { useToast } from '../../platform/useToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import type {
   CameraDevice,
@@ -57,7 +59,7 @@ export function CaptureWorkspace() {
   const [editingDocument, setEditingDocument] =
     useState<SourceDocument | null>(null)
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  const { toast, notify, dismiss } = useToast()
   const [rotation, setRotation] = useState<QuarterTurn>(0)
   const [manualRotation, setManualRotation] = useState(false)
   const [previewOrientation, setPreviewOrientation] = useState<
@@ -70,7 +72,7 @@ export function CaptureWorkspace() {
     try {
       setRecent(await listRecentSourceDocuments())
     } catch (error) {
-      setMessage(`读取本地记录失败：${String(error)}`)
+      notify(`读取本地记录失败：${String(error)}`, 'error')
     }
   }, [])
 
@@ -160,7 +162,7 @@ export function CaptureWorkspace() {
   }, [devices, manualRotation, selectedDeviceId, stream])
 
   const connectCamera = useCallback(async () => {
-    setMessage(null)
+    dismiss()
     setCameraStatus('requesting')
     try {
       const availableDevices = await requestCameraDevices()
@@ -187,7 +189,7 @@ export function CaptureWorkspace() {
           ? 'denied'
           : 'error',
       )
-      setMessage(`无法连接相机：${String(error)}`)
+      notify(`无法连接相机：${String(error)}`, 'error')
     }
   }, [stream])
 
@@ -204,7 +206,7 @@ export function CaptureWorkspace() {
         setCameraStatus('ready')
       } catch (error) {
         setCameraStatus('error')
-        setMessage(`切换相机失败：${String(error)}`)
+        notify(`切换相机失败：${String(error)}`, 'error')
       }
     },
     [stream],
@@ -213,17 +215,17 @@ export function CaptureWorkspace() {
   const captureFrame = useCallback(async () => {
     if (!videoRef.current || !isDesktopRuntime()) return
     setBusy(true)
-    setMessage(null)
+    dismiss()
     try {
       const dataUrl = captureVideoFrame(videoRef.current, rotation)
       const media = await persistCameraFrame(dataUrl)
       const document = await saveSourceDocument(media)
       setPreview(document)
       await refreshRecent()
-      setMessage('照片已保存到本地处理队列')
+      notify('照片已保存到本地处理队列', 'success')
       setEditingDocument(document)
     } catch (error) {
-      setMessage(`拍照失败：${String(error)}`)
+      notify(`拍照失败：${String(error)}`, 'error')
     } finally {
       setBusy(false)
     }
@@ -231,11 +233,11 @@ export function CaptureWorkspace() {
 
   const chooseImage = useCallback(async () => {
     if (!isDesktopRuntime()) {
-      setMessage('图片导入需要在 Tauri 桌面窗口中运行')
+      notify('图片导入需要在 Tauri 桌面窗口中运行', 'info')
       return
     }
     setBusy(true)
-    setMessage(null)
+    dismiss()
     try {
       const selected = await open({
         multiple: false,
@@ -253,10 +255,10 @@ export function CaptureWorkspace() {
       const document = await saveSourceDocument(media)
       setPreview(document)
       await refreshRecent()
-      setMessage('图片已复制到 Axiom 本地资料库')
+      notify('图片已复制到 Axiom 本地资料库', 'success')
       setEditingDocument(document)
     } catch (error) {
-      setMessage(`导入失败：${String(error)}`)
+      notify(`导入失败：${String(error)}`, 'error')
     } finally {
       setBusy(false)
     }
@@ -521,7 +523,7 @@ export function CaptureWorkspace() {
         </aside>
       </section>
 
-      {message && <div className="toast-message">{message}</div>}
+      <Toast toast={toast} />
     </main>
   )
 }

@@ -78,6 +78,7 @@ export function AISettings() {
       configureAIProviders(saved)
       setProfiles(saved)
       setMessage('Provider 配置已保存并立即生效')
+      window.setTimeout(() => setMessage(null), 3200)
     } catch (error) {
       setMessage(`保存失败：${String(error)}`)
     } finally {

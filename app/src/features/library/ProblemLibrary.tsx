@@ -31,6 +31,8 @@ import {
 } from '../../platform/database'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
+import { Toast } from '../../components/Toast'
+import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
 import {
   ExplainableProblemMarkdown,
@@ -203,7 +205,7 @@ export function ProblemLibrary() {
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
-  const [message, setMessage] = useState<string | null>(null)
+  const { toast, notify, dismiss } = useToast()
 
   const refresh = useCallback(async (
     nextView: LibraryView,
@@ -211,7 +213,7 @@ export function ProblemLibrary() {
   ) => {
     if (!quietly) {
       setLoading(true)
-      setMessage(null)
+      dismiss()
     }
     try {
       const next = await listSavedProblems(nextView === 'archived')
@@ -225,7 +227,7 @@ export function ProblemLibrary() {
       if (!quietly) {
         setProblems([])
         setSelectedId(null)
-        setMessage(`读取错题库失败：${String(error)}`)
+        notify(`读取错题库失败：${String(error)}`, 'error')
       }
     } finally {
       if (!quietly) setLoading(false)
@@ -359,22 +361,22 @@ export function ProblemLibrary() {
     setEditStemMarkdown(selected.stemMarkdown ?? '')
     setEditKnowledgePoints(selected.knowledgePoints.join('，'))
     setEditing(true)
-    setMessage(null)
+    dismiss()
   }
 
   const cancelEditing = () => {
     setEditing(false)
-    setMessage(null)
+    dismiss()
   }
 
   const saveEdits = async () => {
     if (!selected) return
     if (!editTitle.trim()) {
-      setMessage('保存失败：标题不能为空')
+      notify('保存失败：标题不能为空', 'error')
       return
     }
     setUpdating(true)
-    setMessage(null)
+    dismiss()
     try {
       const updated = await updateProblemUserFields(selected.id, {
         title: editTitle,
@@ -391,11 +393,11 @@ export function ProblemLibrary() {
         ),
       )
       setEditing(false)
-      setMessage('修改已保存')
+      notify('修改已保存', 'success')
       void runSolutionWorker()
       setSolution(await getProblemSolution(selected.id))
     } catch (error) {
-      setMessage(`保存修改失败：${String(error)}`)
+      notify(`保存修改失败：${String(error)}`, 'error')
     } finally {
       setUpdating(false)
     }
@@ -407,21 +409,21 @@ export function ProblemLibrary() {
       setSolution(await queueProblemSolution(selected.id))
       void runSolutionWorker()
     } catch (error) {
-      setMessage(`无法重新生成：${String(error)}`)
+      notify(`无法重新生成：${String(error)}`, 'error')
     }
   }
 
   const toggleArchive = async () => {
     if (!selected) return
     setUpdating(true)
-    setMessage(null)
+    dismiss()
     try {
       await setProblemArchived(selected.id, !selected.archivedAt)
       const action = selected.archivedAt ? '已移回错题库' : '已归档'
       await refresh(view)
-      setMessage(action)
+      notify(action, 'success')
     } catch (error) {
-      setMessage(`更新失败：${String(error)}`)
+      notify(`更新失败：${String(error)}`, 'error')
     } finally {
       setUpdating(false)
     }
@@ -430,7 +432,7 @@ export function ProblemLibrary() {
   const retryAI = async () => {
     if (!selected) return
     setUpdating(true)
-    setMessage(null)
+    dismiss()
     try {
       const updated = await queueProblemAI(selected.id)
       setProblems((current) =>
@@ -441,7 +443,7 @@ export function ProblemLibrary() {
       setModelRuns(await listProblemModelRuns(selected.id))
       void runProblemAIWorker()
     } catch (error) {
-      setMessage(`AI 重试失败：${String(error)}`)
+      notify(`AI 重试失败：${String(error)}`, 'error')
     } finally {
       setUpdating(false)
     }
@@ -457,7 +459,7 @@ export function ProblemLibrary() {
       ),
     )
     setRecropping(false)
-    setMessage('新裁图已保存')
+    notify('新裁图已保存', 'success')
     setSolution(await getProblemSolution(updated.id))
     setStudentAttempt(await getStudentAttempt(updated.id))
     setReasoning(await getReasoningAnalysis(updated.id))
@@ -471,9 +473,9 @@ export function ProblemLibrary() {
         setReasoning(await getReasoningAnalysis(updated.id))
         if (queuedAttempt.status === 'pending') {
           void runIntelligenceWorker()
-          setMessage('作答区域已保存，正在识别我的解答')
+          notify('作答区域已保存，正在识别我的解答', 'success')
         } else {
-          setMessage('作答区域已移除')
+          notify('作答区域已移除', 'info')
         }
         return
       }
@@ -487,7 +489,7 @@ export function ProblemLibrary() {
       setModelRuns(await listProblemModelRuns(updated.id))
       void runProblemAIWorker()
     } catch (error) {
-      setMessage(`新裁图已保存，但 AI 重新排队失败：${String(error)}`)
+      notify(`新裁图已保存，但 AI 重新排队失败：${String(error)}`, 'error')
     }
   }
 
@@ -637,7 +639,7 @@ export function ProblemLibrary() {
                         className="secondary-action"
                         disabled={updating || !selected.correctedImagePath}
                         onClick={() => {
-                          setMessage(null)
+                          dismiss()
                           setRecropping(true)
                         }}
                         type="button"
@@ -1139,7 +1141,7 @@ export function ProblemLibrary() {
         </article>
       </section>
 
-      {message && <div className="toast-message">{message}</div>}
+      <Toast toast={toast} />
     </main>
   )
 }

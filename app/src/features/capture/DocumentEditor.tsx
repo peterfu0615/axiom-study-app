@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Toast } from '../../components/Toast'
+import { useToast } from '../../platform/useToast'
 import type {
   NormalizedRect,
   ProblemBlock,
@@ -80,13 +82,13 @@ export function DocumentEditor({
   const [durationMs, setDurationMs] = useState<number | null>(null)
   const [processing, setProcessing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  const { toast, notify, dismiss } = useToast()
 
   const runProcessing = useCallback(
     async (nextMode: EnhancementMode) => {
       setMode(nextMode)
       setProcessing(true)
-      setMessage(null)
+      dismiss()
       try {
         const result = await processDocument(
           document.id,
@@ -107,7 +109,7 @@ export function DocumentEditor({
         setPreviewMode('corrected')
         await onSaved()
       } catch (error) {
-        setMessage(`页面处理失败：${String(error)}`)
+        notify(`页面处理失败：${String(error)}`, 'error')
       } finally {
         setProcessing(false)
       }
@@ -130,7 +132,7 @@ export function DocumentEditor({
       setActiveId(existing[0]?.id ?? null)
       setActiveRegionId(existing[0]?.id ?? null)
       if (!existing.length) {
-        setMessage('本页没有待确认题块；已保存内容可在错题库查看')
+        notify('本页没有待确认题块；已保存内容可在错题库查看', 'info')
       }
     }
     void initialize()
@@ -342,7 +344,7 @@ export function DocumentEditor({
 
   const saveBlocks = async () => {
     setSaving(true)
-    setMessage(null)
+    dismiss()
     try {
       const problems = await saveProblems(
         document.id,
@@ -378,16 +380,18 @@ export function DocumentEditor({
       try {
         await onSaved()
       } catch (error) {
-        setMessage(
+        notify(
           `保存成功，但页面状态刷新失败：${String(error)}。错题已写入本地错题库。`,
+          'error',
         )
         return
       }
-      setMessage(
+      notify(
         `保存成功：${problems.length} 道错题已写入本地错题库`,
+        'success',
       )
     } catch (error) {
-      setMessage(`错题保存失败：${String(error)}`)
+      notify(`错题保存失败：${String(error)}`, 'error')
     } finally {
       setSaving(false)
     }
@@ -704,7 +708,7 @@ export function DocumentEditor({
         </aside>
       </section>
 
-      {message && <div className="toast-message">{message}</div>}
+      <Toast toast={toast} />
     </main>
   )
 }

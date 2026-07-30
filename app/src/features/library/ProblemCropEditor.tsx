@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Toast } from '../../components/Toast'
+import { useToast } from '../../platform/useToast'
 import { CropSelectionCanvas } from '../../components/CropSelectionCanvas'
 import type {
   NormalizedRect,
@@ -46,9 +48,13 @@ export function ProblemCropEditor({
   const [originalRegions, setOriginalRegions] = useState<ProblemRegion[]>([])
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<string | null>(
-    canEdit ? null : '优化后的完整页面不可用，暂时无法重新裁剪',
-  )
+  const { toast, notify, dismiss } = useToast()
+
+  useEffect(() => {
+    if (!canEdit) {
+      notify('优化后的完整页面不可用，暂时无法重新裁剪', 'info')
+    }
+  }, [canEdit, notify])
 
   useEffect(() => {
     let cancelled = false
@@ -72,7 +78,7 @@ export function ProblemCropEditor({
       setOriginalRegions(loadedRegions)
       setRect(nextQuestion.rect)
       setActiveRegionId(nextQuestion.id)
-    }).catch((error) => setMessage(`读取区域失败：${String(error)}`))
+    }).catch((error) => notify(`读取区域失败：${String(error)}`, 'error'))
     return () => {
       cancelled = true
     }
@@ -85,7 +91,7 @@ export function ProblemCropEditor({
 
   const save = async () => {
     setSaving(true)
-    setMessage(null)
+    dismiss()
     try {
       const question = regions.find((region) => region.type === 'question')
       const nextRegions = [
@@ -105,7 +111,7 @@ export function ProblemCropEditor({
       const changes = changedRegionTypes(originalRegions, nextRegions)
       onSaved(await replaceProblemRegions(problem.id, nextRegions), changes)
     } catch (error) {
-      setMessage(`重新裁剪失败：${String(error)}`)
+      notify(`重新裁剪失败：${String(error)}`, 'error')
     } finally {
       setSaving(false)
     }
@@ -327,7 +333,7 @@ export function ProblemCropEditor({
         </aside>
       </section>
 
-      {message && <div className="toast-message">{message}</div>}
+      <Toast toast={toast} />
     </main>
   )
 }
