@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { configureAIProviders } from '../../ai/provider'
 import { useTheme, type Theme } from '../../platform/theme'
 import { getAppVersion } from '../../platform/native'
@@ -34,11 +34,6 @@ function newProvider(index: number): AIProviderProfile {
   }
 }
 
-/** Keychain 状态文案：credentialRef 非空表示密钥已存入 Keychain。 */
-function keychainStatus(credentialRef: string) {
-  return credentialRef ? '已保存到 Keychain' : '未保存'
-}
-
 function providerSubtitle(profile: AIProviderProfile): string {
   if (profile.provider === 'mock') return 'Mock Provider'
   if (profile.provider === 'antigravity_cli') return 'Gemini · Antigravity CLI'
@@ -61,8 +56,6 @@ export function AISettings() {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
   )
-  const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [appVersion, setAppVersion] = useState('…')
 
   useEffect(() => {
@@ -89,47 +82,17 @@ export function AISettings() {
     )
   }
 
-  const reorder = (fromId: string, toId: string) => {
-    if (fromId === toId) return
+  const moveBy = (id: string, delta: -1 | 1) => {
     setProfiles((current) => {
-      const fromIndex = current.findIndex((p) => p.id === fromId)
-      const toIndex = current.findIndex((p) => p.id === toId)
-      if (fromIndex < 0 || toIndex < 0) return current
+      const index = current.findIndex((p) => p.id === id)
+      if (index < 0) return current
+      const target = index + delta
+      if (target < 0 || target >= current.length) return current
       const next = [...current]
-      const [moved] = next.splice(fromIndex, 1)
-      next.splice(toIndex, 0, moved)
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved)
       return next.map((profile, sortOrder) => ({ ...profile, sortOrder }))
     })
-  }
-
-  const handleDragStart = (event: DragEvent<HTMLDivElement>, id: string) => {
-    setDraggingId(id)
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', id)
-  }
-
-  const handleDragOver = (event: DragEvent<HTMLDivElement>, id: string) => {
-    if (!draggingId || draggingId === id) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    if (dropTargetId !== id) setDropTargetId(id)
-  }
-
-  const handleDragLeave = (id: string) => {
-    if (dropTargetId === id) setDropTargetId(null)
-  }
-
-  const handleDrop = (event: DragEvent<HTMLDivElement>, id: string) => {
-    event.preventDefault()
-    const fromId = draggingId ?? event.dataTransfer.getData('text/plain')
-    if (fromId) reorder(fromId, id)
-    setDraggingId(null)
-    setDropTargetId(null)
-  }
-
-  const handleDragEnd = () => {
-    setDraggingId(null)
-    setDropTargetId(null)
   }
 
   const save = async () => {
@@ -253,29 +216,18 @@ export function AISettings() {
                       <div
                         className={`provider-nav-item ${
                           selectedProviderId === profile.id ? 'active' : ''
-                        } ${draggingId === profile.id ? 'dragging' : ''} ${
-                          dropTargetId === profile.id ? 'drop-target' : ''
                         }`}
-                        draggable
                         key={profile.id}
                         onClick={() => setSelectedProviderId(profile.id)}
+                        role="button"
+                        tabIndex={0}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
                             setSelectedProviderId(profile.id)
                           }
                         }}
-                        onDragEnd={handleDragEnd}
-                        onDragLeave={() => handleDragLeave(profile.id)}
-                        onDragOver={(event) => handleDragOver(event, profile.id)}
-                        onDragStart={(event) => handleDragStart(event, profile.id)}
-                        onDrop={(event) => handleDrop(event, profile.id)}
-                        role="button"
-                        tabIndex={0}
                       >
-                        <span className="provider-nav-grip" aria-hidden="true">
-                          ⋮⋮
-                        </span>
                         <span className="provider-nav-index">
                           {index + 1}
                         </span>
@@ -295,6 +247,34 @@ export function AISettings() {
                               <span className="provider-tag">LLM</span>
                             )}
                           </span>
+                        </span>
+                        <span className="provider-nav-reorder" role="group" aria-label="调整顺序">
+                          <button
+                            className="provider-nav-arrow"
+                            disabled={index === 0 || saving}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              moveBy(profile.id, -1)
+                            }}
+                            title="上移（提高优先级）"
+                            type="button"
+                            aria-label="上移"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            className="provider-nav-arrow"
+                            disabled={index === profiles.length - 1 || saving}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              moveBy(profile.id, 1)
+                            }}
+                            title="下移（降低优先级）"
+                            type="button"
+                            aria-label="下移"
+                          >
+                            ▼
+                          </button>
                         </span>
                       </div>
                     ))
@@ -419,7 +399,7 @@ export function AISettings() {
                           <label className="provider-api-key-field">
                             <span>
                               API Key
-                              <small>{keychainStatus(selectedProfile.credentialRef)}</small>
+                              <small>{selectedProfile.apiKey ? '已保存' : '未保存'}</small>
                             </span>
                             <input
                               autoComplete="off"
@@ -429,11 +409,7 @@ export function AISettings() {
                                   apiKey: event.target.value,
                                 })
                               }
-                              placeholder={
-                                selectedProfile.credentialRef
-                                  ? '输入新值以替换 Keychain 中的密钥（留空保持不变）'
-                                  : '输入 Provider API Key'
-                              }
+                              placeholder="输入 Provider API Key"
                               type="password"
                               value={selectedProfile.apiKey}
                             />

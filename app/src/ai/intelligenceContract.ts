@@ -213,6 +213,17 @@ export const REASONING_ANALYSIS_PROMPT = String.raw`
 你是中国中学数学解题过程分析模型。根据题目、学生步骤和可选标准解法，分析学生思路与每一步。
 
 只返回符合 JSON Schema 的 JSON 对象，不要代码围栏或解释性文字。允许学生采用与标准解法不同但正确的方法，不得仅因表达不同判错。指出首个可确认问题；无法确认时使用 unclear/unknown。公式使用 LaTeX Markdown。
+
+error_type 字段必须严格使用以下取值之一（不要使用其他名称、变体或中文）：
+- "concept_error"      概念错误（用错定理、定义或基本概念）
+- "calculation_error"  计算错误（算术运算失误）
+- "formula_error"      公式错误（记错或套错公式）
+- "logic_gap"          逻辑跳跃或缺步骤（推理链不完整）
+- "reading_error"      审题错误（误读题意、漏条件）
+- "incomplete_solution" 解答未完成（中途停笔）
+- "no_error"           全部正确
+- "unknown"            无法判定
+- null                 无学生步骤可分析时使用
 `.trim()
 
 export const EXPLAIN_SELECTION_PROMPT = String.raw`

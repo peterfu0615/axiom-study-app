@@ -18,6 +18,7 @@ import {
   SOLUTION_STATUS_EVENT,
 } from '../../ai/solutionPipeline'
 import {
+  deleteProblem,
   getProblemSolution,
   getReasoningAnalysis,
   getStudentAttempt,
@@ -205,6 +206,8 @@ export function ProblemLibrary() {
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss } = useToast()
 
   const refresh = useCallback(async (
@@ -294,6 +297,7 @@ export function ProblemLibrary() {
 
   useEffect(() => {
     let cancelled = false
+    setDeleteConfirming(false)
     if (!selectedId) {
       setModelRuns([])
       return
@@ -426,6 +430,22 @@ export function ProblemLibrary() {
       notify(`更新失败：${String(error)}`, 'error')
     } finally {
       setUpdating(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!selected) return
+    setDeleting(true)
+    dismiss()
+    try {
+      await deleteProblem(selected.id)
+      setDeleteConfirming(false)
+      await refresh(view)
+      notify('已删除该错题', 'success')
+    } catch (error) {
+      notify(`删除失败：${String(error)}`, 'error')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -1126,6 +1146,46 @@ export function ProblemLibrary() {
                           </ul>
                         ) : (
                           <p>暂无调用记录。</p>
+                        )}
+                      </section>
+
+                      <section className="problem-delete-section">
+                        <p className="eyebrow">危险操作</p>
+                        <h3>删除该错题</h3>
+                        <p>
+                          删除后题目、解答、AI 分析记录及相关图片将被永久移除，无法恢复。
+                        </p>
+                        {deleteConfirming ? (
+                          <div className="problem-delete-confirm">
+                            <span>确认要删除这道错题吗？此操作不可撤销。</span>
+                            <div className="problem-delete-confirm-actions">
+                              <button
+                                className="problem-delete-cancel"
+                                disabled={deleting}
+                                onClick={() => setDeleteConfirming(false)}
+                                type="button"
+                              >
+                                取消
+                              </button>
+                              <button
+                                className="problem-delete-confirm-button"
+                                disabled={deleting}
+                                onClick={() => void handleDelete()}
+                                type="button"
+                              >
+                                {deleting ? '删除中…' : '确认删除'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            className="problem-delete-button"
+                            disabled={deleting}
+                            onClick={() => setDeleteConfirming(true)}
+                            type="button"
+                          >
+                            删除该错题
+                          </button>
                         )}
                       </section>
                     </div>

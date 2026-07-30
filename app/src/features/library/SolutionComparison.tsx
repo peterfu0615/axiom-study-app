@@ -266,7 +266,7 @@ function SolutionPane({
             {solution.steps.map((step) => (
               <section className="comparison-step" key={step.index}>
                 <span>步骤 {step.index}</span>
-                <strong>{step.title}</strong>
+                {step.title ? <strong>{step.title}</strong> : null}
                 <ExplainableMathMarkdown
                   className="problem-solution-content"
                   hoverEnabled

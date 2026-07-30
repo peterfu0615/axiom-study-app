@@ -76,7 +76,7 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
           borderRadius: '12px',
           padding: '28px 32px',
           boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-          color: 'var(--text, #e0e0e0)',
+          color: 'var(--ink)',
           fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
         }}
       >
@@ -86,7 +86,7 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
             margin: '0 0 16px',
             fontSize: '20px',
             fontWeight: 600,
-            color: '#ff6b6b',
+            color: 'var(--danger)',
           }}
         >
           数据库位置错误
@@ -101,7 +101,7 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
             paddingLeft: '20px',
             fontSize: '13px',
             lineHeight: '1.8',
-            color: 'var(--text-secondary, #999)',
+            color: 'var(--muted)',
           }}
         >
           <li>数据库 migration 重复执行</li>
@@ -111,8 +111,8 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
 
         <div
           style={{
-            background: 'var(--canvas, #161616)',
-            border: '1px solid var(--border, #333)',
+            background: 'var(--canvas)',
+            border: '1px solid var(--border)',
             borderRadius: '8px',
             padding: '12px 14px',
             marginBottom: '16px',
@@ -123,14 +123,14 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
           }}
         >
           <div style={{ marginBottom: '8px' }}>
-            <span style={{ color: '#ff9999' }}>当前路径（plugin-sql）：</span>
+            <span style={{ color: 'var(--danger)' }}>当前路径（plugin-sql）：</span>
             <br />
             <span style={{ wordBreak: 'break-all' }}>
               {check.pluginPath || '未知'}
             </span>
           </div>
           <div>
-            <span style={{ color: '#99ccff' }}>期望路径（Rust sqlx）：</span>
+            <span style={{ color: 'var(--brand-pressed)' }}>期望路径（Rust sqlx）：</span>
             <br />
             <span style={{ wordBreak: 'break-all' }}>
               {check.rustPath || '未知'}
@@ -143,7 +143,7 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
             style={{
               margin: '0 0 16px',
               fontSize: '12px',
-              color: 'var(--text-secondary, #999)',
+              color: 'var(--muted)',
               fontStyle: 'italic',
             }}
           >
@@ -154,8 +154,8 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
         {migrateResult?.ok && (
           <div
             style={{
-              background: 'rgba(76, 175, 80, 0.15)',
-              border: '1px solid rgba(76, 175, 80, 0.4)',
+              background: 'color-mix(in srgb, var(--success) 15%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--success) 40%, transparent)',
               borderRadius: '8px',
               padding: '12px 14px',
               marginBottom: '16px',
@@ -170,8 +170,8 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
         {migrateResult && !migrateResult.ok && (
           <div
             style={{
-              background: 'rgba(255, 107, 107, 0.15)',
-              border: '1px solid rgba(255, 107, 107, 0.4)',
+              background: 'color-mix(in srgb, var(--danger) 15%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--danger) 40%, transparent)',
               borderRadius: '8px',
               padding: '12px 14px',
               marginBottom: '16px',
@@ -180,7 +180,7 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
           >
             迁移失败：{migrateResult.message}
             <br />
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary, #999)' }}>
+            <span style={{ fontSize: '12px', color: 'var(--muted)' }}>
               你可以手动复制数据库文件，或联系支持。
             </span>
           </div>
@@ -194,9 +194,9 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
               padding: '8px 20px',
               fontSize: '14px',
               borderRadius: '8px',
-              border: '1px solid var(--border, #444)',
+              border: '1px solid var(--border)',
               background: 'transparent',
-              color: 'var(--text, #e0e0e0)',
+              color: 'var(--ink)',
               cursor: 'pointer',
             }}
           >
@@ -214,9 +214,9 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
               border: 'none',
               background:
                 migrating || !check.pluginPath || !check.rustPath || migrateResult?.ok === true
-                  ? 'var(--border, #444)'
-                  : 'var(--brand, #4a9eff)',
-              color: '#fff',
+                  ? 'var(--border)'
+                  : 'var(--brand)',
+              color: 'var(--brand-ink)',
               cursor:
                 migrating || !check.pluginPath || !check.rustPath || migrateResult?.ok === true
                   ? 'not-allowed'

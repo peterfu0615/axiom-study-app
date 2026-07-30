@@ -20,6 +20,67 @@ const validateStudentAttempt = ajv.compile(studentAttemptJSONSchema)
 const validateReasoningAnalysis = ajv.compile(reasoningAnalysisJSONSchema)
 const validateExplainSelection = ajv.compile(explainSelectionJSONSchema)
 
+const ALLOWED_ERROR_TYPES = new Set<ReasoningAnalysisJSON['error_type']>([
+  'concept_error',
+  'calculation_error',
+  'formula_error',
+  'logic_gap',
+  'reading_error',
+  'incomplete_solution',
+  'no_error',
+  'unknown',
+  null,
+])
+
+const ERROR_TYPE_ALIASES: Record<string, ReasoningAnalysisJSON['error_type']> = {
+  concept: 'concept_error',
+  concept_error: 'concept_error',
+  conceptual: 'concept_error',
+  calculation: 'calculation_error',
+  calculation_error: 'calculation_error',
+  arithmetic: 'calculation_error',
+  compute_error: 'calculation_error',
+  formula: 'formula_error',
+  formula_error: 'formula_error',
+  formula_mistake: 'formula_error',
+  logic: 'logic_gap',
+  logic_gap: 'logic_gap',
+  logic_error: 'logic_gap',
+  logical_gap: 'logic_gap',
+  missing_step: 'logic_gap',
+  reading: 'reading_error',
+  reading_error: 'reading_error',
+  misread: 'reading_error',
+  incomplete: 'incomplete_solution',
+  incomplete_solution: 'incomplete_solution',
+  unfinished: 'incomplete_solution',
+  none: 'no_error',
+  no_error: 'no_error',
+  correct: 'no_error',
+  none_error: 'no_error',
+  unknown_error: 'unknown',
+  unknown: 'unknown',
+  other: 'unknown',
+}
+
+function normalizeErrorType(value: unknown): ReasoningAnalysisJSON['error_type'] {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string') return 'unknown'
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  if (ALLOWED_ERROR_TYPES.has(key as ReasoningAnalysisJSON['error_type'])) {
+    return key as ReasoningAnalysisJSON['error_type']
+  }
+  if (key in ERROR_TYPE_ALIASES) return ERROR_TYPE_ALIASES[key]
+  if (key.includes('concept')) return 'concept_error'
+  if (key.includes('calcul') || key.includes('arith') || key.includes('compute')) return 'calculation_error'
+  if (key.includes('formula')) return 'formula_error'
+  if (key.includes('logic') || key.includes('missing')) return 'logic_gap'
+  if (key.includes('read') || key.includes('misread')) return 'reading_error'
+  if (key.includes('incomplete') || key.includes('unfinished')) return 'incomplete_solution'
+  if (key.includes('no_error') || key.includes('correct') || key.includes('none')) return 'no_error'
+  return 'unknown'
+}
+
 export class IntelligenceParseError extends Error {
   readonly repairStrategy: string | null
 
@@ -201,7 +262,55 @@ export function parseReasoningAnalysis(rawOutput: string): {
   >
   repairStrategy: string | null
 } {
-  const parsed = parseJSON(rawOutput, validateReasoningAnalysis)
+  // 预解析：在 schema 校验前对 error_type 做归一化，
+  // 容忍模型返回的变体（如 concept、calculation、Chinese 名称等）。
+  const preStrategies: string[] = []
+  let preCandidate = rawOutput.trim()
+  const preUnfenced = stripFence(preCandidate)
+  if (preUnfenced !== preCandidate) {
+    preCandidate = preUnfenced
+    preStrategies.push('strip-markdown-fence')
+  }
+  let preParsed: unknown
+  try {
+    preParsed = JSON.parse(preCandidate)
+  } catch {
+    const extracted = extractObject(preCandidate)
+    if (extracted !== preCandidate) preStrategies.push('extract-json-object')
+    const withoutTrailing = removeTrailingCommas(extracted)
+    if (withoutTrailing !== extracted) preStrategies.push('remove-trailing-commas')
+    const completed = closeContainers(withoutTrailing)
+    if (completed !== withoutTrailing) preStrategies.push('complete-containers')
+    try {
+      preParsed = JSON.parse(completed)
+    } catch (error) {
+      throw new IntelligenceParseError(
+        `无法解析模型 JSON：${String(error)}`,
+        preStrategies.length ? preStrategies.join(',') : null,
+      )
+    }
+  }
+
+  // 对 error_type 做归一化（在 schema 校验前）
+  if (preParsed && typeof preParsed === 'object' && !Array.isArray(preParsed)) {
+    const obj = preParsed as Record<string, unknown>
+    if (
+      'error_type' in obj &&
+      !ALLOWED_ERROR_TYPES.has(obj.error_type as ReasoningAnalysisJSON['error_type'])
+    ) {
+      const original = obj.error_type
+      const mapped = normalizeErrorType(original)
+      obj.error_type = mapped
+      if (String(mapped) !== String(original)) {
+        preStrategies.push(`normalize-error_type:${String(original)}→${String(mapped)}`)
+      }
+    }
+  }
+
+  // 用已修复+归一化的对象重新序列化，交给 parseJSON 做最终校验
+  const jsonString =
+    preParsed && typeof preParsed === 'object' ? JSON.stringify(preParsed) : preCandidate
+  const parsed = parseJSON(jsonString, validateReasoningAnalysis)
   const value = parsed.value as ReasoningAnalysisJSON
   const stepEvaluations: ReasoningStepEvaluation[] = value.step_evaluations.map(
     (step) => ({
@@ -210,6 +319,12 @@ export function parseReasoningAnalysis(rawOutput: string): {
       comment: step.comment,
     }),
   )
+  const mergedStrategies = [
+    ...new Set([
+      ...preStrategies,
+      ...(parsed.repairStrategy ? parsed.repairStrategy.split(',') : []),
+    ]),
+  ]
   return {
     analysis: {
       approach: value.approach,
@@ -220,7 +335,7 @@ export function parseReasoningAnalysis(rawOutput: string): {
       knowledgeGaps: value.knowledge_gaps,
       suggestion: value.suggestion,
     },
-    repairStrategy: parsed.repairStrategy,
+    repairStrategy: mergedStrategies.length ? mergedStrategies.join(',') : null,
   }
 }
 
