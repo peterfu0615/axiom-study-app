@@ -259,7 +259,7 @@ pub async fn analyze_problem_with_openai_compatible(
         return Err("凭据引用不能为空（请先在设置中保存 API Key）".to_string());
     }
     // 从 Keychain 直接读取 API Key，不经过前端 IPC
-    let api_key = crate::keystore::load_api_key_internal(&credential_ref)?;
+    let api_key = crate::keystore::load_api_key_internal(credential_ref)?;
     if api_key.is_empty() {
         return Err("Keychain 中未找到 API Key，请重新保存".to_string());
     }

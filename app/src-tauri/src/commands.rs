@@ -679,8 +679,8 @@ pub fn list_media_directory(app: AppHandle, subdir: String) -> Result<Vec<MediaE
         .map_err(|e| format!("无法解析媒体目录：{e}"))?;
 
     let mut entries = Vec::new();
-    let read_dir = fs::read_dir(&canonical_root)
-        .map_err(|e| format!("无法读取媒体目录 {subdir}：{e}"))?;
+    let read_dir =
+        fs::read_dir(&canonical_root).map_err(|e| format!("无法读取媒体目录 {subdir}：{e}"))?;
     for entry in read_dir.flatten() {
         let path = entry.path();
         if !path.is_file() {

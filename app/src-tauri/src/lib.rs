@@ -5,7 +5,7 @@ mod keystore;
 mod models;
 
 use tauri::Manager;
-use tauri_plugin_log::{Target, TargetKind, RotationStrategy, TimezoneStrategy};
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 /// 计算显式日志目录，确保与 app_data_dir 对齐而非使用 OS 默认 Logs 目录。
@@ -175,9 +175,8 @@ pub fn run() {
             db::migrate_database,
             keystore::store_api_key,
             keystore::load_api_key,
-            keystore::delete_api_key
-            // 注意：migrate_api_keys_to_keychain 不是 #[tauri::command]，不注册到 invoke_handler。
-            // 它在 setup() 中作为启动迁移直接调用。
+            keystore::delete_api_key // 注意：migrate_api_keys_to_keychain 不是 #[tauri::command]，不注册到 invoke_handler。
+                                     // 它在 setup() 中作为启动迁移直接调用。
         ])
         .setup(|app| {
             // 初始化单连接 SQLite 事务池，确保所有数据操作走同一连接，

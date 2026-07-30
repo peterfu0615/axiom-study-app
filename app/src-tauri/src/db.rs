@@ -44,8 +44,8 @@ pub fn get_database_path(app: AppHandle) -> Result<String, String> {
 /// 避免 macOS 容器路径（~/Library/Containers/... 与 /Users/<name>/...）的字符串差异导致误判。
 #[tauri::command]
 pub fn canonicalize_path(path: String) -> Result<String, String> {
-    let canonical = std::fs::canonicalize(&path)
-        .map_err(|e| format!("无法解析路径 {path}：{e}"))?;
+    let canonical =
+        std::fs::canonicalize(&path).map_err(|e| format!("无法解析路径 {path}：{e}"))?;
     canonical
         .to_str()
         .map(|s| s.to_string())
@@ -68,17 +68,13 @@ pub fn migrate_database(from: String, to: String) -> Result<(), String> {
     }
     let target = std::path::Path::new(&to);
     if target.exists() {
-        return Err(format!(
-            "目标路径已存在文件，为避免覆盖已中止：{to}"
-        ));
+        return Err(format!("目标路径已存在文件，为避免覆盖已中止：{to}"));
     }
     // 确保目标目录存在
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("无法创建目标目录 {to}：{e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建目标目录 {to}：{e}"))?;
     }
-    std::fs::copy(source, target)
-        .map_err(|e| format!("复制数据库失败（{from} → {to}）：{e}"))?;
+    std::fs::copy(source, target).map_err(|e| format!("复制数据库失败（{from} → {to}）：{e}"))?;
     Ok(())
 }
 

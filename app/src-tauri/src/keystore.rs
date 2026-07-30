@@ -93,12 +93,14 @@ pub async fn migrate_api_keys_to_keychain(app: &AppHandle) -> Result<(), String>
             .map_err(|e| format!("Keychain 写入失败（provider {id}）：{e}"))?;
 
         // 清空数据库明文，写入 credential_ref
-        sqlx::query("UPDATE ai_provider_profiles SET credential_ref = $1, api_key = '' WHERE id = $2")
-            .bind(&id)
-            .bind(&id)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| format!("更新 credential_ref 失败（provider {id}）：{e}"))?;
+        sqlx::query(
+            "UPDATE ai_provider_profiles SET credential_ref = $1, api_key = '' WHERE id = $2",
+        )
+        .bind(&id)
+        .bind(&id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("更新 credential_ref 失败（provider {id}）：{e}"))?;
 
         log::info!("API Key 已迁移到 Keychain：provider {id}");
     }
