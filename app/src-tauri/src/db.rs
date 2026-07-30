@@ -17,13 +17,26 @@ pub struct DbState {
     pub connection: Mutex<Option<SqliteConnection>>,
 }
 
-fn db_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+/// 计算 Rust sqlx 端实际使用的数据库文件绝对路径。
+/// 这是「单一来源」：前端通过 `get_database_path` 命令拿到同一路径，
+/// 用于校验 tauri-plugin-sql 的 `Database.load('sqlite:axiom.db')` 是否解析到同一文件。
+pub fn db_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建应用数据目录：{e}"))?;
     Ok(dir.join("axiom.db"))
+}
+
+/// 将路径转为字符串，供前端比对。
+/// 失败时返回错误字符串，便于前端在日志中定位问题。
+#[tauri::command]
+pub fn get_database_path(app: AppHandle) -> Result<String, String> {
+    let path = db_path(&app)?;
+    path.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "数据库路径包含非 UTF-8 字符".to_string())
 }
 
 pub async fn init_db(app: &AppHandle) -> Result<(), String> {

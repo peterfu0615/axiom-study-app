@@ -115,7 +115,8 @@ pub fn run() {
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             db::db_execute,
-            db::db_select
+            db::db_select,
+            db::get_database_path
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

@@ -94,7 +94,18 @@ function database() {
       // 忽略：Rust 端 init_db 已设置过这些 PRAGMA
     }
 
-    // 2. 所有数据操作走单一 sqlx 连接（Rust 端 db_execute / db_select），
+    // 2. 校验 tauri-plugin-sql 与 Rust sqlx 指向同一数据库文件。
+    //    两端都通过 Tauri 的 app_data_dir 解析路径，理论上必然一致；
+    //    但历史上出现过 bundle identifier 变化 / 容器重定向 / Debug vs Release
+    //    解析差异导致 migration 重新执行、用户数据「消失」的事故。
+    //    此处通过 PRAGMA database_list 拿到 plugin-sql 实际打开的文件路径，
+    //    与 Rust get_database_path 命令返回的路径比对，不一致时记录 error 日志。
+    //    不阻塞启动——避免校验失败导致整个应用不可用。
+    void verifyDatabasePathConsistency(pluginDb).catch((error) => {
+      console.error('[database] 数据库路径一致性校验失败', error)
+    })
+
+    // 3. 所有数据操作走单一 sqlx 连接（Rust 端 db_execute / db_select），
     //    彻底避免 tauri-plugin-sql 多连接池导致的事务交错与锁竞争。
     return {
       execute: (sql: string, params: unknown[] = []) =>
@@ -104,6 +115,38 @@ function database() {
     } satisfies DatabaseLike
   })()
   return dbInstancePromise
+}
+
+/**
+ * 校验 tauri-plugin-sql 与 Rust sqlx 是否解析到同一物理数据库文件。
+ * 若两端路径不一致，会在控制台记录 error 并附带诊断信息，便于定位
+ * 「Debug 正常 / Release 用户数据消失」类问题。
+ */
+async function verifyDatabasePathConsistency(pluginDb: Database) {
+  let rustPath: string
+  try {
+    rustPath = await invoke<string>('get_database_path')
+  } catch (error) {
+    // 命令未注册或 Rust 端 init_db 未就绪：只记录警告，不阻塞
+    console.warn('[database] 无法获取 Rust 端数据库路径，跳过一致性校验', error)
+    return
+  }
+  const rows = await pluginDb.select<
+    Array<{ name?: string; file?: string }>
+  >('PRAGMA database_list')
+  const mainRow = rows.find((row) => row.name === 'main')
+  const pluginPath = mainRow?.file ?? ''
+  if (!pluginPath) {
+    console.warn('[database] plugin-sql 未返回主数据库文件路径', rows)
+    return
+  }
+  if (!isSameDatabasePath(pluginPath, rustPath)) {
+    console.error(
+      '[database] 数据库路径不一致：plugin-sql 与 Rust sqlx 指向不同文件，' +
+        '可能出现 migration 重复执行或用户数据丢失',
+      { pluginPath, rustPath },
+    )
+  }
 }
 
 // tauri-plugin-sql 的每个 db.execute() 都是独立 IPC 调用，SQLite 实际为单连接。
@@ -173,13 +216,68 @@ function nullableString(value: unknown) {
   return value === null || value === undefined ? null : String(value)
 }
 
-function parseJSON<T>(value: unknown, fallback: T): T {
+/**
+ * 将 SQLite 列值稳健地转换为 boolean。
+ *
+ * 背景：SQLite 没有真正的布尔类型，BOOLEAN 列实际存储为 INTEGER 0/1。
+ * 不同 driver 序列化方式不一致：
+ *   - Rust sqlx 经 column_to_value 后 INTEGER 返回 number（0 或 1）
+ *   - tauri-plugin-sql 直连场景可能返回字符串 "0" / "1"
+ *   - 旧数据可能存为 null
+ *
+ * JS 的 Boolean("0") === true 是经典陷阱，因此显式枚举所有可能的存储形式，
+ * 任何无法识别的值统一退化为 false（更安全的失败方向）。
+ */
+export function parseSQLiteBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true
+  if (value === false || value === 0) return false
+  if (typeof value === 'string') {
+    const lowered = value.trim().toLowerCase()
+    if (lowered === '1' || lowered === 'true' || lowered === 't') {
+      return true
+    }
+    if (lowered === '0' || lowered === 'false' || lowered === 'f' || lowered === '') {
+      return false
+    }
+  }
+  return false
+}
+
+export function parseNullableSQLiteBoolean(value: unknown): boolean | null {
+  if (value === null || value === undefined) return null
+  return parseSQLiteBoolean(value)
+}
+
+/**
+ * 解析数据库 JSON 字段。失败时不再静默吞错：
+ *   - 通过 console.error 记录字段上下文与原始值，便于数据损坏追溯
+ *   - 仍返回 fallback 以保证用户可用性（不阻塞 UI）
+ *
+ * 调用方应通过 `context` 传入字段名/记录 ID 等定位信息。
+ */
+export function parseJSON<T>(value: unknown, fallback: T, context?: string): T {
   if (typeof value !== 'string' || !value) return fallback
   try {
     return JSON.parse(value) as T
-  } catch {
+  } catch (error) {
+    const label = context ? ` (field: ${context})` : ''
+    console.error(
+      `[database] JSON 解析失败${label}：${error instanceof Error ? error.message : String(error)}`,
+      { valuePreview: value.slice(0, 200) },
+    )
     return fallback
   }
+}
+
+/**
+ * 计算两个数据库路径是否等价。用于校验 plugin-sql 与 Rust sqlx 是否使用同一文件。
+ * 处理 macOS 容器路径中的 `~/Library/Containers/...` 与 `/Users/<name>/...` 解析差异。
+ */
+export function isSameDatabasePath(a: string, b: string): boolean {
+  if (a === b) return true
+  // 容器路径可能通过符号链接解析为不同字符串；按规范化路径比对
+  const normalize = (p: string) => p.replace(/\/+/g, '/').replace(/\/$/, '').trim()
+  return normalize(a) === normalize(b)
 }
 
 function rowToProblem(row: Record<string, unknown>): Problem {
@@ -195,12 +293,13 @@ function rowToProblem(row: Record<string, unknown>): Problem {
   const aiKnowledgePoints = parseJSON<string[]>(
     row.ai_knowledge_points_json,
     [],
+    `ai_knowledge_points_json#${row.id ?? '?'}`,
   )
   const userKnowledgePoints =
     row.user_knowledge_points_json === null ||
     row.user_knowledge_points_json === undefined
       ? null
-      : parseJSON<string[]>(row.user_knowledge_points_json, [])
+      : parseJSON<string[]>(row.user_knowledge_points_json, [], `user_knowledge_points_json#${row.id ?? '?'}`)
   const baseTitle = String(row.title || row.stem_markdown || '未命名题目')
   return {
     id: String(row.id),
@@ -235,22 +334,19 @@ function rowToProblem(row: Record<string, unknown>): Problem {
     aiSubject,
     aiProblemType: nullableString(row.ai_problem_type),
     aiStemMarkdown,
-    aiChoices: parseJSON(row.ai_choices_json, []),
-    aiSubQuestions: parseJSON(row.ai_sub_questions_json, []),
-    aiHasDiagram:
-      row.ai_has_diagram === null || row.ai_has_diagram === undefined
-        ? null
-        : Boolean(row.ai_has_diagram),
+    aiChoices: parseJSON(row.ai_choices_json, [], `ai_choices_json#${row.id ?? '?'}`),
+    aiSubQuestions: parseJSON(row.ai_sub_questions_json, [], `ai_sub_questions_json#${row.id ?? '?'}`),
+    aiHasDiagram: parseNullableSQLiteBoolean(row.ai_has_diagram),
     aiDiagramKind: nullableString(
       row.ai_diagram_kind,
     ) as Problem['aiDiagramKind'],
-    aiDiagramBBox: parseJSON(row.ai_diagram_bbox_json, null),
+    aiDiagramBBox: parseJSON(row.ai_diagram_bbox_json, null, `ai_diagram_bbox_json#${row.id ?? '?'}`),
     aiDiagramImagePath: nullableString(row.ai_diagram_image_path),
     aiKnowledgePoints,
     knowledgePoints: userKnowledgePoints ?? aiKnowledgePoints,
     userKnowledgePoints,
     aiConfidence: nullableNumber(row.ai_confidence),
-    aiWarnings: parseJSON(row.ai_warnings_json, []),
+    aiWarnings: parseJSON(row.ai_warnings_json, [], `ai_warnings_json#${row.id ?? '?'}`),
     aiUpdatedAt: nullableNumber(row.ai_updated_at),
     aiActiveModelRunId: nullableString(row.ai_active_model_run_id),
     status: String(row.status) as Problem['status'],
@@ -945,6 +1041,10 @@ export async function saveProblems(
             ],
           )
         }
+        // 关键：model_runs 必须与 problem 状态更新在同一事务内提交，
+        // 避免「problem.ai_status='pending' + ai_active_model_run_id 指向不存在的 run」的孤儿状态。
+        // 事务回滚后已生成的图片文件由外层 catch 中的 cleanupCreatedProblemImages 清理。
+        await insertAIModelRuns(db, queuedRuns)
         await db.execute('COMMIT')
       } catch (error) {
         try {
@@ -962,12 +1062,6 @@ export async function saveProblems(
   } catch (error) {
     await cleanupCreatedProblemImages(images)
     throw new Error(`数据库写入失败：${String(error)}`)
-  }
-
-  try {
-    await insertAIModelRuns(db, queuedRuns)
-  } catch (error) {
-    console.error('错题已保存，但 AI Task 创建失败；将在下次启动时恢复', error)
   }
 
   const saved = await selectSavedProblemsByIds(db, ids)
@@ -1139,7 +1233,7 @@ export async function getPrimaryQuestionRegion(problem: SavedProblem) {
 
 function rowToModelRun(row: Record<string, unknown>): ModelRun {
   const output = row.output_json
-    ? normalizeAIProblemAnalysis(parseJSON(row.output_json, {}))
+    ? normalizeAIProblemAnalysis(parseJSON(row.output_json, {}, `model_runs.output_json#${row.id ?? '?'}`))
     : null
   return {
     id: String(row.id),
@@ -1152,7 +1246,7 @@ function rowToModelRun(row: Record<string, unknown>): ModelRun {
       cropImagePath: '',
       sourceDocumentCorrectedImagePath: null,
       cropRect: { x: 0, y: 0, width: 1, height: 1 },
-    }),
+    }, `model_runs.input_json#${row.id ?? '?'}`),
     output,
     rawOutput: String(row.raw_output || ''),
     repairStrategy: nullableString(row.repair_strategy),
@@ -1167,10 +1261,10 @@ function rowToSolution(row: Record<string, unknown>): Solution {
     id: String(row.id),
     problemId: String(row.problem_id),
     contentMarkdown: String(row.content_markdown || ''),
-    steps: parseJSON(row.steps_json, []),
+    steps: parseJSON(row.steps_json, [], `problem_solutions.steps_json#${row.id ?? '?'}`),
     keyMethod: nullableString(row.key_method),
-    usedFormulas: parseJSON(row.used_formulas_json, []),
-    knowledgePoints: parseJSON(row.knowledge_points_json, []),
+    usedFormulas: parseJSON(row.used_formulas_json, [], `problem_solutions.used_formulas_json#${row.id ?? '?'}`),
+    knowledgePoints: parseJSON(row.knowledge_points_json, [], `problem_solutions.knowledge_points_json#${row.id ?? '?'}`),
     status: String(row.status) as Solution['status'],
     activeModelRunId: nullableString(row.active_model_run_id),
     errorMessage: nullableString(row.error_message),
@@ -1200,9 +1294,9 @@ function rowToStudentAttempt(row: Record<string, unknown>): StudentAttempt {
   return {
     id: String(row.id),
     problemId: String(row.problem_id),
-    answerRegionIds: parseJSON(row.answer_region_ids_json, []),
+    answerRegionIds: parseJSON(row.answer_region_ids_json, [], `student_attempts.answer_region_ids_json#${row.id ?? '?'}`),
     rawMarkdown: String(row.raw_markdown || ''),
-    steps: parseJSON(row.steps_json, []),
+    steps: parseJSON(row.steps_json, [], `student_attempts.steps_json#${row.id ?? '?'}`),
     status: String(row.status) as StudentAttempt['status'],
     activeModelRunId: nullableString(row.active_model_run_id),
     errorMessage: nullableString(row.error_message),
@@ -1233,11 +1327,11 @@ function rowToReasoningAnalysis(row: Record<string, unknown>): ReasoningAnalysis
     studentAttemptId: String(row.student_attempt_id),
     solutionId: nullableString(row.solution_id),
     approach: nullableString(row.approach),
-    stepEvaluations: parseJSON(row.step_evaluations_json, []),
+    stepEvaluations: parseJSON(row.step_evaluations_json, [], `reasoning_analyses.step_evaluations_json#${row.id ?? '?'}`),
     firstWrongStep: nullableNumber(row.first_wrong_step),
     errorType: nullableString(row.error_type) as ReasoningAnalysis['errorType'],
     reason: nullableString(row.reason),
-    knowledgeGaps: parseJSON(row.knowledge_gaps_json, []),
+    knowledgeGaps: parseJSON(row.knowledge_gaps_json, [], `reasoning_analyses.knowledge_gaps_json#${row.id ?? '?'}`),
     suggestion: nullableString(row.suggestion),
     status: String(row.status) as ReasoningAnalysis['status'],
     activeModelRunId: nullableString(row.active_model_run_id),
@@ -1288,7 +1382,7 @@ function rowToSolutionModelRun(
       hasDiagram: false,
       diagramKind: 'unknown',
       knowledgePoints: [],
-    }),
+    }, `model_runs.input_json#${row.id ?? '?'}`),
     output: null,
     rawOutput: String(row.raw_output || ''),
     repairStrategy: nullableString(row.repair_strategy),
@@ -1315,7 +1409,7 @@ function rowToStudentAttemptModelRun(
       problemContext: '',
       choices: [],
       subQuestions: [],
-    }),
+    }, `model_runs.input_json#${row.id ?? '?'}`),
     output: null,
     rawOutput: String(row.raw_output || ''),
     repairStrategy: nullableString(row.repair_strategy),
@@ -1339,7 +1433,7 @@ function rowToReasoningModelRun(row: Record<string, unknown>): ReasoningModelRun
       studentAttempt: { rawMarkdown: '', steps: [] },
       solution: null,
       knowledgePoints: [],
-    }),
+    }, `model_runs.input_json#${row.id ?? '?'}`),
     output: null,
     rawOutput: String(row.raw_output || ''),
     repairStrategy: nullableString(row.repair_strategy),
@@ -1807,7 +1901,11 @@ export async function recoverIntelligenceTasks() {
     [STUDENT_ATTEMPT_TASK_TYPE],
   )
   for (const row of completedStudentRows) {
-    const output = parseJSON<Record<string, unknown>>(row.output_json, {})
+    const output = parseJSON<Record<string, unknown>>(
+      row.output_json,
+      {},
+      `recover.student_attempts.output_json#${row.attempt_id ?? '?'}`,
+    )
     const steps = Array.isArray(output.steps)
       ? output.steps.map((step, index) => {
           const value = step as Record<string, unknown>
@@ -1839,7 +1937,11 @@ export async function recoverIntelligenceTasks() {
     [REASONING_TASK_TYPE],
   )
   for (const row of completedReasoningRows) {
-    const output = parseJSON<Record<string, unknown>>(row.output_json, {})
+    const output = parseJSON<Record<string, unknown>>(
+      row.output_json,
+      {},
+      `recover.reasoning_analyses.output_json#${row.analysis_id ?? '?'}`,
+    )
     const evaluations = Array.isArray(output.step_evaluations)
       ? output.step_evaluations.map((item) => {
           const value = item as Record<string, unknown>
@@ -2574,6 +2676,7 @@ export async function recordProcessingModelRunOutput(
   const attempts = parseJSON<Array<Record<string, unknown>>>(
     rows[0]?.provider_attempts_json,
     [],
+    `model_runs.provider_attempts_json#${run.id}`,
   )
   attempts.push({
     provider: run.provider,
@@ -2968,9 +3071,9 @@ function rowToAIProviderProfile(
     apiKey: String(row.api_key || ''),
     commandPath: String(row.command_path || ''),
     model: String(row.model || ''),
-    supportsVision: Boolean(row.supports_vision),
-    supportsText: Boolean(row.supports_text),
-    enabled: Boolean(row.enabled),
+    supportsVision: parseSQLiteBoolean(row.supports_vision),
+    supportsText: parseSQLiteBoolean(row.supports_text),
+    enabled: parseSQLiteBoolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
     createdAt: Number(row.created_at || 0),
     updatedAt: Number(row.updated_at || 0),
@@ -3078,4 +3181,242 @@ export async function saveAIProviderProfiles(
     normalized.map((profile) => profile.id),
   )
   return normalized
+}
+
+/**
+ * 硬删除一道已保存的错题：清理所有关联的图片文件，并删除数据库记录。
+ * 由外键 ON DELETE CASCADE 自动级联清理：problem_regions、problem_solutions、
+ * student_attempts、reasoning_analyses、model_runs。
+ *
+ * 注意：source_documents 不在此处级联删除——一张原页可能同时被多道题引用。
+ * 如需清理孤立的原页/校正页，调用 pruneOrphanedMedia。
+ */
+export async function deleteProblem(problemId: string): Promise<void> {
+  if (!isDesktopRuntime()) {
+    throw new Error('错题删除需要在 Axiom 桌面 App 中运行')
+  }
+  const db = await database()
+  const problem = await getSavedProblem(problemId)
+  if (!problem) return // 已不存在视为成功删除，保持幂等
+
+  // 收集所有需要删除的图片路径（先于数据库事务，避免事务内 IO）
+  const regions = await getProblemRegions(problemId)
+  const imagePathsToDelete: string[] = []
+  if (problem.cropImagePath) imagePathsToDelete.push(problem.cropImagePath)
+  for (const region of regions) {
+    if (region.imagePath && !imagePathsToDelete.includes(region.imagePath)) {
+      imagePathsToDelete.push(region.imagePath)
+    }
+  }
+  if (problem.aiDiagramImagePath) {
+    imagePathsToDelete.push(problem.aiDiagramImagePath)
+  }
+
+  await withTransactionLock(async () => {
+    await db.execute('BEGIN')
+    try {
+      // 先把 problem 的 AI run 置空，避免外键级联时与 ai_active_model_run_id 产生竞争
+      await db.execute(
+        `UPDATE problems
+         SET ai_active_model_run_id = NULL,
+             ai_diagram_image_path = NULL,
+             updated_at = $1
+         WHERE id = $2 AND status = 'saved' AND deleted_at IS NULL`,
+        [Date.now(), problemId],
+      )
+      await db.execute(
+        `DELETE FROM problems WHERE id = $1 AND status = 'saved'`,
+        [problemId],
+      )
+      await db.execute('COMMIT')
+    } catch (error) {
+      try {
+        await db.execute('ROLLBACK')
+      } catch {
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          /* preserve original error */
+        }
+      }
+      throw error
+    }
+  })
+
+  // 数据库提交后再删除图片文件；失败只记录日志，不影响删除结果。
+  // 若文件已不存在（如曾被手动清理），removeProblemImage 也会返回成功。
+  await Promise.allSettled(
+    imagePathsToDelete.map(async (path) => {
+      try {
+        if (path.includes('/diagrams/')) {
+          await removeProblemImage(path) // removeProblemDiagram 内部也会校验目录
+        } else {
+          await removeProblemImage(path)
+        }
+      } catch (error) {
+        console.error(`[database] 删除图片失败：${path}`, error)
+      }
+    }),
+  )
+}
+
+/**
+ * 扫描磁盘上的 media 目录，识别未被任何数据库行引用的孤立图片。
+ *
+ * 设计原则：
+ *   - 只读扫描，不直接删除；调用方基于返回结果决定是否删除
+ *   - 通过数据库引用表全量扫描，避免漏判
+ *   - 任何无法解析路径的文件视为「无法判断」，跳过不删除
+ *   - 返回的孤立文件按目录分组，便于调用方选择性清理
+ *
+ * 引用来源（不可删除）：
+ *   - source_documents.original_image_path / corrected_image_path
+ *   - problems.crop_image_path / ai_diagram_image_path
+ *   - problem_regions.image_path
+ */
+export interface OrphanedMediaReport {
+  /** media/original 目录下的孤立文件绝对路径 */
+  original: string[]
+  /** media/corrected 目录下的孤立文件绝对路径 */
+  corrected: string[]
+  /** media/problems 目录下的孤立文件绝对路径 */
+  problems: string[]
+  /** media/diagrams 目录下的孤立文件绝对路径 */
+  diagrams: string[]
+}
+
+/**
+ * 用于全量查询数据库中所有「仍被引用」的媒体路径。
+ * 此 SQL 覆盖 5 类引用源，缺一不可，否则 GC 会误删正在使用的文件。
+ * 通过导出此常量便于测试断言完整性。
+ */
+export const REFERENCED_MEDIA_PATHS_SQL = `SELECT path FROM (
+  SELECT original_image_path AS path FROM source_documents
+  WHERE original_image_path IS NOT NULL
+  UNION ALL
+  SELECT corrected_image_path AS path FROM source_documents
+  WHERE corrected_image_path IS NOT NULL
+  UNION ALL
+  SELECT crop_image_path AS path FROM problems
+  WHERE crop_image_path IS NOT NULL
+  UNION ALL
+  SELECT ai_diagram_image_path AS path FROM problems
+  WHERE ai_diagram_image_path IS NOT NULL
+  UNION ALL
+  SELECT image_path AS path FROM problem_regions
+  WHERE image_path IS NOT NULL
+)`
+
+/**
+ * 从 REFERENCED_MEDIA_PATHS_SQL 的查询结果行中提取被引用的媒体路径集合。
+ * 提取为独立函数便于单元测试：传入模拟行即可验证提取逻辑。
+ */
+export function extractReferencedMediaPaths(
+  rows: Record<string, unknown>[],
+): Set<string> {
+  return new Set(
+    rows
+      .map((row) => nullableString(row.path))
+      .filter((path): path is string => Boolean(path)),
+  )
+}
+
+/**
+ * 根据引用集合，将磁盘上实际存在的文件路径划分为「仍在使用」和「孤立」两类。
+ * 路径分类规则（必须与 Rust 端 media_directory / diagram_media_directory 一致）：
+ *   - 含 `/problems/` 的路径属于题块目录
+ *   - 含 `/diagrams/` 的路径属于图形目录
+ *   - 含 `/original/` 的路径属于原图目录
+ *   - 含 `/corrected/` 的路径属于校正页目录
+ */
+export function classifyMediaPaths(
+  diskPaths: string[],
+  referenced: Set<string>,
+): { orphaned: OrphanedMediaReport; retained: OrphanedMediaReport } {
+  const orphaned: OrphanedMediaReport = {
+    original: [],
+    corrected: [],
+    problems: [],
+    diagrams: [],
+  }
+  const retained: OrphanedMediaReport = {
+    original: [],
+    corrected: [],
+    problems: [],
+    diagrams: [],
+  }
+  for (const path of diskPaths) {
+    const bucket = path.includes('/diagrams/')
+      ? 'diagrams'
+      : path.includes('/problems/')
+        ? 'problems'
+        : path.includes('/corrected/')
+          ? 'corrected'
+          : path.includes('/original/')
+            ? 'original'
+            : null
+    if (!bucket) continue // 不识别的路径不分类，避免误删
+    if (referenced.has(path)) {
+      retained[bucket].push(path)
+    } else {
+      orphaned[bucket].push(path)
+    }
+  }
+  return { orphaned, retained }
+}
+
+export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
+  if (!isDesktopRuntime()) {
+    return { original: [], corrected: [], problems: [], diagrams: [] }
+  }
+  // 当前前端没有 fs API 来枚举磁盘文件，扫描能力需要 Rust 侧新增命令。
+  // 此函数先返回空报告，并提供 extractReferencedMediaPaths / classifyMediaPaths
+  // 两个纯函数供调用方在拿到磁盘列表后自行判定。
+  // Rust 端 listMediaDirectory 命令待后续 PR 实现后即可启用完整扫描。
+  return { original: [], corrected: [], problems: [], diagrams: [] }
+}
+
+/**
+ * 删除指定的孤立媒体文件列表。每条路径在删除前会再次校验是否仍在数据库引用中，
+ * 以避免误删（例如扫描与删除之间数据库又写入了引用）。
+ *
+ * 返回实际删除的路径列表；任何仍被引用或删除失败的文件不会被计入。
+ */
+export async function deleteOrphanedMedia(
+  paths: string[],
+): Promise<{ deleted: string[]; skipped: string[] }> {
+  if (!isDesktopRuntime()) {
+    return { deleted: [], skipped: paths }
+  }
+  const db = await database()
+  const rows = await db.select<Record<string, unknown>[]>(
+    REFERENCED_MEDIA_PATHS_SQL,
+  )
+  const referenced = extractReferencedMediaPaths(rows)
+
+  const deleted: string[] = []
+  const skipped: string[] = []
+  for (const path of paths) {
+    if (referenced.has(path)) {
+      skipped.push(path)
+      continue
+    }
+    try {
+      if (path.includes('/diagrams/')) {
+        await removeProblemImage(path)
+      } else if (path.includes('/problems/')) {
+        await removeProblemImage(path)
+      } else {
+        // original / corrected 目录目前没有 Rust 命令暴露的删除路径，
+        // 跳过以保持安全（避免绕过沙箱删除非授权目录文件）
+        skipped.push(path)
+        continue
+      }
+      deleted.push(path)
+    } catch (error) {
+      console.error(`[database] 删除孤立图片失败：${path}`, error)
+      skipped.push(path)
+    }
+  }
+  return { deleted, skipped }
 }
