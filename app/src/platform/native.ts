@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   CameraOrientationInfo,
   DocumentProcessingResult,
@@ -181,5 +182,78 @@ export async function analyzeProblemWithAntigravityCLI(request: {
   return invoke<NativeAIResponse>(
     'analyze_problem_with_antigravity_cli',
     { request },
+  )
+}
+
+// ────────────────────────────────────────────────────────────
+// 自动更新
+// ────────────────────────────────────────────────────────────
+
+/** 检查更新返回的信息。null 表示已是最新版本。 */
+export interface UpdateInfo {
+  /** 最新版本号（不含 v 前缀） */
+  version: string
+  /** 当前安装版本号 */
+  currentVersion: string
+  /** 更新日志（Markdown） */
+  releaseNotes: string
+  /** 发布时间（ISO 8601） */
+  publishedAt: string
+  /** `.app.zip` 下载 URL */
+  downloadUrl: string
+  /** 下载文件大小（字节） */
+  downloadSize: number
+  /** `.sha256` 校验文件 URL（可能为空） */
+  sha256Url: string | null
+}
+
+/** 下载进度事件 payload。 */
+export interface DownloadProgress {
+  downloaded: number
+  total: number
+  percent: number
+}
+
+/** 获取当前应用版本号。 */
+export async function getAppVersion(): Promise<string> {
+  return invoke<string>('get_app_version')
+}
+
+/**
+ * 检查 GitHub 最新 release。
+ * 返回 null 表示已是最新；返回 UpdateInfo 表示有可用更新。
+ * 网络错误时抛出异常，调用方应静默处理（启动检查场景）或提示（手动检查场景）。
+ */
+export async function checkForUpdates(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>('check_for_updates')
+}
+
+/**
+ * 下载并安装更新。下载进度通过 `update://progress` 事件报告。
+ * 成功后当前进程退出，由 Rust 端 detached 脚本完成替换和重启。
+ */
+export async function downloadAndInstallUpdate(
+  downloadUrl: string,
+  sha256Url: string | null,
+): Promise<void> {
+  return invoke<void>('download_and_install_update', {
+    downloadUrl,
+    sha256Url,
+  })
+}
+
+/**
+ * 监听下载进度事件。返回取消监听的函数。
+ *
+ * 用法：
+ *   const unlisten = await onDownloadProgress((p) => setPercent(p.percent))
+ *   // ... 下载完成后
+ *   unlisten()
+ */
+export async function onDownloadProgress(
+  callback: (progress: DownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DownloadProgress>('update://progress', (event) =>
+    callback(event.payload),
   )
 }

@@ -135,10 +135,19 @@ jobs:
           echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
           echo "app_dir=$app" >> "$GITHUB_OUTPUT"
 
-      - name: Zip .app (for non-DMG users)
+      - name: Zip .app (for auto-updater)
         run: |
           cd "$(dirname "${{ steps.artifacts.outputs.app_dir }}")"
-          zip -r -y "$GITHUB_WORKSPACE/app/Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}.app.zip" Axiom.app
+          zip_name="Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.app.zip"
+          zip -r -y "$GITHUB_WORKSPACE/app/$zip_name" Axiom.app
+
+      - name: Generate SHA256 for .app.zip
+        # 自动更新器校验下载完整性所需。
+        run: |
+          cd "$GITHUB_WORKSPACE/app"
+          zip_name="Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.app.zip"
+          shasum -a 256 "$zip_name" | awk '{print $1}' > "$zip_name.sha256"
+          echo "SHA256: $(cat "$zip_name.sha256")"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -146,11 +155,13 @@ jobs:
           name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-dmg
           path: app/src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/dmg/*.dmg
 
-      - name: Upload .app.zip artifact
+      - name: Upload .app.zip + .sha256 artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-app
-          path: app/Axiom-*.app.zip
+          path: |
+            app/Axiom_*.app.zip
+            app/Axiom_*.app.zip.sha256
 
   release:
     name: Publish GitHub Release
@@ -203,5 +214,6 @@ jobs:
           files: |
             artifacts/*/*.dmg
             artifacts/*/*.app.zip
+            artifacts/*/*.sha256
           prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true

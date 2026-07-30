@@ -5,11 +5,14 @@ import { resumeSolutionPipeline } from './ai/solutionPipeline'
 import { resumeIntelligencePipeline } from './ai/intelligencePipeline'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
+import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
+import { checkForUpdates } from './platform/native'
+import { useToast } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
 import './App.css'
 
@@ -24,6 +27,7 @@ function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
 function App() {
   const [section, setSection] = useState<AppSection>('capture')
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
+  const { toast, notify } = useToast()
 
   useEffect(() => {
     void (async () => {
@@ -44,8 +48,21 @@ function App() {
       } catch (error) {
         console.error('恢复 AI Pipeline 失败', error)
       }
+
+      // 启动后台静默检查更新（失败不提示，仅在有更新时 Toast）
+      try {
+        const update = await checkForUpdates()
+        if (update) {
+          notify(
+            `发现新版本 v${update.version}，前往「设置 → 更新」安装`,
+            'info',
+          )
+        }
+      } catch {
+        // 静默失败：更新源未配置或网络不可达时不打扰用户
+      }
     })()
-  }, [])
+  }, [notify])
 
   // 数据库路径不一致时，阻塞整个应用并显示错误对话框
   if (dbCheck && !dbCheck.ok) {
@@ -68,6 +85,7 @@ function App() {
       ) : (
         <ModulePlaceholder section={section} />
       )}
+      <Toast toast={toast} />
     </div>
   )
 }

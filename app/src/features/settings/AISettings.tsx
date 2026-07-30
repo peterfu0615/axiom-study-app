@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { configureAIProviders } from '../../ai/provider'
 import { useTheme, type Theme } from '../../platform/theme'
+import { getAppVersion } from '../../platform/native'
 import type {
   AIProviderKind,
   AIProviderProfile,
@@ -9,8 +10,9 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
+import { UpdateSettings } from './UpdateSettings'
 
-type SettingsTab = 'providers' | 'appearance' | 'about'
+type SettingsTab = 'providers' | 'appearance' | 'about' | 'update'
 
 function newProvider(index: number): AIProviderProfile {
   const now = Date.now()
@@ -61,6 +63,7 @@ export function AISettings() {
   )
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState('…')
 
   useEffect(() => {
     void listAIProviderProfiles()
@@ -70,6 +73,9 @@ export function AISettings() {
       })
       .catch((error) => setMessage(`读取设置失败：${String(error)}`))
       .finally(() => setLoading(false))
+    void getAppVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion('未知'))
   }, [])
 
   const update = (
@@ -214,6 +220,15 @@ export function AISettings() {
             type="button"
           >
             关于
+          </button>
+          <button
+            aria-selected={tab === 'update'}
+            className={tab === 'update' ? 'active' : ''}
+            onClick={() => setTab('update')}
+            role="tab"
+            type="button"
+          >
+            更新
           </button>
         </nav>
 
@@ -515,7 +530,7 @@ export function AISettings() {
                 <strong>{resolvedTheme === 'dark' ? '深色' : '浅色'}</strong>
               </p>
             </div>
-          ) : (
+          ) : tab === 'about' ? (
             <div className="settings-about-pane">
               <header>
                 <p className="eyebrow">关于</p>
@@ -525,7 +540,7 @@ export function AISettings() {
               <dl className="settings-about-facts">
                 <div>
                   <dt>版本</dt>
-                  <dd>0.1.0</dd>
+                  <dd>{appVersion}</dd>
                 </div>
                 <div>
                   <dt>数据存储</dt>
@@ -537,6 +552,8 @@ export function AISettings() {
                 </div>
               </dl>
             </div>
+          ) : (
+            <UpdateSettings />
           )}
 
           {tab === 'providers' && (
