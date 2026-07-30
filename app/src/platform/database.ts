@@ -74,23 +74,46 @@ function database() {
   return databasePromise
 }
 
+// tauri-plugin-sql 的每个 db.execute() 都是独立 IPC 调用，SQLite 实际为单连接。
+// 当后台 worker 的事务跨多个 await 点时，事件循环可能切到另一处也开启事务的代码，
+// 触发 "cannot start a transaction within a transaction"。
+// 用一个 JS 端的异步互斥锁序列化所有事务，从根上消除交错。
+let transactionChain: Promise<unknown> = Promise.resolve()
+
+function withTransactionLock<T>(operation: () => Promise<T>): Promise<T> {
+  const run = transactionChain.then(operation, operation)
+  // 链式等待，但隔离错误，避免单次失败阻塞后续所有事务
+  transactionChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 async function inDatabaseTransaction<T>(
   db: Database,
   operation: () => Promise<T>,
 ): Promise<T> {
-  await db.execute('BEGIN')
-  try {
-    const result = await operation()
-    await db.execute('COMMIT')
-    return result
-  } catch (error) {
+  return withTransactionLock(async () => {
+    await db.execute('BEGIN')
     try {
-      await db.execute('ROLLBACK')
-    } catch {
-      // Preserve the original transaction error.
+      const result = await operation()
+      await db.execute('COMMIT')
+      return result
+    } catch (error) {
+      try {
+        await db.execute('ROLLBACK')
+      } catch {
+        // ROLLBACK 失败说明事务可能已不在活跃状态，再尝试一次以清理潜在泄漏
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          // Preserve the original transaction error.
+        }
+      }
+      throw error
     }
-    throw error
-  }
+  })
 }
 
 function rowToSourceDocument(row: Record<string, unknown>): SourceDocument {
@@ -844,56 +867,66 @@ export async function saveProblems(
       const parameter = values.push(block.id)
       return `$${parameter}`
     })
-    await db.execute('BEGIN')
-    try {
-      const result = await db.execute(
-        `WITH eligible AS MATERIALIZED (
-           SELECT id
-           FROM problems
-           WHERE source_document_id = $${eligibleSourceParameter}
-             AND status = 'candidate'
-             AND id IN (${eligibleIds.join(', ')})
-         )
-         UPDATE problems
-         SET crop_image_path = CASE id ${cases.join(' ')} END,
-             status = 'saved',
-             ai_status = 'pending',
-             ai_active_model_run_id = CASE id ${runCases.join(' ')} END,
-             updated_at = $${updatedAtParameter}
-         WHERE id IN (SELECT id FROM eligible)
-           AND (SELECT COUNT(*) FROM eligible) = ${selectedBlocks.length}`,
-        values,
-      )
-      if (result.rowsAffected !== selectedBlocks.length) {
-        throw new Error('题目状态已发生变化，没有写入任何错题')
-      }
-      for (const region of regionRows) {
-        await db.execute(
-          `INSERT INTO problem_regions (
-            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-          ON CONFLICT(id) DO UPDATE SET
-            region_type = excluded.region_type, x = excluded.x, y = excluded.y,
-            width = excluded.width, height = excluded.height, image_path = excluded.image_path,
-            updated_at = excluded.updated_at`,
-          [
-            region.id,
-            region.problemId,
-            region.type,
-            region.rect.x,
-            region.rect.y,
-            region.rect.width,
-            region.rect.height,
-            region.imagePath,
-            region.createdAt,
-          ],
+    await withTransactionLock(async () => {
+      await db.execute('BEGIN')
+      try {
+        const result = await db.execute(
+          `WITH eligible AS MATERIALIZED (
+             SELECT id
+             FROM problems
+             WHERE source_document_id = $${eligibleSourceParameter}
+               AND status = 'candidate'
+               AND id IN (${eligibleIds.join(', ')})
+           )
+           UPDATE problems
+           SET crop_image_path = CASE id ${cases.join(' ')} END,
+               status = 'saved',
+               ai_status = 'pending',
+               ai_active_model_run_id = CASE id ${runCases.join(' ')} END,
+               updated_at = $${updatedAtParameter}
+           WHERE id IN (SELECT id FROM eligible)
+             AND (SELECT COUNT(*) FROM eligible) = ${selectedBlocks.length}`,
+          values,
         )
+        if (result.rowsAffected !== selectedBlocks.length) {
+          throw new Error('题目状态已发生变化，没有写入任何错题')
+        }
+        for (const region of regionRows) {
+          await db.execute(
+            `INSERT INTO problem_regions (
+              id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            ON CONFLICT(id) DO UPDATE SET
+              region_type = excluded.region_type, x = excluded.x, y = excluded.y,
+              width = excluded.width, height = excluded.height, image_path = excluded.image_path,
+              updated_at = excluded.updated_at`,
+            [
+              region.id,
+              region.problemId,
+              region.type,
+              region.rect.x,
+              region.rect.y,
+              region.rect.width,
+              region.rect.height,
+              region.imagePath,
+              region.createdAt,
+            ],
+          )
+        }
+        await db.execute('COMMIT')
+      } catch (error) {
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          try {
+            await db.execute('ROLLBACK')
+          } catch {
+            /* preserve original error */
+          }
+        }
+        throw error
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   } catch (error) {
     await cleanupCreatedProblemImages(images)
     throw new Error(`数据库写入失败：${String(error)}`)
@@ -1000,50 +1033,60 @@ export async function saveProblemRegions(
   }
   const db = await database()
   const now = Date.now()
-  await db.execute('BEGIN')
-  try {
-    const ids = regions.map((region) => region.id)
-    if (ids.length) {
-      const placeholders = ids.map((_, index) => `$${index + 2}`).join(', ')
-      await db.execute(
-        `DELETE FROM problem_regions WHERE problem_id = $1 AND id NOT IN (${placeholders})`,
-        [problemId, ...ids],
-      )
-    } else {
-      await db.execute('DELETE FROM problem_regions WHERE problem_id = $1', [problemId])
+  await withTransactionLock(async () => {
+    await db.execute('BEGIN')
+    try {
+      const ids = regions.map((region) => region.id)
+      if (ids.length) {
+        const placeholders = ids.map((_, index) => `$${index + 2}`).join(', ')
+        await db.execute(
+          `DELETE FROM problem_regions WHERE problem_id = $1 AND id NOT IN (${placeholders})`,
+          [problemId, ...ids],
+        )
+      } else {
+        await db.execute('DELETE FROM problem_regions WHERE problem_id = $1', [problemId])
+      }
+      for (const region of regions) {
+        await db.execute(
+          `INSERT INTO problem_regions (
+            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT(id) DO UPDATE SET
+            region_type = excluded.region_type,
+            x = excluded.x,
+            y = excluded.y,
+            width = excluded.width,
+            height = excluded.height,
+            image_path = excluded.image_path,
+            updated_at = excluded.updated_at`,
+          [
+            region.id,
+            problemId,
+            region.type,
+            region.rect.x,
+            region.rect.y,
+            region.rect.width,
+            region.rect.height,
+            region.imagePath,
+            region.createdAt || now,
+            now,
+          ],
+        )
+      }
+      await db.execute('COMMIT')
+    } catch (error) {
+      try {
+        await db.execute('ROLLBACK')
+      } catch {
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          /* preserve original error */
+        }
+      }
+      throw error
     }
-    for (const region of regions) {
-      await db.execute(
-        `INSERT INTO problem_regions (
-          id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT(id) DO UPDATE SET
-          region_type = excluded.region_type,
-          x = excluded.x,
-          y = excluded.y,
-          width = excluded.width,
-          height = excluded.height,
-          image_path = excluded.image_path,
-          updated_at = excluded.updated_at`,
-        [
-          region.id,
-          problemId,
-          region.type,
-          region.rect.x,
-          region.rect.y,
-          region.rect.width,
-          region.rect.height,
-          region.imagePath,
-          region.createdAt || now,
-          now,
-        ],
-      )
-    }
-    await db.execute('COMMIT')
-  } catch (error) {
-    await db.execute('ROLLBACK')
-    throw error
-  }
+  })
   return getProblemRegions(problemId)
 }
 
@@ -2359,119 +2402,130 @@ export async function completeProblemAIModelRun(
   const db = await database()
   const now = Date.now()
   const outputJSON = analysisOutputJSON(analysis)
-  await db.execute('BEGIN')
-  try {
-    const previousRows = await db.select<Record<string, unknown>[]>(
-      `SELECT ai_diagram_image_path
-       FROM problems
-       WHERE id = $1
-         AND ai_active_model_run_id = $2
-         AND ai_status = 'processing'
-         AND status = 'saved'
-         AND deleted_at IS NULL`,
-      [run.problemId, run.id],
-    )
-    if (!previousRows[0]) {
-      throw new Error('AI Task 已被更新的运行取代')
-    }
-    const previousDiagramImagePath = nullableString(
-      previousRows[0].ai_diagram_image_path,
-    )
-    const completedRun = await db.execute(
-      `UPDATE model_runs
-       SET output_json = $1,
-           status = 'completed',
-           error_message = NULL,
-           latency_ms = $2
-       WHERE id = $3 AND status = 'processing'`,
-      [outputJSON, Math.max(0, now - run.createdAt), run.id],
-    )
-    if (completedRun.rowsAffected !== 1) {
-      throw new Error('AI Task 已不再处于处理中状态')
-    }
-    const completedProblem = await db.execute(
-      `UPDATE problems
-       SET ai_status = 'completed',
-           ai_title = $1,
-           ai_subject = $2,
-           ai_problem_type = $3,
-           ai_stem_markdown = $4,
-           ai_choices_json = $5,
-           ai_sub_questions_json = $6,
-           ai_has_diagram = $7,
-           ai_diagram_kind = $8,
-           ai_diagram_bbox_json = $9,
-           ai_diagram_image_path = $10,
-           ai_knowledge_points_json = $11,
-           ai_confidence = $12,
-           ai_warnings_json = $13,
-           ai_updated_at = $14,
-           updated_at = $14
-       WHERE id = $15
-         AND ai_active_model_run_id = $16
-         AND ai_status = 'processing'
-         AND status = 'saved'
-         AND deleted_at IS NULL`,
-      [
-        analysis.title,
-        analysis.subject,
-        analysis.problemType,
-        analysis.stemMarkdown,
-        JSON.stringify(analysis.choices),
-        JSON.stringify(analysis.subQuestions),
-        analysis.hasDiagram ? 1 : 0,
-        analysis.hasDiagram ? analysis.diagramKind : null,
-        JSON.stringify(analysis.diagramBBox),
-        diagramImagePath,
-        JSON.stringify(analysis.knowledgePoints),
-        analysis.confidence,
-        JSON.stringify(analysis.warnings),
-        now,
-        run.problemId,
-        run.id,
-      ],
-    )
-    if (completedProblem.rowsAffected !== 1) {
-      throw new Error('错题 AI 状态已变化，旧运行结果未写入')
-    }
-    const questionRect = run.input.cropRect
-    if (analysis.hasDiagram && hasUsableDiagramBounds(analysis.diagramBBox)) {
-      const diagramRect = {
-        x: questionRect.x + analysis.diagramBBox.x * questionRect.width,
-        y: questionRect.y + analysis.diagramBBox.y * questionRect.height,
-        width: analysis.diagramBBox.width * questionRect.width,
-        height: analysis.diagramBBox.height * questionRect.height,
+  let previousDiagramImagePath: string | null = null
+  await withTransactionLock(async () => {
+    await db.execute('BEGIN')
+    try {
+      const previousRows = await db.select<Record<string, unknown>[]>(
+        `SELECT ai_diagram_image_path
+         FROM problems
+         WHERE id = $1
+           AND ai_active_model_run_id = $2
+           AND ai_status = 'processing'
+           AND status = 'saved'
+           AND deleted_at IS NULL`,
+        [run.problemId, run.id],
+      )
+      if (!previousRows[0]) {
+        throw new Error('AI Task 已被更新的运行取代')
       }
-      await db.execute(
-        `INSERT INTO problem_regions (
-          id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-        ) VALUES ($1, $2, 'diagram', $3, $4, $5, $6, $7, $8, $8)
-        ON CONFLICT(id) DO UPDATE SET
-          x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height,
-          image_path = excluded.image_path, updated_at = excluded.updated_at`,
+      previousDiagramImagePath = nullableString(
+        previousRows[0].ai_diagram_image_path,
+      )
+      const completedRun = await db.execute(
+        `UPDATE model_runs
+         SET output_json = $1,
+             status = 'completed',
+             error_message = NULL,
+             latency_ms = $2
+         WHERE id = $3 AND status = 'processing'`,
+        [outputJSON, Math.max(0, now - run.createdAt), run.id],
+      )
+      if (completedRun.rowsAffected !== 1) {
+        throw new Error('AI Task 已不再处于处理中状态')
+      }
+      const completedProblem = await db.execute(
+        `UPDATE problems
+         SET ai_status = 'completed',
+             ai_title = $1,
+             ai_subject = $2,
+             ai_problem_type = $3,
+             ai_stem_markdown = $4,
+             ai_choices_json = $5,
+             ai_sub_questions_json = $6,
+             ai_has_diagram = $7,
+             ai_diagram_kind = $8,
+             ai_diagram_bbox_json = $9,
+             ai_diagram_image_path = $10,
+             ai_knowledge_points_json = $11,
+             ai_confidence = $12,
+             ai_warnings_json = $13,
+             ai_updated_at = $14,
+             updated_at = $14
+         WHERE id = $15
+           AND ai_active_model_run_id = $16
+           AND ai_status = 'processing'
+           AND status = 'saved'
+           AND deleted_at IS NULL`,
         [
-          `ai-diagram-${run.problemId}`,
-          run.problemId,
-          diagramRect.x,
-          diagramRect.y,
-          diagramRect.width,
-          diagramRect.height,
+          analysis.title,
+          analysis.subject,
+          analysis.problemType,
+          analysis.stemMarkdown,
+          JSON.stringify(analysis.choices),
+          JSON.stringify(analysis.subQuestions),
+          analysis.hasDiagram ? 1 : 0,
+          analysis.hasDiagram ? analysis.diagramKind : null,
+          JSON.stringify(analysis.diagramBBox),
           diagramImagePath,
+          JSON.stringify(analysis.knowledgePoints),
+          analysis.confidence,
+          JSON.stringify(analysis.warnings),
           now,
+          run.problemId,
+          run.id,
         ],
       )
-    } else {
-      await db.execute(
-        `DELETE FROM problem_regions WHERE id = $1`,
-        [`ai-diagram-${run.problemId}`],
-      )
+      if (completedProblem.rowsAffected !== 1) {
+        throw new Error('错题 AI 状态已变化，旧运行结果未写入')
+      }
+      const questionRect = run.input.cropRect
+      if (analysis.hasDiagram && hasUsableDiagramBounds(analysis.diagramBBox)) {
+        const diagramRect = {
+          x: questionRect.x + analysis.diagramBBox.x * questionRect.width,
+          y: questionRect.y + analysis.diagramBBox.y * questionRect.height,
+          width: analysis.diagramBBox.width * questionRect.width,
+          height: analysis.diagramBBox.height * questionRect.height,
+        }
+        await db.execute(
+          `INSERT INTO problem_regions (
+            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
+          ) VALUES ($1, $2, 'diagram', $3, $4, $5, $6, $7, $8, $8)
+          ON CONFLICT(id) DO UPDATE SET
+            x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height,
+            image_path = excluded.image_path, updated_at = excluded.updated_at`,
+          [
+            `ai-diagram-${run.problemId}`,
+            run.problemId,
+            diagramRect.x,
+            diagramRect.y,
+            diagramRect.width,
+            diagramRect.height,
+            diagramImagePath,
+            now,
+          ],
+        )
+      } else {
+        await db.execute(
+          `DELETE FROM problem_regions WHERE id = $1`,
+          [`ai-diagram-${run.problemId}`],
+        )
+      }
+      await db.execute('COMMIT')
+    } catch (error) {
+      try {
+        await db.execute('ROLLBACK')
+      } catch {
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          /* preserve original error */
+        }
+      }
+      throw error
     }
-    await db.execute('COMMIT')
-    return previousDiagramImagePath
-  } catch (error) {
-    await db.execute('ROLLBACK')
-    throw error
-  }
+  })
+  return previousDiagramImagePath
 }
 
 export async function recordProcessingModelRunOutput(
@@ -2765,48 +2819,58 @@ export async function replaceProblemRegions(
       region.updatedAt = now
     }
     const db = await database()
-    await db.execute('BEGIN')
-    try {
-      const updated = await db.execute(
-        `UPDATE problems SET crop_x = $1, crop_y = $2, crop_width = $3,
-          crop_height = $4, crop_image_path = $5, updated_at = $6
-         WHERE id = $7 AND status = 'saved' AND deleted_at IS NULL`,
-        [
-          question.rect.x,
-          question.rect.y,
-          question.rect.width,
-          question.rect.height,
-          question.imagePath,
-          now,
-          id,
-        ],
-      )
-      if (updated.rowsAffected !== 1) throw new Error('错题状态已发生变化')
-      await db.execute('DELETE FROM problem_regions WHERE problem_id = $1', [id])
-      for (const region of preparedRegions) {
-        await db.execute(
-          `INSERT INTO problem_regions (
-            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    await withTransactionLock(async () => {
+      await db.execute('BEGIN')
+      try {
+        const updated = await db.execute(
+          `UPDATE problems SET crop_x = $1, crop_y = $2, crop_width = $3,
+            crop_height = $4, crop_image_path = $5, updated_at = $6
+           WHERE id = $7 AND status = 'saved' AND deleted_at IS NULL`,
           [
-            region.id,
+            question.rect.x,
+            question.rect.y,
+            question.rect.width,
+            question.rect.height,
+            question.imagePath,
+            now,
             id,
-            region.type,
-            region.rect.x,
-            region.rect.y,
-            region.rect.width,
-            region.rect.height,
-            region.imagePath,
-            region.createdAt,
-            region.updatedAt,
           ],
         )
+        if (updated.rowsAffected !== 1) throw new Error('错题状态已发生变化')
+        await db.execute('DELETE FROM problem_regions WHERE problem_id = $1', [id])
+        for (const region of preparedRegions) {
+          await db.execute(
+            `INSERT INTO problem_regions (
+              id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              region.id,
+              id,
+              region.type,
+              region.rect.x,
+              region.rect.y,
+              region.rect.width,
+              region.rect.height,
+              region.imagePath,
+              region.createdAt,
+              region.updatedAt,
+            ],
+          )
+        }
+        await db.execute('COMMIT')
+      } catch (error) {
+        try {
+          await db.execute('ROLLBACK')
+        } catch {
+          try {
+            await db.execute('ROLLBACK')
+          } catch {
+            /* preserve original error */
+          }
+        }
+        throw error
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   } catch (error) {
     await cleanupCreatedProblemImages(images)
     throw new Error(`区域保存失败：${String(error)}`)
