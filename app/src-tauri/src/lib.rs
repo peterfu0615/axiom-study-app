@@ -174,10 +174,6 @@ pub fn run() {
             db::get_database_path,
             db::canonicalize_path,
             db::migrate_database,
-            keystore::store_api_key,
-            keystore::load_api_key,
-            keystore::delete_api_key, // 注意：migrate_api_keys_to_keychain 不是 #[tauri::command]，不注册到 invoke_handler。
-            // 它在 setup() 中作为启动迁移直接调用。
             updater::get_app_version,
             updater::check_for_updates,
             updater::download_and_install_update,
@@ -190,9 +186,10 @@ pub fn run() {
                 if let Err(e) = db::init_db(&handle).await {
                     log::error!("初始化数据库连接失败：{e}");
                 }
-                // 迁移已有明文 API Key 到 Keychain（失败不阻塞启动，仅记录日志）
-                if let Err(e) = keystore::migrate_api_keys_to_keychain(&handle).await {
-                    log::warn!("API Key Keychain 迁移失败（不阻塞启动）：{e}");
+                // 反向迁移：把 Keychain 中的 API Key 迁回数据库明文存储
+                // （v0.1.1 使用 Keychain，现改为数据库明文，单机自用）
+                if let Err(e) = keystore::migrate_keychain_to_db(&handle).await {
+                    log::warn!("Keychain → 数据库迁移失败（不阻塞启动）：{e}");
                 }
             });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制

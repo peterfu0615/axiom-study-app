@@ -60,13 +60,11 @@ import { resolveUserOverride } from '../domain/problemSelection'
 import {
   canonicalizePath,
   cropProblemImage,
-  deleteApiKey,
   deleteMediaFile,
   getDatabasePath,
   isDesktopRuntime,
   listMediaDirectory,
   removeProblemImage,
-  storeApiKey,
   type PersistedProblemImage,
 } from './native'
 
@@ -3121,8 +3119,8 @@ function rowToAIProviderProfile(
           ? 'antigravity_cli'
         : 'mock',
     baseUrl: String(row.base_url || ''),
-    // API Key 不再从数据库读取（已迁移到 Keychain）。apiKey 字段仅用于 UI 输入。
-    apiKey: '',
+    // API Key 直接存数据库明文（应用为单机自用，不再使用 Keychain）
+    apiKey: String(row.api_key || ''),
     credentialRef: String(row.credential_ref || ''),
     commandPath: String(row.command_path || ''),
     model: String(row.model || ''),
@@ -3176,19 +3174,13 @@ export async function saveAIProviderProfiles(
       throw new Error(`“${profile.name}”启用前请填写 CLI 路径和 Model`)
     }
   }
-  // API Key 存入 Keychain，数据库只保存 credential_ref
-  for (const profile of profiles) {
-    if (profile.provider === 'openai_compatible' && profile.apiKey.trim()) {
-      await storeApiKey(profile.id, profile.apiKey.trim())
-    }
-  }
+  // API Key 直接以明文存入数据库 api_key 列（单机自用，不再使用 Keychain）
   const now = Date.now()
   const normalized = profiles.map((profile, sortOrder) => ({
     ...profile,
     name: profile.name.trim(),
     baseUrl: profile.baseUrl.trim(),
-    // apiKey 不写入数据库，只用于 UI 和 Keychain 存储
-    apiKey: '',
+    apiKey: profile.apiKey.trim(),
     credentialRef: profile.provider === 'openai_compatible' ? profile.id : '',
     commandPath: profile.commandPath.trim(),
     model:
@@ -3199,8 +3191,6 @@ export async function saveAIProviderProfiles(
     createdAt: profile.createdAt || now,
     updatedAt: now,
   }))
-  // 记录将要保留的 provider id，用于后续清理被移除 provider 的 Keychain 条目
-  const retainedIds = new Set(normalized.map((profile) => profile.id))
   const db = await database()
   for (const profile of normalized) {
     await db.execute(
@@ -3227,7 +3217,7 @@ export async function saveAIProviderProfiles(
         profile.name,
         profile.provider,
         profile.baseUrl,
-        '', // api_key 列始终为空（key 在 Keychain）
+        profile.apiKey,
         profile.credentialRef,
         profile.commandPath,
         profile.model,
@@ -3240,11 +3230,6 @@ export async function saveAIProviderProfiles(
       ],
     )
   }
-  // 删除前先查出现存的 openai_compatible provider（用于清理 Keychain）。
-  // 只清理 credential_ref 非空且不在保留集合中的条目，避免遗留孤儿密钥。
-  const existingRows = await db.select<{ id: string; credential_ref: string }[]>(
-    `SELECT id, credential_ref FROM ai_provider_profiles WHERE provider = 'openai_compatible'`,
-  )
   const placeholders = normalized
     .map((_, index) => `$${index + 1}`)
     .join(', ')
@@ -3252,15 +3237,6 @@ export async function saveAIProviderProfiles(
     `DELETE FROM ai_provider_profiles WHERE id NOT IN (${placeholders})`,
     normalized.map((profile) => profile.id),
   )
-  // 清理被移除 provider 的 Keychain 条目（失败不阻塞保存，仅记录）
-  for (const row of existingRows) {
-    if (row.credential_ref && !retainedIds.has(row.id)) {
-      await deleteApiKey(row.id).catch((error) => {
-        // eslint-disable-next-line no-console
-        console.warn(`清理 Keychain 失败（provider ${row.id}）：${String(error)}`)
-      })
-    }
-  }
   return normalized
 }
 

@@ -15,6 +15,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::Row;
 use tauri::{AppHandle, Manager};
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
@@ -26,11 +27,48 @@ const MAX_IMAGE_COUNT: usize = 8;
 pub struct OpenAICompatibleAnalysisRequest {
     base_url: String,
     model: String,
-    /// Keychain 凭据引用（provider id），Rust 内部从 Keychain 读取实际 API Key。
-    /// 不再接受明文 api_key，避免 key 经 IPC 回传前端。
+    /// Provider id，用于从数据库查询 api_key（不再使用 Keychain）。
     credential_ref: String,
-    crop_image_path: String,
+    /// 主图（与 image_paths 合并使用，兼容旧调用）
+    #[serde(default)]
+    crop_image_path: Option<String>,
+    /// 附加图片（题图、图形、答题区等，多区域分析时使用）
+    #[serde(default)]
+    image_paths: Vec<String>,
+    /// System prompt
     prompt: String,
+    /// 用户消息文本（可选；不传时使用默认提示语）
+    #[serde(default)]
+    user_text: Option<String>,
+    /// JSON Schema 字符串（可选；部分 Provider 支持 response_format json_schema）
+    #[serde(default)]
+    json_schema: Option<String>,
+}
+
+/// 从数据库读取 provider 的 api_key。
+/// 失败时返回 Err，调用方应提示用户重新保存 API Key。
+async fn load_api_key_from_db(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+    let db_state = app
+        .try_state::<crate::db::DbState>()
+        .ok_or_else(|| "数据库状态未初始化".to_string())?;
+    let mut guard = db_state.connection.lock().await;
+    let conn = guard
+        .as_mut()
+        .ok_or_else(|| "数据库连接尚未初始化".to_string())?;
+    let row = sqlx::query("SELECT api_key FROM ai_provider_profiles WHERE id = $1")
+        .bind(provider_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| format!("查询 API Key 失败：{e}"))?;
+    let api_key = row
+        .map(|r| r.try_get::<String, _>("api_key").unwrap_or_default())
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err(format!(
+            "Provider {provider_id} 的 API Key 为空，请在设置中填写"
+        ));
+    }
+    Ok(api_key)
 }
 
 #[derive(Deserialize)]
@@ -258,47 +296,78 @@ pub async fn analyze_problem_with_openai_compatible(
     if credential_ref.is_empty() {
         return Err("凭据引用不能为空（请先在设置中保存 API Key）".to_string());
     }
-    // 从 Keychain 直接读取 API Key，不经过前端 IPC
-    let api_key = crate::keystore::load_api_key_internal(credential_ref)?;
+    // 从数据库读取 API Key（不再使用 Keychain，单机自用场景明文存储）
+    let api_key = load_api_key_from_db(&app, credential_ref).await?;
     if api_key.is_empty() {
-        return Err("Keychain 中未找到 API Key，请重新保存".to_string());
+        return Err("数据库中未找到 API Key，请重新保存".to_string());
     }
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
         return Err("分析 Prompt 不能为空".to_string());
     }
-    let image_url = image_data_url(&app, &request.crop_image_path)?;
+
+    // 合并 crop_image_path 与 image_paths（去重、限流）
+    let mut requested_paths: Vec<String> = Vec::new();
+    if let Some(crop) = request.crop_image_path.as_ref() {
+        let trimmed = crop.trim();
+        if !trimmed.is_empty() {
+            requested_paths.push(trimmed.to_string());
+        }
+    }
+    for path in &request.image_paths {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() && !requested_paths.iter().any(|p| p == trimmed) {
+            requested_paths.push(trimmed.to_string());
+        }
+    }
+    if requested_paths.len() > MAX_IMAGE_COUNT {
+        return Err(format!("单次 AI 请求最多支持 {MAX_IMAGE_COUNT} 张图片"));
+    }
+
+    // 构造 user content：纯文本任务无图片，视觉任务含图片
+    let user_text = request
+        .user_text
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("请根据输入内容生成符合 Schema 的 JSON。");
+    let mut user_content: Vec<Value> = vec![json!({ "type": "text", "text": user_text })];
+    for path in &requested_paths {
+        let data_url = image_data_url(&app, path)?;
+        user_content.push(json!({
+            "type": "image_url",
+            "image_url": { "url": data_url, "detail": "high" }
+        }));
+    }
+
+    // response_format：优先使用 json_schema（若 Provider 支持），否则 json_object
+    let response_format = match request.json_schema.as_deref() {
+        Some(schema_str) if !schema_str.trim().is_empty() => {
+            // 校验 schema 是合法 JSON
+            match serde_json::from_str::<Value>(schema_str) {
+                Ok(schema_value) => json!({
+                    "type": "json_schema",
+                    "json_schema": { "name": "axiom_output", "schema": schema_value }
+                }),
+                Err(_) => json!({ "type": "json_object" }),
+            }
+        }
+        _ => json!({ "type": "json_object" }),
+    };
+
     let body = json!({
         "model": model,
         "temperature": 0.1,
-        "response_format": { "type": "json_object" },
+        "response_format": response_format,
         "messages": [
-            {
-                "role": "system",
-                "content": prompt
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请根据图片生成题目结构化信息和可浏览标题。"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url,
-                            "detail": "high"
-                        }
-                    }
-                ]
-            }
+            { "role": "system", "content": prompt },
+            { "role": "user", "content": user_content }
         ]
     });
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(90))
+        .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("无法初始化 API 客户端：{error}"))?;
