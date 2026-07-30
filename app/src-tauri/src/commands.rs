@@ -16,8 +16,8 @@ use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 use crate::models::{
-    CameraOrientationInfo, DocumentProcessingResult, NativeCapabilities, NormalizedRect,
-    PersistedMedia, PersistedProblemImage,
+    CameraOrientationInfo, DocumentProcessingResult, MediaEntry, NativeCapabilities,
+    NormalizedRect, PersistedMedia, PersistedProblemImage,
 };
 
 const MAX_IMAGE_BYTES: usize = 30 * 1024 * 1024;
@@ -642,10 +642,118 @@ pub fn remove_problem_diagram(app: AppHandle, path: String) -> Result<(), String
     Ok(())
 }
 
+/// 媒体根目录（app_data_dir/media），所有媒体文件都位于其下。
+/// 用于校验 list_media_directory / delete_media_file 的路径不逃逸。
+fn media_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?
+        .join("media");
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建媒体目录：{error}"))?;
+    Ok(directory)
+}
+
+/// 允许的媒体子目录名，防止路径穿越。
+const ALLOWED_MEDIA_SUBDIRS: &[&str] = &["original", "corrected", "problems", "diagrams"];
+
+/// 枚举指定媒体子目录下的所有文件，返回每个文件的元数据。
+///
+/// `subdir` 必须是 `original` / `corrected` / `problems` / `diagrams` 之一，
+/// 任何其他值（含 `..`、绝对路径）都会被拒绝，防止目录穿越。
+///
+/// 返回的 `absolute_path` 经过 canonicalize，与数据库中存储的路径格式一致，
+/// 便于前端直接与数据库引用比对。
+#[tauri::command]
+pub fn list_media_directory(app: AppHandle, subdir: String) -> Result<Vec<MediaEntry>, String> {
+    if !ALLOWED_MEDIA_SUBDIRS.contains(&subdir.as_str()) {
+        return Err(format!("不支持的媒体子目录：{subdir}"));
+    }
+    let target_dir = media_root(&app)?.join(&subdir);
+    // 子目录可能尚未创建（无文件时），返回空列表而非报错
+    if !target_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let canonical_root = target_dir
+        .canonicalize()
+        .map_err(|e| format!("无法解析媒体目录：{e}"))?;
+
+    let mut entries = Vec::new();
+    let read_dir = fs::read_dir(&canonical_root)
+        .map_err(|e| format!("无法读取媒体目录 {subdir}：{e}"))?;
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let absolute_path = match path.to_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let relative_path = match path.strip_prefix(&canonical_root) {
+            Ok(rel) => format!("{subdir}/{}", rel.to_string_lossy()),
+            Err(_) => continue,
+        };
+        let created_at = metadata
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .and_then(|d| i64::try_from(d.as_millis()).ok());
+        entries.push(MediaEntry {
+            relative_path,
+            absolute_path,
+            size: metadata.len(),
+            created_at,
+        });
+    }
+    Ok(entries)
+}
+
+/// 删除单个媒体文件。
+///
+/// 安全约束：
+///   - 路径必须位于 `media/{original|corrected|problems|diagrams}/` 之一（canonicalize 后校验）；
+///   - 调用方应在删除前再次检查数据库引用（前端传入引用集合校验）；
+///   - 文件不存在时返回 Ok（幂等删除）。
+#[tauri::command]
+pub fn delete_media_file(app: AppHandle, path: String) -> Result<(), String> {
+    let root = media_root(&app)?
+        .canonicalize()
+        .map_err(|e| format!("无法解析媒体根目录：{e}"))?;
+    let candidate = Path::new(&path);
+    // canonicalize 失败说明文件可能不存在，对删除操作视为成功（幂等）
+    let canonical = match candidate.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    // 校验 canonical 路径必须在 media/ 下，且 parent 必须是允许的子目录
+    let parent = canonical
+        .parent()
+        .ok_or_else(|| "媒体文件路径无效".to_string())?;
+    if !parent.starts_with(&root) {
+        return Err("只能删除 Axiom 管理的媒体文件".to_string());
+    }
+    let subdir_name = parent
+        .strip_prefix(&root)
+        .map_err(|_| "媒体文件路径不在允许的子目录中".to_string())?
+        .to_str()
+        .unwrap_or("");
+    if !ALLOWED_MEDIA_SUBDIRS.contains(&subdir_name) {
+        return Err(format!("不支持的媒体子目录：{subdir_name}"));
+    }
+    fs::remove_file(&canonical).map_err(|e| format!("删除媒体文件失败：{e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         validate_normalized_rect, versioned_diagram_image_name, versioned_problem_image_name,
+        ALLOWED_MEDIA_SUBDIRS,
     };
     use crate::models::NormalizedRect;
 
@@ -696,5 +804,13 @@ mod tests {
         assert!(first.starts_with(&format!("{problem_id}-diagram-")));
         assert!(first.ends_with(".jpg"));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn allowed_media_subdirs_cover_all_four_categories() {
+        assert_eq!(
+            ALLOWED_MEDIA_SUBDIRS,
+            &["original", "corrected", "problems", "diagrams"]
+        );
     }
 }

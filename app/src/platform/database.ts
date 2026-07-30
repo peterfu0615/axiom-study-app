@@ -58,8 +58,12 @@ import {
 import { isSameCropRect, isValidNormalizedRect } from '../domain/problem'
 import { resolveUserOverride } from '../domain/problemSelection'
 import {
+  canonicalizePath,
   cropProblemImage,
+  deleteMediaFile,
+  getDatabasePath,
   isDesktopRuntime,
+  listMediaDirectory,
   removeProblemImage,
   type PersistedProblemImage,
 } from './native'
@@ -99,11 +103,15 @@ function database() {
     //    但历史上出现过 bundle identifier 变化 / 容器重定向 / Debug vs Release
     //    解析差异导致 migration 重新执行、用户数据「消失」的事故。
     //    此处通过 PRAGMA database_list 拿到 plugin-sql 实际打开的文件路径，
-    //    与 Rust get_database_path 命令返回的路径比对，不一致时记录 error 日志。
-    //    不阻塞启动——避免校验失败导致整个应用不可用。
-    void verifyDatabasePathConsistency(pluginDb).catch((error) => {
-      console.error('[database] 数据库路径一致性校验失败', error)
-    })
+    //    与 Rust get_database_path 命令返回的路径比对。
+    //    不一致时返回结构化错误，由调用方（App.tsx）决定是否阻塞启动并展示 UI。
+    const pathCheck = await verifyDatabasePathConsistency(pluginDb)
+    if (!pathCheck.ok) {
+      // 将错误存入模块级变量，供 ensureDatabaseReady 消费
+      databasePathError = pathCheck
+    } else {
+      databasePathError = null
+    }
 
     // 3. 所有数据操作走单一 sqlx 连接（Rust 端 db_execute / db_select），
     //    彻底避免 tauri-plugin-sql 多连接池导致的事务交错与锁竞争。
@@ -117,36 +125,78 @@ function database() {
   return dbInstancePromise
 }
 
+/** 数据库路径一致性校验结果。 */
+export interface DatabasePathCheck {
+  ok: boolean
+  /** plugin-sql 实际打开的数据库文件路径（canonicalize 后） */
+  pluginPath?: string
+  /** Rust sqlx 期望的数据库文件路径（canonicalize 后） */
+  rustPath?: string
+  /** 校验过程的错误信息（如 get_database_path 失败） */
+  error?: string
+}
+
+/** 模块级变量：数据库初始化后路径校验结果，供 ensureDatabaseReady 消费。 */
+let databasePathError: DatabasePathCheck | null = null
+
 /**
  * 校验 tauri-plugin-sql 与 Rust sqlx 是否解析到同一物理数据库文件。
- * 若两端路径不一致，会在控制台记录 error 并附带诊断信息，便于定位
- * 「Debug 正常 / Release 用户数据消失」类问题。
+ *
+ * 使用 Rust 端 canonicalize_path 命令解析符号链接，避免 macOS 容器路径
+ * （~/Library/Containers/... 与 /Users/<name>/...）的字符串差异导致误判。
+ *
+ * 返回结构化结果而非 fire-and-forget，由调用方决定是否阻塞启动。
  */
-async function verifyDatabasePathConsistency(pluginDb: Database) {
+async function verifyDatabasePathConsistency(pluginDb: Database): Promise<DatabasePathCheck> {
   let rustPath: string
   try {
-    rustPath = await invoke<string>('get_database_path')
+    rustPath = await getDatabasePath()
   } catch (error) {
-    // 命令未注册或 Rust 端 init_db 未就绪：只记录警告，不阻塞
-    console.warn('[database] 无法获取 Rust 端数据库路径，跳过一致性校验', error)
-    return
+    // Rust 端 init_db 未就绪或命令未注册
+    return { ok: false, error: `无法获取 Rust 端数据库路径：${String(error)}` }
   }
+
   const rows = await pluginDb.select<
     Array<{ name?: string; file?: string }>
   >('PRAGMA database_list')
   const mainRow = rows.find((row) => row.name === 'main')
-  const pluginPath = mainRow?.file ?? ''
-  if (!pluginPath) {
-    console.warn('[database] plugin-sql 未返回主数据库文件路径', rows)
-    return
+  const rawPluginPath = mainRow?.file ?? ''
+  if (!rawPluginPath) {
+    return { ok: false, error: 'plugin-sql 未返回主数据库文件路径', rustPath }
   }
-  if (!isSameDatabasePath(pluginPath, rustPath)) {
-    console.error(
-      '[database] 数据库路径不一致：plugin-sql 与 Rust sqlx 指向不同文件，' +
+
+  // canonicalize 双方路径以解析符号链接，避免容器路径误判
+  let pluginPath: string
+  let rustCanonical: string
+  try {
+    pluginPath = await canonicalizePath(rawPluginPath)
+    rustCanonical = await canonicalizePath(rustPath)
+  } catch {
+    // canonicalize 失败时退回字符串规范化比对（旧逻辑）
+    pluginPath = rawPluginPath
+    rustCanonical = rustPath
+  }
+
+  if (!isSameDatabasePath(pluginPath, rustCanonical)) {
+    return {
+      ok: false,
+      pluginPath,
+      rustPath: rustCanonical,
+      error:
+        '数据库路径不一致：plugin-sql 与 Rust sqlx 指向不同文件，' +
         '可能出现 migration 重复执行或用户数据丢失',
-      { pluginPath, rustPath },
-    )
+    }
   }
+  return { ok: true, pluginPath, rustPath: rustCanonical }
+}
+
+/**
+ * 等待数据库初始化完成并返回路径校验结果。
+ * App.tsx 在启动时调用此函数，若返回的 check 不为 ok，则展示 DatabaseLocationErrorDialog。
+ */
+export async function ensureDatabaseReady(): Promise<{ check: DatabasePathCheck }> {
+  await database()
+  return { check: databasePathError ?? { ok: true } }
 }
 
 // tauri-plugin-sql 的每个 db.execute() 都是独立 IPC 调用，SQLite 实际为单连接。
@@ -3369,11 +3419,32 @@ export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
   if (!isDesktopRuntime()) {
     return { original: [], corrected: [], problems: [], diagrams: [] }
   }
-  // 当前前端没有 fs API 来枚举磁盘文件，扫描能力需要 Rust 侧新增命令。
-  // 此函数先返回空报告，并提供 extractReferencedMediaPaths / classifyMediaPaths
-  // 两个纯函数供调用方在拿到磁盘列表后自行判定。
-  // Rust 端 listMediaDirectory 命令待后续 PR 实现后即可启用完整扫描。
-  return { original: [], corrected: [], problems: [], diagrams: [] }
+  const db = await database()
+  const rows = await db.select<Record<string, unknown>[]>(
+    REFERENCED_MEDIA_PATHS_SQL,
+  )
+  const referenced = extractReferencedMediaPaths(rows)
+
+  const report: OrphanedMediaReport = {
+    original: [],
+    corrected: [],
+    problems: [],
+    diagrams: [],
+  }
+  const subdirs = ['original', 'corrected', 'problems', 'diagrams'] as const
+  for (const subdir of subdirs) {
+    try {
+      const entries = await listMediaDirectory(subdir)
+      for (const entry of entries) {
+        if (!referenced.has(entry.absolutePath)) {
+          report[subdir].push(entry.absolutePath)
+        }
+      }
+    } catch {
+      // 单个子目录扫描失败不阻塞其他目录
+    }
+  }
+  return report
 }
 
 /**
@@ -3381,6 +3452,7 @@ export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
  * 以避免误删（例如扫描与删除之间数据库又写入了引用）。
  *
  * 返回实际删除的路径列表；任何仍被引用或删除失败的文件不会被计入。
+ * 覆盖全部四个媒体目录（original/corrected/problems/diagrams）。
  */
 export async function deleteOrphanedMedia(
   paths: string[],
@@ -3397,21 +3469,13 @@ export async function deleteOrphanedMedia(
   const deleted: string[] = []
   const skipped: string[] = []
   for (const path of paths) {
+    // 删除前再次检查引用（双重保护，避免误删）
     if (referenced.has(path)) {
       skipped.push(path)
       continue
     }
     try {
-      if (path.includes('/diagrams/')) {
-        await removeProblemImage(path)
-      } else if (path.includes('/problems/')) {
-        await removeProblemImage(path)
-      } else {
-        // original / corrected 目录目前没有 Rust 命令暴露的删除路径，
-        // 跳过以保持安全（避免绕过沙箱删除非授权目录文件）
-        skipped.push(path)
-        continue
-      }
+      await deleteMediaFile(path)
       deleted.push(path)
     } catch (error) {
       console.error(`[database] 删除孤立图片失败：${path}`, error)

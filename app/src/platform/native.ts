@@ -90,6 +90,48 @@ export async function removeProblemDiagram(path: string) {
   return invoke<void>('remove_problem_diagram', { path })
 }
 
+export interface MediaEntry {
+  /** 相对 media/ 的路径，如 "original/uuid.jpg" */
+  relativePath: string
+  /** 绝对路径（规范形式），与数据库中存储的路径格式一致 */
+  absolutePath: string
+  /** 文件大小（字节） */
+  size: number
+  /** 创建时间（Unix 毫秒），失败时为 null */
+  createdAt: number | null
+}
+
+/**
+ * 枚举指定媒体子目录下的所有文件。
+ * subdir 必须是 original / corrected / problems / diagrams 之一。
+ */
+export async function listMediaDirectory(subdir: string): Promise<MediaEntry[]> {
+  return invoke<MediaEntry[]>('list_media_directory', { subdir })
+}
+
+/** 删除单个媒体文件（幂等，文件不存在时返回成功）。 */
+export async function deleteMediaFile(path: string): Promise<void> {
+  return invoke<void>('delete_media_file', { path })
+}
+
+/** 解析符号链接并返回路径的规范形式，用于数据库路径一致性校验。 */
+export async function canonicalizePath(path: string): Promise<string> {
+  return invoke<string>('canonicalize_path', { path })
+}
+
+/**
+ * 将数据库文件从 from 复制到 to（仅复制，不删除源文件）。
+ * 用于修复 plugin-sql 与 Rust sqlx 路径不一致。
+ */
+export async function migrateDatabase(from: string, to: string): Promise<void> {
+  return invoke<void>('migrate_database', { from, to })
+}
+
+/** 获取 Rust 端实际使用的数据库文件绝对路径。 */
+export async function getDatabasePath(): Promise<string> {
+  return invoke<string>('get_database_path')
+}
+
 export async function analyzeProblemWithOpenAICompatible(request: {
   baseUrl: string
   model: string

@@ -39,6 +39,49 @@ pub fn get_database_path(app: AppHandle) -> Result<String, String> {
         .ok_or_else(|| "数据库路径包含非 UTF-8 字符".to_string())
 }
 
+/// 解析符号链接并返回路径的规范形式。
+/// 用于校验 plugin-sql 与 Rust sqlx 是否指向同一物理文件，
+/// 避免 macOS 容器路径（~/Library/Containers/... 与 /Users/<name>/...）的字符串差异导致误判。
+#[tauri::command]
+pub fn canonicalize_path(path: String) -> Result<String, String> {
+    let canonical = std::fs::canonicalize(&path)
+        .map_err(|e| format!("无法解析路径 {path}：{e}"))?;
+    canonical
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "规范路径包含非 UTF-8 字符".to_string())
+}
+
+/// 将数据库文件从 `from` 复制到 `to`，用于修复 plugin-sql 与 Rust sqlx 路径不一致。
+///
+/// 约束（不自动删除任何数据库）：
+///   - 仅复制，不删除源文件；
+///   - 若 `to` 已存在则报错，避免覆盖；
+///   - 校验 `from` 必须存在且是一个文件。
+///
+/// 复制成功后由前端提示用户重启 App。
+#[tauri::command]
+pub fn migrate_database(from: String, to: String) -> Result<(), String> {
+    let source = std::path::Path::new(&from);
+    if !source.is_file() {
+        return Err(format!("源数据库文件不存在：{from}"));
+    }
+    let target = std::path::Path::new(&to);
+    if target.exists() {
+        return Err(format!(
+            "目标路径已存在文件，为避免覆盖已中止：{to}"
+        ));
+    }
+    // 确保目标目录存在
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目标目录 {to}：{e}"))?;
+    }
+    std::fs::copy(source, target)
+        .map_err(|e| format!("复制数据库失败（{from} → {to}）：{e}"))?;
+    Ok(())
+}
+
 pub async fn init_db(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
     let options = SqliteConnectOptions::new()

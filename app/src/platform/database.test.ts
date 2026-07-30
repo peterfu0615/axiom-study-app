@@ -7,7 +7,22 @@ import {
   parseJSON,
   parseNullableSQLiteBoolean,
   parseSQLiteBoolean,
+  scanOrphanedMedia,
+  deleteOrphanedMedia,
 } from './database'
+
+// Mock native IPC calls so we can test scanOrphanedMedia / deleteOrphanedMedia
+// without a running Tauri backend.
+vi.mock('./native', () => ({
+  canonicalizePath: vi.fn(async (p: string) => p),
+  cropProblemImage: vi.fn(),
+  deleteMediaFile: vi.fn(async () => undefined),
+  getDatabasePath: vi.fn(async () => '/app/axiom.db'),
+  isDesktopRuntime: () => true,
+  listMediaDirectory: vi.fn(async (_subdir: string) => []),
+  migrateDatabase: vi.fn(async () => undefined),
+  removeProblemImage: vi.fn(async () => undefined),
+}))
 
 describe('parseSQLiteBoolean', () => {
   it('returns true for canonical truthy values', () => {
@@ -273,5 +288,37 @@ describe('classifyMediaPaths', () => {
     expect(retained.diagrams).toEqual([])
     expect(retained.original).toEqual([])
     expect(retained.corrected).toEqual([])
+  })
+})
+
+describe('scanOrphanedMedia', () => {
+  it('returns empty report when not on desktop runtime', async () => {
+    const native = await import('./native')
+    const origIsDesktop = (native as { isDesktopRuntime: () => boolean }).isDesktopRuntime
+    ;(native as { isDesktopRuntime: () => boolean }).isDesktopRuntime = () => false
+    try {
+      const report = await scanOrphanedMedia()
+      expect(report.original).toEqual([])
+      expect(report.corrected).toEqual([])
+      expect(report.problems).toEqual([])
+      expect(report.diagrams).toEqual([])
+    } finally {
+      ;(native as { isDesktopRuntime: () => boolean }).isDesktopRuntime = origIsDesktop
+    }
+  })
+})
+
+describe('deleteOrphanedMedia', () => {
+  it('returns empty result when not on desktop runtime', async () => {
+    const native = await import('./native')
+    const origIsDesktop = (native as { isDesktopRuntime: () => boolean }).isDesktopRuntime
+    ;(native as { isDesktopRuntime: () => boolean }).isDesktopRuntime = () => false
+    try {
+      const result = await deleteOrphanedMedia(['/app/media/problems/orphan.jpg'])
+      expect(result.deleted).toEqual([])
+      expect(result.skipped).toEqual(['/app/media/problems/orphan.jpg'])
+    } finally {
+      ;(native as { isDesktopRuntime: () => boolean }).isDesktopRuntime = origIsDesktop
+    }
   })
 })

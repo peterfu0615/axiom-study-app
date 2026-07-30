@@ -112,11 +112,15 @@ pub fn run() {
             commands::crop_problem_diagram,
             commands::remove_problem_image,
             commands::remove_problem_diagram,
+            commands::list_media_directory,
+            commands::delete_media_file,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             db::db_execute,
             db::db_select,
-            db::get_database_path
+            db::get_database_path,
+            db::canonicalize_path,
+            db::migrate_database
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
