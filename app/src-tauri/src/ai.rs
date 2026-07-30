@@ -26,7 +26,9 @@ const MAX_IMAGE_COUNT: usize = 8;
 pub struct OpenAICompatibleAnalysisRequest {
     base_url: String,
     model: String,
-    api_key: String,
+    /// Keychain 凭据引用（provider id），Rust 内部从 Keychain 读取实际 API Key。
+    /// 不再接受明文 api_key，避免 key 经 IPC 回传前端。
+    credential_ref: String,
     crop_image_path: String,
     prompt: String,
 }
@@ -252,9 +254,14 @@ pub async fn analyze_problem_with_openai_compatible(
     if model.is_empty() {
         return Err("Model 不能为空".to_string());
     }
-    let api_key = request.api_key.trim();
+    let credential_ref = request.credential_ref.trim();
+    if credential_ref.is_empty() {
+        return Err("凭据引用不能为空（请先在设置中保存 API Key）".to_string());
+    }
+    // 从 Keychain 直接读取 API Key，不经过前端 IPC
+    let api_key = crate::keystore::load_api_key_internal(&credential_ref)?;
     if api_key.is_empty() {
-        return Err("API Key 不能为空".to_string());
+        return Err("Keychain 中未找到 API Key，请重新保存".to_string());
     }
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
@@ -450,7 +457,8 @@ fn analyze_problem_with_antigravity_cli_blocking(
         .arg("--output-format")
         .arg("json")
         .arg("--json-schema")
-        .arg(schema);
+        .arg(schema)
+        .arg("--dangerously-skip-permissions");
     for parent in image_parents {
         command.arg("--add-dir").arg(parent);
     }

@@ -20,6 +20,7 @@ function newProvider(index: number): AIProviderProfile {
     provider: 'openai_compatible',
     baseUrl: '',
     apiKey: '',
+    credentialRef: '',
     commandPath: '',
     model: '',
     supportsVision: true,
@@ -31,9 +32,9 @@ function newProvider(index: number): AIProviderProfile {
   }
 }
 
-function maskedKey(key: string) {
-  if (!key) return '未保存'
-  return `••••••••••••${key.slice(-4)}`
+/** Keychain 状态文案：credentialRef 非空表示密钥已存入 Keychain。 */
+function keychainStatus(credentialRef: string) {
+  return credentialRef ? '已保存到 Keychain' : '未保存'
 }
 
 function providerSubtitle(profile: AIProviderProfile): string {
@@ -403,7 +404,7 @@ export function AISettings() {
                           <label className="provider-api-key-field">
                             <span>
                               API Key
-                              <small>{maskedKey(selectedProfile.apiKey)}</small>
+                              <small>{keychainStatus(selectedProfile.credentialRef)}</small>
                             </span>
                             <input
                               autoComplete="off"
@@ -413,7 +414,11 @@ export function AISettings() {
                                   apiKey: event.target.value,
                                 })
                               }
-                              placeholder="输入 Provider API Key"
+                              placeholder={
+                                selectedProfile.credentialRef
+                                  ? '输入新值以替换 Keychain 中的密钥（留空保持不变）'
+                                  : '输入 Provider API Key'
+                              }
                               type="password"
                               value={selectedProfile.apiKey}
                             />

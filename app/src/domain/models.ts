@@ -459,7 +459,11 @@ export interface AIProviderProfile {
   name: string
   provider: AIProviderKind
   baseUrl: string
+  /** API Key 输入值。保存时存入 Keychain，不持久化到数据库。
+   * 读取后为空字符串（key 不回传前端）。仅用于 UI 输入和校验。 */
   apiKey: string
+  /** Keychain 凭据引用（即 provider id）。空表示尚未保存到 Keychain。 */
+  credentialRef: string
   commandPath: string
   model: string
   supportsVision: boolean

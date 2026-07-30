@@ -253,7 +253,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       profile.provider !== 'openai_compatible' ||
       !profile.baseUrl ||
       !profile.model ||
-      !profile.apiKey
+      !profile.credentialRef
     ) {
       throw new Error('OpenAI-compatible Provider 配置不完整')
     }
@@ -268,11 +268,11 @@ export class OpenAICompatibleProvider implements AIProvider {
     input: AIProblemInput,
   ): Promise<AIProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const { baseUrl, model, apiKey } = this.profile
+    const { baseUrl, model, credentialRef } = this.profile
     const response = await analyzeProblemWithOpenAICompatible({
         baseUrl,
         model,
-        apiKey,
+        credentialRef,
         cropImagePath: input.cropImagePath,
         prompt: PROBLEM_ANALYSIS_PROMPT,
       })

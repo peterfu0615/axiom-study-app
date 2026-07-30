@@ -135,7 +135,8 @@ export async function getDatabasePath(): Promise<string> {
 export async function analyzeProblemWithOpenAICompatible(request: {
   baseUrl: string
   model: string
-  apiKey: string
+  /** Keychain 凭据引用（provider id）。Rust 内部按 ref 从 Keychain 读取实际 key。 */
+  credentialRef: string
   cropImagePath: string
   prompt: string
 }) {
@@ -143,6 +144,30 @@ export async function analyzeProblemWithOpenAICompatible(request: {
     'analyze_problem_with_openai_compatible',
     { request },
   )
+}
+
+/**
+ * 将 API Key 存入 macOS Keychain。返回 credential_ref（即 provider id）。
+ * 数据库不再保存明文 key，降低泄露面。
+ */
+export async function storeApiKey(
+  providerId: string,
+  apiKey: string,
+): Promise<string> {
+  return invoke<string>('store_api_key', { providerId, apiKey })
+}
+
+/**
+ * 从 Keychain 读取 API Key。
+ * 仅在需要前端校验存在性时使用；AI 请求由 Rust 内部直接读取，不经过此调用。
+ */
+export async function loadApiKey(providerId: string): Promise<string> {
+  return invoke<string>('load_api_key', { credentialRef: providerId })
+}
+
+/** 从 Keychain 删除 API Key（幂等，条目不存在时返回成功）。 */
+export async function deleteApiKey(providerId: string): Promise<void> {
+  return invoke<void>('delete_api_key', { credentialRef: providerId })
 }
 
 export async function analyzeProblemWithAntigravityCLI(request: {

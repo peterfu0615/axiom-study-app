@@ -89,7 +89,13 @@ pub async fn init_db(app: &AppHandle) -> Result<(), String> {
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(10))
-        .log_statements(log::LevelFilter::Trace);
+        // release 关闭语句日志，避免每条 SQL 序列化开销与日志膨胀；
+        // debug 下保留 Trace 便于排查。
+        .log_statements(if cfg!(debug_assertions) {
+            log::LevelFilter::Trace
+        } else {
+            log::LevelFilter::Off
+        });
 
     let mut conn = options
         .connect()
