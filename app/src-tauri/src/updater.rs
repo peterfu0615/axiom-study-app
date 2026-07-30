@@ -26,7 +26,7 @@ use tauri::{AppHandle, Emitter};
 /// 也可在编译时通过环境变量 `UPDATE_REPO_OWNER` 覆盖。
 const UPDATE_OWNER: &str = match option_env!("UPDATE_REPO_OWNER") {
     Some(owner) => owner,
-    None => "REPLACE_WITH_YOUR_GITHUB_USERNAME",
+    None => "peterfu0615",
 };
 
 /// GitHub 仓库名。
