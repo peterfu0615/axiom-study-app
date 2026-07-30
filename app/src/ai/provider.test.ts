@@ -16,7 +16,7 @@ import {
   MockAIProvider,
   OpenAICompatibleProvider,
   SOLUTION_PROVIDER_REQUIRED,
-  VISION_MODEL_REQUIRED,
+  VISION_PROVIDER_REQUIRED,
 } from './provider'
 
 describe('MockAIProvider', () => {
@@ -97,6 +97,7 @@ describe('MockAIProvider', () => {
       credentialRef: 'provider-1',
       cropImagePath: '/tmp/problem.jpg',
       prompt: expect.stringContaining('只返回一个符合 JSON Schema'),
+      jsonSchema: expect.any(String),
     })
     expect(result.analysis.title).toBe('数学-几何证明-辅助线法')
   })
@@ -342,10 +343,10 @@ describe('Provider routing', () => {
     ])
     expect(() =>
       getVisionProvidersForRun('text-only', 'llm'),
-    ).toThrow(VISION_MODEL_REQUIRED)
+    ).toThrow(VISION_PROVIDER_REQUIRED)
   })
 
-  it('routes Solution only to capable Antigravity providers', () => {
+  it('routes Solution to all text-capable providers with requested provider first', () => {
     configureAIProviders([
       {
         id: 'openai',
@@ -380,11 +381,13 @@ describe('Provider routing', () => {
         updatedAt: 1,
       },
     ])
+    // 正解生成为文字任务：所有 supportsText 的 Provider 均可承担，
+    // 请求的 Provider 排在首位，其余按 sortOrder 顺序作为 Fallback。
     expect(
       getSolutionProvidersForRun('antigravity', 'gemini-configured').map(
         (provider) => provider.id,
       ),
-    ).toEqual(['antigravity'])
+    ).toEqual(['antigravity', 'openai'])
 
     configureAIProviders([])
     expect(() =>
