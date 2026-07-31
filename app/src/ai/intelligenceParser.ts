@@ -249,6 +249,44 @@ export function parseStudentAttempt(rawOutput: string): {
   }
 }
 
+export function sanitizeAIOutputText(text: string | null | undefined): string {
+  if (!text) return ''
+  let cleaned = text.trim()
+
+  // 检测垃圾字符串的起始位置（可能出现多次或在不同位置）
+  const trashPatterns = [
+    /gaps_placeholder/i,
+    /field_must_match_schema/i,
+    /_name_gaps_/i,
+    /_array_type_check_/i,
+    /_is_knowledge_gaps_/i,
+    /knowledge_gaps_field_below/i,
+    /_field_is_knowledge_gaps_/i,
+    /_field_is_array_of_strings_/i,
+  ]
+
+  let earliestCut = -1
+  for (const pattern of trashPatterns) {
+    const match = cleaned.match(pattern)
+    if (match && match.index !== undefined) {
+      if (earliestCut === -1 || match.index < earliestCut) {
+        earliestCut = match.index
+      }
+    }
+  }
+
+  if (earliestCut >= 0) {
+    // 往前找，如果前面是 / 或 _ 或空格，也一起截掉
+    let cutStart = earliestCut
+    while (cutStart > 0 && /[\/_\s]/.test(cleaned[cutStart - 1])) {
+      cutStart -= 1
+    }
+    cleaned = cleaned.slice(0, cutStart).trim()
+  }
+
+  return cleaned
+}
+
 export function parseReasoningAnalysis(rawOutput: string): {
   analysis: Pick<
     ReasoningAnalysis,
@@ -316,7 +354,7 @@ export function parseReasoningAnalysis(rawOutput: string): {
     (step) => ({
       studentStepIndex: step.student_step_index,
       status: step.status,
-      comment: step.comment,
+      comment: sanitizeAIOutputText(step.comment),
     }),
   )
   const mergedStrategies = [
@@ -325,15 +363,19 @@ export function parseReasoningAnalysis(rawOutput: string): {
       ...(parsed.repairStrategy ? parsed.repairStrategy.split(',') : []),
     ]),
   ]
+  const cleanedGaps = (value.knowledge_gaps ?? [])
+    .map(sanitizeAIOutputText)
+    .filter((gap) => gap.length > 0 && !/gaps_placeholder|schema_name|type_check/i.test(gap))
+
   return {
     analysis: {
-      approach: value.approach,
+      approach: sanitizeAIOutputText(value.approach),
       stepEvaluations,
       firstWrongStep: value.first_wrong_step,
       errorType: value.error_type,
-      reason: value.reason,
-      knowledgeGaps: value.knowledge_gaps,
-      suggestion: value.suggestion,
+      reason: sanitizeAIOutputText(value.reason),
+      knowledgeGaps: cleanedGaps,
+      suggestion: sanitizeAIOutputText(value.suggestion),
     },
     repairStrategy: mergedStrategies.length ? mergedStrategies.join(',') : null,
   }

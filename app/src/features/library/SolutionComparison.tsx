@@ -17,7 +17,9 @@ import type {
 } from '../../domain/models'
 import { MathMarkdown } from '../../components/MathMarkdown'
 import { Icon } from '../../components/Icon'
-import { explainSelection } from '../../ai/intelligencePipeline'
+import { explainSelection, EXPLAIN_STREAM_EVENT } from '../../ai/intelligencePipeline'
+import { sanitizeAIOutputText } from '../../ai/intelligenceParser'
+import { SOLUTION_STREAM_EVENT } from '../../ai/solutionPipeline'
 
 const EXPLANATION_OPEN_EVENT = 'axiom:explanation-panel-open'
 
@@ -60,6 +62,17 @@ function safeRect(rect: DOMRect) {
     top: Math.max(12, Math.min(window.innerHeight - 48, rect.top)),
     left: Math.max(12, Math.min(window.innerWidth - 174, rect.right + 8)),
   }
+}
+
+const STEP_STATUS_LABELS: Record<string, string> = {
+  correct: '正确',
+  wrong: '错误',
+  missing_reason: '缺失理由',
+  unclear: '不明确',
+}
+
+function stepStatusLabel(status: string) {
+  return STEP_STATUS_LABELS[status] ?? status
 }
 
 function ExplainableMathMarkdown({
@@ -124,6 +137,7 @@ function ExplainableMathMarkdown({
   }
 
   const handleSelection = () => {
+    if (!hoverEnabled) return
     window.setTimeout(() => {
       const selection = window.getSelection()
       const text = selection?.toString().trim() ?? ''
@@ -191,6 +205,7 @@ function SolutionPane({
   onTarget,
   onRetrySolution,
   solution,
+  streamChars = 0,
 }: {
   attempt: StudentAttempt | null
   className: string
@@ -198,6 +213,7 @@ function SolutionPane({
   onTarget: (target: ExplanationTarget) => void
   onRetrySolution?: () => void
   solution: Solution | null
+  streamChars?: number
 }) {
   const isSolution = className.includes('solution')
   const content = isSolution
@@ -232,7 +248,7 @@ function SolutionPane({
             : !attempt?.steps.length)) ? (
           <ExplainableMathMarkdown
             className={isSolution ? 'problem-solution-content' : 'student-attempt-content'}
-            hoverEnabled={isSolution}
+            hoverEnabled={modal && isSolution}
             onTarget={onTarget}
             source={isSolution ? 'solution' : 'student_attempt'}
           >
@@ -245,6 +261,9 @@ function SolutionPane({
             </span>
             <span className="ai-scanning-text">
               {isSolution ? 'AI 正在生成正解' : 'AI 正在识别我的解答'}
+              {isSolution && streamChars > 0 && (
+                <span className="ai-stream-progress"> · 已生成 {streamChars} 字符</span>
+              )}
             </span>
           </div>
         ) : status === 'failed' ? (
@@ -287,6 +306,7 @@ function SolutionPane({
                 <span>步骤 {step.index}</span>
                 <ExplainableMathMarkdown
                   className="problem-solution-content"
+                  hoverEnabled
                   onTarget={onTarget}
                   source="student_attempt"
                   step={step}
@@ -339,6 +359,7 @@ function ExplanationPanel({
   onRetry: () => void
 }) {
   const [position, setPosition] = useState({ x: 0, y: 0 })
+  const [streamText, setStreamText] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{
     startX: number
@@ -348,7 +369,23 @@ function ExplanationPanel({
     rect: DOMRect
   } | null>(null)
   useEffect(() => {
-    if (explanation.status === 'idle') setPosition({ x: 0, y: 0 })
+    if (explanation.status === 'idle') {
+      setPosition({ x: 0, y: 0 })
+      setStreamText('')
+    }
+  }, [explanation.status])
+  // 流式订阅：loading 时实时显示 AI 累积输出
+  useEffect(() => {
+    if (explanation.status !== 'loading') return
+    setStreamText('')
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { accumulated: string }
+      if (typeof detail?.accumulated === 'string') {
+        setStreamText(detail.accumulated)
+      }
+    }
+    window.addEventListener(EXPLAIN_STREAM_EVENT, handler)
+    return () => window.removeEventListener(EXPLAIN_STREAM_EVENT, handler)
   }, [explanation.status])
   if (explanation.status === 'idle') return null
   const target = explanation.target
@@ -411,9 +448,11 @@ function ExplanationPanel({
         </button>
       </header>
       <div className="explain-floating-body">
-        <p className="explain-selection-quote">“{target.text}”</p>
+        <MathMarkdown className="explain-selection-quote">{target.text}</MathMarkdown>
         {explanation.status === 'loading' && (
-          <div className="comparison-placeholder"><Icon name="ai" size={18} />正在生成解释…</div>
+          streamText
+            ? <MathMarkdown className="explain-result-content explain-streaming">{streamText}</MathMarkdown>
+            : <div className="comparison-placeholder"><Icon name="ai" size={18} />正在生成解释…</div>
         )}
         {explanation.status === 'failed' && (
           <div className="explain-error" role="alert">
@@ -426,7 +465,7 @@ function ExplanationPanel({
           <>
             <MathMarkdown className="explain-result-content">{explanation.result.explanationMarkdown}</MathMarkdown>
             {explanation.result.keyPoint && (
-              <p className="explain-key-point">关键点：{explanation.result.keyPoint}</p>
+              <MathMarkdown className="explain-key-point">{`**关键点：**${explanation.result.keyPoint}`}</MathMarkdown>
             )}
             {explanation.result.relatedKnowledgePoints.length > 0 && (
               <p className="explain-related-points">
@@ -542,8 +581,28 @@ export function SolutionComparison({
   const [modalOpen, setModalOpen] = useState(false)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
   const [explanation, setExplanation] = useState<ExplanationState>({ status: 'idle' })
+  const [solutionStreamChars, setSolutionStreamChars] = useState(0)
   const explanationRequestId = useRef(0)
   const explanationOwnerId = useRef(crypto.randomUUID())
+
+  // 流式订阅：正解生成时实时显示已接收字符数
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { problemId: string; accumulated: string }
+      if (detail?.problemId === problem.id) {
+        setSolutionStreamChars(detail.accumulated.length)
+      }
+    }
+    window.addEventListener(SOLUTION_STREAM_EVENT, handler)
+    return () => window.removeEventListener(SOLUTION_STREAM_EVENT, handler)
+  }, [problem.id])
+
+  useEffect(() => {
+    // 正解状态变化时重置流式计数
+    if (solution?.status !== 'processing') {
+      setSolutionStreamChars(0)
+    }
+  }, [solution?.status])
 
   useEffect(() => {
     if (!modalOpen) return
@@ -662,6 +721,7 @@ export function SolutionComparison({
             onTarget={openExplanation}
             onRetrySolution={onRetrySolution}
             solution={solution}
+            streamChars={solutionStreamChars}
           />
           <div aria-hidden="true" className="solution-comparison-divider" />
           <SolutionPane
@@ -703,6 +763,7 @@ export function SolutionComparison({
                 onTarget={openExplanation}
                 onRetrySolution={onRetrySolution}
                 solution={solution}
+                streamChars={solutionStreamChars}
               />
               <div aria-hidden="true" className="solution-comparison-divider" />
               <SolutionPane
@@ -717,24 +778,35 @@ export function SolutionComparison({
               <section className="reasoning-summary">
                 <div>
                   <span className="comparison-kicker">AI 分析</span>
-                  <h3>{reasoning.approach || '解题思路分析'}</h3>
+                  <h3>{sanitizeAIOutputText(reasoning.approach) || '解题思路分析'}</h3>
                 </div>
                 {reasoning.firstWrongStep && (
                   <p>首个需要检查的步骤：第 {reasoning.firstWrongStep} 步</p>
                 )}
                 {reasoning.errorType && <p>错误类型：{reasoning.errorType}</p>}
-                {reasoning.reason && <p>{reasoning.reason}</p>}
-                {reasoning.knowledgeGaps.length > 0 && (
-                  <p>知识缺口：{reasoning.knowledgeGaps.join(' · ')}</p>
+                {sanitizeAIOutputText(reasoning.reason) && (
+                  <MathMarkdown className="reasoning-text">{sanitizeAIOutputText(reasoning.reason)}</MathMarkdown>
                 )}
-                {reasoning.suggestion && <p>建议：{reasoning.suggestion}</p>}
-                <div className="reasoning-step-evaluations">
-                  {reasoning.stepEvaluations.map((item) => (
-                    <span className={item.status} key={item.studentStepIndex}>
-                      第 {item.studentStepIndex} 步 · {item.status} · {item.comment}
-                    </span>
-                  ))}
-                </div>
+                {reasoning.knowledgeGaps.map(sanitizeAIOutputText).filter((gap) => gap.length > 0).length > 0 && (
+                  <p>知识缺口：{reasoning.knowledgeGaps.map(sanitizeAIOutputText).filter((gap) => gap.length > 0).join(' · ')}</p>
+                )}
+                {sanitizeAIOutputText(reasoning.suggestion) && (
+                  <MathMarkdown className="reasoning-text">{sanitizeAIOutputText(reasoning.suggestion)}</MathMarkdown>
+                )}
+                {reasoning.stepEvaluations.length > 0 && (
+                  <div className="reasoning-step-evaluations">
+                    {reasoning.stepEvaluations.map((item) => (
+                      <div className={`evaluation-item evaluation-${item.status}`} key={item.studentStepIndex}>
+                        <span className="evaluation-header">
+                          第 {item.studentStepIndex} 步 · {stepStatusLabel(item.status)}
+                        </span>
+                        {sanitizeAIOutputText(item.comment) && (
+                          <MathMarkdown className="reasoning-text evaluation-comment">{sanitizeAIOutputText(item.comment)}</MathMarkdown>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
             {reasoning?.status === 'failed' && (

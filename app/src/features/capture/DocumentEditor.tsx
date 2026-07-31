@@ -331,17 +331,6 @@ export function DocumentEditor({
     setActiveRegionId(null)
   }
 
-  const updateActiveTitle = (title: string) => {
-    if (!activeId) return
-    setBlocks((current) =>
-      current.map((block) =>
-        block.id === activeId
-          ? { ...block, title, userTitle: title, source: 'manual' }
-          : block,
-      ),
-    )
-  }
-
   const saveBlocks = async () => {
     setSaving(true)
     dismiss()
@@ -685,13 +674,6 @@ export function DocumentEditor({
 
           {activeBlock && (
             <div className="block-detail">
-              <label htmlFor="block-title">题目名称</label>
-              <input
-                id="block-title"
-                onChange={(event) => updateActiveTitle(event.target.value)}
-                disabled={processing || saving}
-                value={activeBlock.title}
-              />
               <p>
             拖动黄色标注区域移动题块，拖动四角调整范围。多选后可以合并。
               </p>
