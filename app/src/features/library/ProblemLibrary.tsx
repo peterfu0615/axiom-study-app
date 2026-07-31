@@ -531,7 +531,7 @@ export function ProblemLibrary() {
         <div>
           <p className="eyebrow">知识资产</p>
           <h1>错题库</h1>
-          <p className="subtitle">所有内容保存在这台 Mac 上。</p>
+          <p className="subtitle">所有数据保存在本机，无云端依赖。</p>
         </div>
         <div className="library-view-switch" role="tablist">
           <button

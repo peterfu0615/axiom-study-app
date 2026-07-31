@@ -290,7 +290,7 @@ export function CaptureWorkspace() {
         <div>
           <p className="eyebrow">采集工作台</p>
           <h1>添加错题</h1>
-          <p className="subtitle">拍下整页，下一阶段将自动校正并切分题目。</p>
+          <p className="subtitle">拍摄整页，自动校正并切分为独立题目。</p>
         </div>
         <div className="runtime-pill">
           <span className={`status-dot ${capabilities ? 'online' : ''}`} />
@@ -517,7 +517,7 @@ export function CaptureWorkspace() {
           <div className="stage-note">
             <span>阶段 1</span>
             <p>
-              页面矫正、色彩优化与可编辑题目块均在本机完成，原图始终保留。
+              页面校正、色彩优化与题目块编辑均在本机完成，原图始终保留。
             </p>
           </div>
         </aside>
