@@ -12,7 +12,6 @@ export const solutionAntigravityJSONSchema = {
     'content_markdown',
     'steps',
     'key_method',
-    'used_formulas',
     'knowledge_points',
   ],
   properties: {
@@ -30,10 +29,6 @@ export const solutionAntigravityJSONSchema = {
       },
     },
     key_method: {},
-    used_formulas: {
-      type: 'array',
-      items: { type: 'string' },
-    },
     knowledge_points: {
       type: 'array',
       items: { type: 'string' },
@@ -53,9 +48,8 @@ export const SOLUTION_PROMPT = String.raw`
 6. 禁止用“因为……所以……”承担证明逻辑。必要中文只用于步骤标题、方法名称和极短的衔接说明。
 7. 推理必须完整，不得省略决定性条件、公式代入、变形过程或最终结论。
 8. key_method 是核心方法名称；无法可靠判断时返回 null。
-9. used_formulas 只保存本题实际使用的 LaTeX 公式，不要添加 $ 或 $$；没有时返回 []。
-10. knowledge_points 只关联输入中已有或可由题目直接确认的知识点，不得臆造；没有时返回 []。
-11. 题目信息不足以得到唯一可靠解答时，不得编造答案，应让输出无法通过完整解答约束，由应用显示生成失败。
+9. knowledge_points 只关联输入中已有或可由题目直接确认的知识点，不得臆造；没有时返回 []。
+10. 题目信息不足以得到唯一可靠解答时，不得编造答案，应让输出无法通过完整解答约束，由应用显示生成失败。
 
 必须返回以下结构：
 {
@@ -68,7 +62,6 @@ export const SOLUTION_PROMPT = String.raw`
     }
   ],
   "key_method": null,
-  "used_formulas": [],
   "knowledge_points": []
 }
 `.trim()

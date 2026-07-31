@@ -325,17 +325,6 @@ function SolutionPane({
                 <strong>{solution.keyMethod}</strong>
               </div>
             )}
-            {solution.usedFormulas.length > 0 && (
-              <div>
-                <span>使用公式</span>
-                {solution.usedFormulas.map((formula) => (
-                  <MathMarkdown
-                    key={formula}
-                    className="solution-formula-list"
-                  >{`$$${formula}$$`}</MathMarkdown>
-                ))}
-              </div>
-            )}
             {solution.knowledgePoints.length > 0 && (
               <div>
                 <span>关联知识点</span>
