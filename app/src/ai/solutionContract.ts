@@ -12,6 +12,7 @@ export const solutionAntigravityJSONSchema = {
     'content_markdown',
     'steps',
     'key_method',
+    'used_formulas',
     'knowledge_points',
   ],
   properties: {
@@ -29,6 +30,10 @@ export const solutionAntigravityJSONSchema = {
       },
     },
     key_method: {},
+    used_formulas: {
+      type: 'array',
+      items: { type: 'string' },
+    },
     knowledge_points: {
       type: 'array',
       items: { type: 'string' },
@@ -62,6 +67,7 @@ export const SOLUTION_PROMPT = String.raw`
     }
   ],
   "key_method": null,
+  "used_formulas": [],
   "knowledge_points": []
 }
 `.trim()
