@@ -36,4 +36,16 @@ $$\sqrt{x^2+1}$$`
     const markdown = '输入 `(\\frac{a}{b})`，而不是公式。'
     expect(normalizeMathMarkdown(markdown)).toBe(markdown)
   })
+
+  it('normalizes \\because and \\therefore into Unicode math symbols', () => {
+    expect(normalizeMathMarkdown(String.raw`\because y 的值随 x 的增大而增大，\therefore m > 0`)).toBe(
+      '∵ y 的值随 x 的增大而增大，∴ m > 0',
+    )
+  })
+
+  it('trims leading/trailing spaces inside inline math delimiters', () => {
+    expect(normalizeMathMarkdown('利用一次函数 $ y = kx + b $ 的性质 $k > 0 $')).toBe(
+      '利用一次函数 $y = kx + b$ 的性质 $k > 0$',
+    )
+  })
 })

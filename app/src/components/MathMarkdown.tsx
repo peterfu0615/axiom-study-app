@@ -11,7 +11,8 @@ export function MathMarkdown({
   children: string
   className?: string
 }) {
-  const markdown = normalizeMathMarkdown(children).replace(
+  // 块级公式 $$...$$ 换行处理，确保 remark-math 将其正确解析为 katex-display
+  const markdown = normalizeMathMarkdown(children || '').replace(
     /\$\$([\s\S]+?)\$\$/g,
     (_match, formula: string) => `\n\n$$\n${formula.trim()}\n$$\n\n`,
   )

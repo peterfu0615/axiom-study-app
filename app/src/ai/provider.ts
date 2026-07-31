@@ -107,6 +107,9 @@ export class AIProviderFailure extends Error {
   }
 }
 
+/** 流式输出回调，每收到一个 SSE chunk 时触发 */
+export type StreamCallback = (chunk: { accumulated: string; delta: string }) => void
+
 export interface AIProvider {
   readonly id: string
   readonly model: string
@@ -119,17 +122,25 @@ export interface AIProvider {
   ) => Promise<StudentAttemptProviderResult>
   analyzeStudentReasoning?: (
     input: ReasoningAnalysisInput,
+    onChunk?: StreamCallback,
   ) => Promise<ReasoningProviderResult>
   explainSelection?: (
     input: import('../domain/models').ExplainSelectionInput,
+    onChunk?: StreamCallback,
   ) => Promise<ExplainProviderResult>
-  generateSolution?: (input: SolutionInput) => Promise<SolutionProviderResult>
+  generateSolution?: (
+    input: SolutionInput,
+    onChunk?: StreamCallback,
+  ) => Promise<SolutionProviderResult>
   explainStep?: (input: ExplainSolutionStepInput) => Promise<unknown>
   generateDiagram?: (input: unknown) => Promise<unknown>
 }
 
 export interface SolutionCapableProvider extends AIProvider {
-  generateSolution(input: SolutionInput): Promise<SolutionProviderResult>
+  generateSolution(
+    input: SolutionInput,
+    onChunk?: StreamCallback,
+  ): Promise<SolutionProviderResult>
 }
 
 export class MockAIProvider implements AIProvider {
@@ -195,6 +206,7 @@ export class MockAIProvider implements AIProvider {
 
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
+    _onChunk?: StreamCallback,
   ): Promise<ReasoningProviderResult> {
     return {
       analysis: {
@@ -227,7 +239,10 @@ export class MockAIProvider implements AIProvider {
     }
   }
 
-  async explainSelection(): Promise<ExplainProviderResult> {
+  async explainSelection(
+    _input: import('../domain/models').ExplainSelectionInput,
+    _onChunk?: StreamCallback,
+  ): Promise<ExplainProviderResult> {
     return {
       result: {
         explanationMarkdown: 'Mock AI 解释：请配置真实 Provider 以获得数学解释。',
@@ -374,6 +389,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
+    onChunk?: StreamCallback,
   ): Promise<ReasoningProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const { baseUrl, model, credentialRef } = this.profile
@@ -388,6 +404,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       imagePaths,
       prompt: buildReasoningAnalysisPrompt(input),
       jsonSchema: JSON.stringify(reasoningAnalysisAntigravityJSONSchema),
+      onChunk,
     })
     if (response.errorMessage) {
       throw new AIProviderFailure(response.errorMessage, response.rawOutput)
@@ -409,6 +426,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async explainSelection(
     input: import('../domain/models').ExplainSelectionInput,
+    onChunk?: StreamCallback,
   ): Promise<ExplainProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const { baseUrl, model, credentialRef } = this.profile
@@ -422,6 +440,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       imagePaths,
       prompt: buildExplainSelectionPrompt(input),
       jsonSchema: JSON.stringify(explainSelectionAntigravityJSONSchema),
+      onChunk,
     })
     if (response.errorMessage) {
       throw new AIProviderFailure(response.errorMessage, response.rawOutput)
@@ -443,6 +462,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async generateSolution(
     input: SolutionInput,
+    onChunk?: StreamCallback,
   ): Promise<SolutionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const { baseUrl, model, credentialRef } = this.profile
@@ -464,6 +484,7 @@ ${JSON.stringify(structuredProblem)}
       imagePaths,
       prompt,
       jsonSchema: JSON.stringify(solutionAntigravityJSONSchema),
+      onChunk,
     })
     if (response.errorMessage) {
       throw new AIProviderFailure(response.errorMessage, response.rawOutput)
@@ -609,6 +630,7 @@ export class AntigravityCLIProvider implements AIProvider {
 
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
+    _onChunk?: StreamCallback,
   ): Promise<ReasoningProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     // 文本任务：仅当 Provider 支持视觉时附带题目图片
@@ -640,6 +662,7 @@ export class AntigravityCLIProvider implements AIProvider {
 
   async explainSelection(
     input: import('../domain/models').ExplainSelectionInput,
+    _onChunk?: StreamCallback,
   ): Promise<ExplainProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const cropImagePath = this.supportsVision ? input.cropImagePath : undefined
@@ -670,6 +693,7 @@ export class AntigravityCLIProvider implements AIProvider {
 
   async generateSolution(
     input: SolutionInput,
+    _onChunk?: StreamCallback,
   ): Promise<SolutionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const { cropImagePath, ...structuredProblem } = input

@@ -28,11 +28,33 @@ import {
 } from './provider'
 
 export const INTELLIGENCE_STATUS_EVENT = 'axiom:intelligence-status'
+/** 流式输出事件：推理分析过程中实时推送累积文本 */
+export const REASONING_STREAM_EVENT = 'axiom:reasoning-stream'
+/** 流式输出事件：向我解释过程中实时推送累积文本 */
+export const EXPLAIN_STREAM_EVENT = 'axiom:explain-stream'
 
 function notifyIntelligenceStatus(problemId: string) {
   if (typeof window === 'undefined') return
   window.dispatchEvent(
     new CustomEvent(INTELLIGENCE_STATUS_EVENT, { detail: { problemId } }),
+  )
+}
+
+function notifyReasoningStream(problemId: string, runId: string, accumulated: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent(REASONING_STREAM_EVENT, {
+      detail: { problemId, runId, accumulated },
+    }),
+  )
+}
+
+function notifyExplainStream(runId: string, accumulated: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent(EXPLAIN_STREAM_EVENT, {
+      detail: { runId, accumulated },
+    }),
   )
 }
 
@@ -107,7 +129,10 @@ async function drainPendingIntelligence() {
           if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
             activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
           }
-          const result = await provider.analyzeStudentReasoning(activeRun.input)
+          const result = await provider.analyzeStudentReasoning(
+            activeRun.input,
+            (chunk) => notifyReasoningStream(reasoning.problemId, activeRun.id, chunk.accumulated),
+          )
           await recordProcessingModelRunOutput(activeRun, result.rawOutput, result.repairStrategy)
           await completeReasoningModelRun(activeRun, result.analysis)
           errors.length = 0
@@ -180,7 +205,10 @@ export async function explainSelection(
         if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
           activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
         }
-        const response = await provider.explainSelection(activeRun.input)
+        const response = await provider.explainSelection(
+          activeRun.input,
+          (chunk) => notifyExplainStream(activeRun.id, chunk.accumulated),
+        )
         await recordProcessingModelRunOutput(activeRun, response.rawOutput, response.repairStrategy)
         await completeExplainModelRun(activeRun, response.result)
         return response.result

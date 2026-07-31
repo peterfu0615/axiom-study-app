@@ -12,11 +12,22 @@ import {
 } from './provider'
 
 export const SOLUTION_STATUS_EVENT = 'axiom:solution-status'
+/** 流式输出事件：正解生成过程中实时推送累积文本 */
+export const SOLUTION_STREAM_EVENT = 'axiom:solution-stream'
 
 function notifySolutionStatus(problemId: string) {
   if (typeof window === 'undefined') return
   window.dispatchEvent(
     new CustomEvent(SOLUTION_STATUS_EVENT, { detail: { problemId } }),
+  )
+}
+
+function notifySolutionStream(problemId: string, runId: string, accumulated: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent(SOLUTION_STREAM_EVENT, {
+      detail: { problemId, runId, accumulated },
+    }),
   )
 }
 
@@ -50,6 +61,7 @@ async function drainPendingSolutions() {
           }
           const providerResult = await provider.generateSolution(
             activeRun.input,
+            (chunk) => notifySolutionStream(run.problemId, activeRun.id, chunk.accumulated),
           )
           await recordProcessingModelRunOutput(
             activeRun,

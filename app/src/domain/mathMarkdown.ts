@@ -1,5 +1,5 @@
 const DEFINITE_LATEX_COMMAND =
-  /\\(?:d?frac|sqrt|angle|triangle|perp|parallel|overline|underline|vec|overrightarrow|cdot|times|div|pm|leq|geq|neq|approx|infty|sin|cos|tan|log|ln|sum|prod|int|lim|left|right|begin|end)\b/u
+  /\\(?:d?frac|sqrt|angle|triangle|perp|parallel|overline|underline|vec|overrightarrow|cdot|times|div|pm|leq|geq|neq|approx|infty|sin|cos|tan|log|ln|sum|prod|int|lim|left|right|begin|end|because|therefore|Rightarrow|Leftarrow|Leftrightarrow|rightarrow|leftarrow|to|implies|impliedby)\b/u
 
 const CJK_TEXT = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/u
 const ALGEBRAIC_TOKEN = /[A-Za-z0-9]|[∠△⊥∥]/u
@@ -21,14 +21,16 @@ function looksLikeUnwrappedMath(value: string) {
 }
 
 function normalizePlainTextSegment(value: string) {
+  let text = value.replace(/\\because\b/g, '∵').replace(/\\therefore\b/g, '∴')
+
   let output = ''
   let plainStart = 0
   let groupStart = -1
   let opening = ''
   let depth = 0
 
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index]
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
     if (depth === 0 && (character === '(' || character === '（')) {
       groupStart = index
       opening = character
@@ -46,9 +48,9 @@ function normalizePlainTextSegment(value: string) {
 
     depth -= 1
     if (depth !== 0) continue
-    const content = value.slice(groupStart + 1, index)
+    const content = text.slice(groupStart + 1, index)
     if (looksLikeUnwrappedMath(content)) {
-      output += value.slice(plainStart, groupStart)
+      output += text.slice(plainStart, groupStart)
       output += `$${content.trim()}$`
       plainStart = index + 1
     }
@@ -56,7 +58,7 @@ function normalizePlainTextSegment(value: string) {
     opening = ''
   }
 
-  return output + value.slice(plainStart)
+  return output + text.slice(plainStart)
 }
 
 /**
@@ -89,21 +91,43 @@ export function normalizeMathMarkdown(markdown: string) {
 
     if (markdown[index] === '$' && !isEscaped(markdown, index)) {
       flushPlainText(index)
-      const delimiter = markdown[index + 1] === '$' ? '$$' : '$'
+      const isDisplayMode = markdown[index + 1] === '$'
+      const delimiter = isDisplayMode ? '$$' : '$'
       let end = index + delimiter.length
+      let found = false
       while (end < markdown.length) {
         const match = markdown.indexOf(delimiter, end)
         if (match < 0) {
-          end = markdown.length
           break
         }
         if (!isEscaped(markdown, match)) {
           end = match + delimiter.length
+          found = true
           break
         }
         end = match + delimiter.length
       }
-      output += markdown.slice(index, end)
+
+      if (!found) {
+        // 找不到配对的 $/``，移除孤立的 $ 符号，防止 $ 暴露
+        index += delimiter.length
+        plainStart = index
+        continue
+      }
+
+      const mathSpan = markdown.slice(index, end)
+      if (isDisplayMode) {
+        output += mathSpan
+      } else {
+        // 对于单 $ 的行内公式，去除内部紧贴 $ 的首尾空格（避免 remark-math 校验失败导致无法渲染）
+        const inner = mathSpan.slice(1, -1).trim()
+        if (inner) {
+          output += `$${inner}$`
+        } else {
+          output += mathSpan
+        }
+      }
+
       index = end
       plainStart = end
       continue

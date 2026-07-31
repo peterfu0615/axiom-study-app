@@ -12,15 +12,26 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use futures_util::StreamExt;
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
-use tauri::{AppHandle, Manager};
+use tauri::{ipc::Channel, AppHandle, Manager};
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_IMAGE_TOTAL_BYTES: u64 = 60 * 1024 * 1024;
 const MAX_IMAGE_COUNT: usize = 8;
+
+/// 流式输出增量 chunk，通过 Tauri Channel 推送到前端。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamChunk {
+    /// 累积的完整文本（包含本次增量）
+    pub accumulated: String,
+    /// 本次增量文本
+    pub delta: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -282,10 +293,12 @@ fn is_vision_unsupported(message: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn analyze_problem_with_openai_compatible(
     app: AppHandle,
     request: OpenAICompatibleAnalysisRequest,
+    on_chunk: Channel<StreamChunk>,
+    stream: Option<bool>,
 ) -> Result<Value, String> {
     let endpoint = endpoint_url(&request.base_url)?;
     let model = request.model.trim();
@@ -355,7 +368,9 @@ pub async fn analyze_problem_with_openai_compatible(
         _ => json!({ "type": "json_object" }),
     };
 
-    let body = json!({
+    // 当 stream 参数为 true 时启用流式输出
+    let stream_enabled = stream.unwrap_or(false);
+    let mut body = json!({
         "model": model,
         "temperature": 0.1,
         "response_format": response_format,
@@ -364,10 +379,18 @@ pub async fn analyze_problem_with_openai_compatible(
             { "role": "user", "content": user_content }
         ]
     });
+    if stream_enabled {
+        body["stream"] = json!(true);
+    }
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(120))
+        // 流式模式下不设全局 timeout（由 SSE 流自身控制）
+        .timeout(if stream_enabled {
+            Duration::from_secs(300)
+        } else {
+            Duration::from_secs(120)
+        })
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("无法初始化 API 客户端：{error}"))?;
@@ -379,6 +402,98 @@ pub async fn analyze_problem_with_openai_compatible(
         .await
         .map_err(|error| format!("AI API 请求失败：{error}"))?;
     let status = response.status();
+
+    // ── 流式分支：SSE 逐 chunk 读取，通过 Channel 推送增量 ──
+    if stream_enabled {
+        if !status.is_success() {
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|error| format!("无法读取 AI API 错误响应：{error}"))?;
+            let response_text = String::from_utf8_lossy(&bytes);
+            let provider_message = provider_error_message(&response_text);
+            let error_message = if is_vision_unsupported(&provider_message) {
+                format!(
+                    "当前模型不支持图片输入，请选择视觉模型。HTTP {}：{}",
+                    status.as_u16(),
+                    provider_message
+                )
+            } else {
+                format!(
+                    "AI API 请求失败（HTTP {}）：{}",
+                    status.as_u16(),
+                    if provider_message.is_empty() {
+                        "Provider 未返回错误详情"
+                    } else {
+                        &provider_message
+                    }
+                )
+            };
+            return Ok(json!({
+                "rawOutput": response_text,
+                "errorMessage": error_message
+            }));
+        }
+
+        let channel = on_chunk;
+        let mut accumulated = String::new();
+        let mut buffer = String::new();
+        let mut stream = response.bytes_stream();
+        let mut total_bytes: usize = 0;
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|error| format!("读取 SSE 流失败：{error}"))?;
+            total_bytes += chunk.len();
+            if total_bytes > MAX_RESPONSE_BYTES {
+                return Err("AI API 流式响应超过 2 MB".to_string());
+            }
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            // SSE 以 \n\n 分隔事件，每行 `data: {json}` 或 `data: [DONE]`
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line: String = buffer.drain(..=newline_pos).collect();
+                let trimmed = line.trim_end_matches('\r').trim();
+                if trimmed.is_empty() || !trimmed.starts_with("data:") {
+                    continue;
+                }
+                let data = trimmed["data:".len()..].trim();
+                if data == "[DONE]" {
+                    continue;
+                }
+                // 解析 SSE chunk JSON，提取 delta.content
+                let chunk_json: Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let delta = chunk_json
+                    .pointer("/choices/0/delta/content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if delta.is_empty() {
+                    continue;
+                }
+                accumulated.push_str(delta);
+                // 推送增量到前端（忽略 Channel 已关闭的错误）
+                let _ = channel.send(StreamChunk {
+                    accumulated: accumulated.clone(),
+                    delta: delta.to_string(),
+                });
+            }
+        }
+
+        if is_vision_unsupported(&accumulated) {
+            return Ok(json!({
+                "rawOutput": accumulated,
+                "errorMessage": "当前模型不支持图片输入，请选择视觉模型。"
+            }));
+        }
+        return Ok(json!({
+            "rawOutput": accumulated,
+            "errorMessage": null
+        }));
+    }
+
+    // ── 非流式分支（原有逻辑） ──
     let bytes = response
         .bytes()
         .await

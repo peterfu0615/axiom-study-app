@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
+import { Channel, convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   CameraOrientationInfo,
@@ -148,10 +148,25 @@ export async function analyzeProblemWithOpenAICompatible(request: {
   userText?: string
   /** JSON Schema 字符串（可选；部分 Provider 支持 response_format json_schema） */
   jsonSchema?: string
+  /** 流式回调（可选；传入时启用 SSE 流式输出） */
+  onChunk?: (chunk: { accumulated: string; delta: string }) => void
 }) {
+  // Tauri v2 Channel：onChunk 必须作为独立参数传给 Rust 命令（不在 request 内），
+  // 因为 Channel<StreamChunk> 不实现 Deserialize，必须作为 CommandArg 传入。
+  // 即使不需要流式输出，也必须传一个 Channel（Rust 端用 stream flag 控制是否启用流式）。
+  type StreamMessage = { accumulated: string; delta: string }
+  const channel = new Channel<StreamMessage>()
+  channel.onmessage = (message) => {
+    request.onChunk?.(message)
+  }
+  const { onChunk: _onChunk, ...rest } = request
   return invoke<NativeAIResponse>(
     'analyze_problem_with_openai_compatible',
-    { request },
+    {
+      request: rest,
+      onChunk: channel,
+      stream: request.onChunk ? true : false,
+    },
   )
 }
 

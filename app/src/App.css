@@ -2163,7 +2163,8 @@
   min-width: 0;
 }
 
-.problem-solution-content {
+.problem-solution-content,
+.student-attempt-content {
   min-width: 0;
   color: var(--ink);
   font-size: 14px;
@@ -2172,6 +2173,7 @@
 }
 
 .problem-solution-content .katex-display,
+.student-attempt-content .katex-display,
 .solution-formula-list .katex-display {
   margin: 1.15em 0;
   overflow-x: auto;
@@ -2265,6 +2267,10 @@
   padding: 11px 13px;
   border-radius: 10px;
   background: var(--brand-wash);
+  /* AI 分析卡片高度限制为正解窗口的 1/3，超出滚动 */
+  max-height: min(26vh, 240px);
+  overflow: auto;
+  flex: 0 0 auto;
 }
 
 .reasoning-summary.failed {
@@ -2285,23 +2291,66 @@
   line-height: 15px;
 }
 
+.reasoning-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.reasoning-text p {
+  margin: 0;
+}
+
+.reasoning-text .katex-display {
+  margin: 4px 0;
+  font-size: 0.95em;
+}
+
 .reasoning-step-evaluations {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
 }
 
-.reasoning-step-evaluations span {
-  padding: 4px 6px;
+.reasoning-step-evaluations .evaluation-item {
+  padding: 6px 10px;
   border-radius: 6px;
   color: var(--muted);
   background: color-mix(in srgb, var(--surface) 75%, transparent);
-  font-size: 9px;
+  font-size: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.reasoning-step-evaluations span.wrong {
+.reasoning-step-evaluations .evaluation-header {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.reasoning-step-evaluations .evaluation-item.evaluation-correct {
+  color: color-mix(in srgb, var(--success) 75%, var(--ink));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+}
+
+.reasoning-step-evaluations .evaluation-item.evaluation-wrong {
   color: color-mix(in srgb, var(--danger) 75%, var(--ink));
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+.reasoning-step-evaluations .evaluation-item.evaluation-missing_reason,
+.reasoning-step-evaluations .evaluation-item.evaluation-unclear {
+  color: color-mix(in srgb, var(--warning, #c9a600) 75%, var(--ink));
+  background: color-mix(in srgb, var(--warning, #c9a600) 12%, var(--surface));
+}
+
+.reasoning-step-evaluations .evaluation-comment {
+  color: inherit;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .solution-comparison-preview {
@@ -2443,8 +2492,6 @@
   display: grid;
   gap: 14px;
   margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .comparison-step {
@@ -2665,10 +2712,8 @@
   line-height: 16px;
 }
 
-.explain-result-content {
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.7;
+.explain-selection-quote p {
+  margin: 0;
 }
 
 .explain-key-point {
@@ -2677,6 +2722,39 @@
   border-top: 1px solid var(--border);
   color: var(--brand-ink);
   font-size: 10px;
+  line-height: 16px;
+}
+
+.explain-key-point p {
+  margin: 0;
+}
+
+.explain-result-content {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* 流式输出中：文本带闪烁光标效果 */
+.explain-streaming::after {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  background: var(--brand);
+  animation: stream-cursor 1s steps(2, start) infinite;
+  content: '';
+  vertical-align: text-bottom;
+}
+
+@keyframes stream-cursor {
+  to { visibility: hidden; }
+}
+
+.ai-stream-progress {
+  color: var(--brand-pressed);
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .explain-related-points {
@@ -4216,8 +4294,7 @@
   }
 
   .reasoning-summary {
-    max-height: 20vh;
-    overflow: auto;
+    max-height: min(22vh, 200px);
   }
 }
 
