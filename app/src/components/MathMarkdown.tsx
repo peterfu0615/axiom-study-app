@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
+import remarkBreaks from 'remark-breaks'
 import { normalizeMathMarkdown } from '../domain/mathMarkdown'
 import 'katex/dist/katex.min.css'
 
@@ -20,7 +21,7 @@ export function MathMarkdown({
     <div className={className}>
       <ReactMarkdown
         rehypePlugins={[rehypeKatex]}
-        remarkPlugins={[remarkMath]}
+        remarkPlugins={[remarkMath, remarkBreaks]}
       >
         {markdown}
       </ReactMarkdown>

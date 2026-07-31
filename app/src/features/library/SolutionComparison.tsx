@@ -306,7 +306,7 @@ function SolutionPane({
                 <span>步骤 {step.index}</span>
                 <ExplainableMathMarkdown
                   className="problem-solution-content"
-                  hoverEnabled
+                  hoverEnabled={false}
                   onTarget={onTarget}
                   source="student_attempt"
                   step={step}
@@ -778,7 +778,9 @@ export function SolutionComparison({
               <section className="reasoning-summary">
                 <div>
                   <span className="comparison-kicker">AI 分析</span>
-                  <h3>{sanitizeAIOutputText(reasoning.approach) || '解题思路分析'}</h3>
+                  <h3 className="reasoning-approach-title">
+                    <MathMarkdown>{sanitizeAIOutputText(reasoning.approach) || '解题思路分析'}</MathMarkdown>
+                  </h3>
                 </div>
                 {reasoning.firstWrongStep && (
                   <p>首个需要检查的步骤：第 {reasoning.firstWrongStep} 步</p>

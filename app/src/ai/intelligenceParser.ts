@@ -263,6 +263,20 @@ export function sanitizeAIOutputText(text: string | null | undefined): string {
     /knowledge_gaps_field_below/i,
     /_field_is_knowledge_gaps_/i,
     /_field_is_array_of_strings_/i,
+    // 覆盖 AI 元评论变体
+    /format is correct/i,
+    /properly handled/i,
+    /no errors?\s*\.?\s*no_error/i,
+    /strictly adheres to requirements/i,
+    /shelter\/knowledge_gaps/i,
+    /no control tokens/i,
+    /parseable json/i,
+    /raw json string/i,
+    /outside fences/i,
+    /json block/i,
+    /let me (re-?generate|make sure|continue|finish)/i,
+    /wait,? let'?s/i,
+    /schema_name/i,
   ]
 
   let earliestCut = -1

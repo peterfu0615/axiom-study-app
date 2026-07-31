@@ -1445,12 +1445,22 @@
 
 .problem-card-copy > strong {
   width: 100%;
-  overflow: hidden;
   color: var(--ink);
   font-size: 13px;
   line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 允许标题换行，最多2行 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.reasoning-approach-title {
+  margin: 0;
+}
+
+.reasoning-approach-title p {
+  margin: 0;
 }
 
 .problem-card-copy small {

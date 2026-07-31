@@ -210,20 +210,22 @@ export const STUDENT_ATTEMPT_PROMPT = String.raw`
 `.trim()
 
 export const REASONING_ANALYSIS_PROMPT = String.raw`
-你是中国中学数学解题过程分析模型。根据题目、学生步骤和可选标准解法，分析学生思路与每一步。
+你是一位中国中学数学解题过程分析专家。请根据题目图片、学生解答步骤和可选的标准解法，分析学生的解题思路并评估每一步骤。
 
-只返回符合 JSON Schema 的 JSON 对象，不要代码围栏或解释性文字。允许学生采用与标准解法不同但正确的方法，不得仅因表达不同判错。指出首个可确认问题；无法确认时使用 unclear/unknown。公式使用 LaTeX Markdown。
+请直接输出一个 JSON 对象，包含以下字段：
+- approach: 简述解题思路（字符串，可为 null）
+- step_evaluations: 对每个学生步骤的评估数组，每项包含 student_step_index（数字）、status（correct/wrong/missing_reason/unclear）、comment（评语）
+- first_wrong_step: 首个出错的步骤编号（数字，可为 null）
+- error_type: 错误类型，取值之一：concept_error、calculation_error、formula_error、logic_gap、reading_error、incomplete_solution、no_error、unknown（可为 null）
+- reason: 错误原因分析（字符串，可为 null）
+- knowledge_gaps: 知识盲区列表（字符串数组，可为空数组 []）
+- suggestion: 改进建议（字符串，可为 null）
 
-error_type 字段必须严格使用以下取值之一（不要使用其他名称、变体或中文）：
-- "concept_error"      概念错误（用错定理、定义或基本概念）
-- "calculation_error"  计算错误（算术运算失误）
-- "formula_error"      公式错误（记错或套错公式）
-- "logic_gap"          逻辑跳跃或缺步骤（推理链不完整）
-- "reading_error"      审题错误（误读题意、漏条件）
-- "incomplete_solution" 解答未完成（中途停笔）
-- "no_error"           全部正确
-- "unknown"            无法判定
-- null                 无学生步骤可分析时使用
+注意：
+- 允许学生采用与标准解法不同但正确的方法，不得仅因表达不同判错。
+- 无法确认错误时使用 unknown 或 unclear。
+- 所有文字内容使用中文，公式使用 LaTeX Markdown（$...$ 行内，$$...$$ 独立）。
+- 直接输出 JSON，不要代码围栏，不要解释性文字。
 `.trim()
 
 export const EXPLAIN_SELECTION_PROMPT = String.raw`
