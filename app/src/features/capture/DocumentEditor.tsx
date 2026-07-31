@@ -673,11 +673,7 @@ export function DocumentEditor({
           </div>
 
           {activeBlock && (
-            <div className="block-detail">
-              <p>
-            拖动标注框移动题块，拖动四角调整范围；多选后可合并。
-              </p>
-            </div>
+            <div className="block-detail" />
           )}
 
           {warnings.length > 0 && (
