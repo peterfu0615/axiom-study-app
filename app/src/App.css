@@ -172,7 +172,20 @@
   font-size: 10px;
 }
 
+.capture-workspace {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.capture-workspace .workspace-header {
+  flex: 0 0 auto;
+}
+
 .capture-layout {
+  min-height: 0;
+  flex: 1;
   display: grid;
   grid-template-columns: minmax(480px, 1.55fr) minmax(265px, 0.7fr);
   gap: 18px;
@@ -181,6 +194,7 @@
 
 .capture-card,
 .capture-side-panel {
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: color-mix(in srgb, var(--surface) 84%, transparent);
@@ -188,8 +202,10 @@
 }
 
 .capture-card {
-  min-height: 512px;
+  display: flex;
+  flex-direction: column;
   padding: 10px;
+  overflow: auto;
 }
 
 .mode-tabs {
@@ -469,11 +485,11 @@
 }
 
 .capture-side-panel {
-  min-height: 512px;
   display: flex;
   flex-direction: column;
   padding: 17px;
   box-sizing: border-box;
+  overflow: auto;
 }
 
 .side-panel-heading {

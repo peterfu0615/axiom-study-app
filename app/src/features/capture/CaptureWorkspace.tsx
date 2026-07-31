@@ -285,7 +285,7 @@ export function CaptureWorkspace() {
   }
 
   return (
-    <main className="workspace">
+    <main className="workspace capture-workspace">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">采集工作台</p>
