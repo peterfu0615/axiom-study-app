@@ -781,7 +781,7 @@ export async function listTagDefinitionSummaries(
      LEFT JOIN problem_tags pt ON pt.tag_id = td.id AND pt.subject = td.subject
        AND pt.superseded_at IS NULL
      WHERE td.subject = $1 AND td.tag_type = $2
-       AND ($2 != 'knowledge' OR $3 = '' OR kn.textbook_id = $3)
+       AND ($2 != 'knowledge' OR ($3 != '' AND kn.textbook_id = $3))
      GROUP BY td.id
      ORDER BY td.lifecycle_status = 'candidate' DESC, td.canonical_name COLLATE NOCASE`,
     [subject, tagType, textbookId ?? ''],
@@ -799,7 +799,7 @@ export async function getCurriculumTagStats(
        FROM tag_definitions td
        LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
        WHERE td.subject = $1 AND td.lifecycle_status NOT IN ('archived', 'merged', 'rejected')
-         AND (td.tag_type != 'knowledge' OR $2 = '' OR kn.textbook_id = $2)
+         AND (td.tag_type != 'knowledge' OR ($2 != '' AND kn.textbook_id = $2))
        GROUP BY td.tag_type`,
       [subject, textbookId ?? ''],
     ),
@@ -809,7 +809,7 @@ export async function getCurriculumTagStats(
          LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
          WHERE td.subject = $1
            AND (td.verification_status = 'needs_review' OR td.lifecycle_status = 'candidate')
-           AND (td.tag_type != 'knowledge' OR $2 = '' OR kn.textbook_id = $2)
+           AND (td.tag_type != 'knowledge' OR ($2 != '' AND kn.textbook_id = $2))
          UNION ALL
          SELECT pt.id FROM problem_tags pt
          WHERE pt.subject = $1 AND pt.superseded_at IS NULL
