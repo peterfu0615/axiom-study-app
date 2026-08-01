@@ -228,6 +228,7 @@ pub fn run() {
             keystore::recover_legacy_api_keys,
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,
+            horizon::bulk_review_curriculum_tags,
             horizon::create_curriculum_import_attempt,
             horizon::update_curriculum_import_progress,
             horizon::complete_curriculum_import_attempt,

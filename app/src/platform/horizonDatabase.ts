@@ -38,6 +38,7 @@ import { inferMissingTextbookRecognition } from '../ai/textbookRecognitionInfere
 import {
   completeCurriculumImportAttempt,
   createCurriculumImportAttempt,
+  bulkReviewCurriculumTags,
   failCurriculumImportAttempt,
   updateCurriculumImportProgress,
   importTextbookSource,
@@ -1224,27 +1225,30 @@ export async function getCurriculumTagStats(
 export interface TagReviewItem {
   id: string
   problemId: string
+  tagId: string | null
   candidateName: string
   confidence: number
   evidence: string
   mappingStatus: ProblemTag['mappingStatus']
   verificationStatus: ProblemTag['verificationStatus']
+  isLocked: boolean
 }
 
 export async function listTagReviewItems(subject: string, tagType: HorizonTagType) {
   const rows = await select<Record<string, unknown>[]>(
     `SELECT * FROM problem_tags WHERE subject = $1 AND tag_type = $2
        AND superseded_at IS NULL
-       AND (mapping_status != 'mapped' OR verification_status = 'needs_review')
+       AND (mapping_status != 'mapped' OR verification_status IN ('needs_review', 'ai_verified'))
      ORDER BY updated_at DESC`,
     [subject, tagType],
   )
   return rows.map((row): TagReviewItem => ({
-    id: String(row.id), problemId: String(row.problem_id),
+    id: String(row.id), problemId: String(row.problem_id), tagId: nullableString(row.tag_id),
     candidateName: String(row.candidate_name ?? ''), confidence: Number(row.confidence),
     evidence: String(row.evidence ?? ''),
     mappingStatus: String(row.mapping_status) as TagReviewItem['mappingStatus'],
     verificationStatus: String(row.verification_status) as TagReviewItem['verificationStatus'],
+    isLocked: bool(row.is_locked),
   }))
 }
 
@@ -1289,6 +1293,26 @@ export async function reviewTagDefinition(
     [lifecycle, verification, decision === 'archive' ? now : null,
       taxonomyVersion, now, tag.id, tag.subject],
   )
+}
+
+export type BulkReviewDecision = 'approve' | 'reject'
+
+export async function bulkReviewTagScope(input: {
+  subject: string
+  tagType: HorizonTagType
+  textbookId: string | null
+  definitionIds: string[]
+  problemTagIds: string[]
+  decision: BulkReviewDecision
+}) {
+  return bulkReviewCurriculumTags({
+    subject: input.subject,
+    tagType: input.tagType,
+    textbookId: input.textbookId,
+    definitionIds: input.definitionIds,
+    problemTagIds: input.problemTagIds,
+    decision: input.decision,
+  })
 }
 
 export async function publishTaxonomyVersion(subject: string, note: string) {

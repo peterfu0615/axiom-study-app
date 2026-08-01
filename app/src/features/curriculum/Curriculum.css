@@ -249,6 +249,8 @@
 .curriculum-tag-toolbar .ax-select-field { width: 126px; }
 .curriculum-tag-toolbar .ax-select-field select { min-height: 34px; font-size: 12px; }
 .curriculum-tag-toolbar > span { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.curriculum-tag-bulk-actions { min-width: 0; display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 6px; }
+.curriculum-tag-bulk-actions .ax-button { min-height: 34px; padding-inline: 9px; font-size: 11px; white-space: nowrap; }
 .curriculum-tag-table { border-top: 1px solid var(--border); }
 .curriculum-tag-table__header,
 .curriculum-tag-table article { display: grid; grid-template-columns: minmax(230px, 1.65fr) minmax(85px, .75fr) minmax(70px, .45fr) minmax(72px, .55fr) 38px; align-items: center; gap: 10px; }

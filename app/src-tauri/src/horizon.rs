@@ -13,6 +13,235 @@ fn validate_subject(subject: &str) -> Result<&str, String> {
     Ok(subject)
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkReviewCurriculumTagsRequest {
+    pub subject: String,
+    pub tag_type: String,
+    #[serde(default)]
+    pub textbook_id: Option<String>,
+    #[serde(default)]
+    pub definition_ids: Vec<String>,
+    #[serde(default)]
+    pub problem_tag_ids: Vec<String>,
+    pub decision: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkReviewCurriculumTagsResult {
+    pub approved_definitions: i64,
+    pub rejected_definitions: i64,
+    pub approved_problem_tags: i64,
+    pub rejected_problem_tags: i64,
+    pub skipped_unmapped: i64,
+    pub skipped_locked: i64,
+    pub skipped_invalid: i64,
+}
+
+fn sql_placeholders(count: usize) -> String {
+    std::iter::repeat("?")
+        .take(count)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn clean_ids(ids: &[String]) -> Vec<String> {
+    let mut unique = std::collections::BTreeSet::new();
+    ids.iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| {
+            if unique.insert(value.to_string()) {
+                Some(value.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+async fn bulk_review_curriculum_tags_in_transaction(
+    conn: &mut SqliteConnection,
+    request: &BulkReviewCurriculumTagsRequest,
+) -> Result<BulkReviewCurriculumTagsResult, String> {
+    let subject = validate_subject(&request.subject)?;
+    if !matches!(
+        request.tag_type.as_str(),
+        "knowledge" | "method" | "model" | "error"
+    ) {
+        return Err("标签维度无效".to_string());
+    }
+    if !matches!(request.decision.as_str(), "approve" | "reject") {
+        return Err("批量审核决定无效".to_string());
+    }
+    let definition_ids = clean_ids(&request.definition_ids);
+    let problem_tag_ids = clean_ids(&request.problem_tag_ids);
+    let textbook_id = request
+        .textbook_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut result = BulkReviewCurriculumTagsResult::default();
+
+    if !definition_ids.is_empty() {
+        let placeholders = sql_placeholders(definition_ids.len());
+        let (lifecycle, verification, archived): (&str, &str, Option<i64>) =
+            if request.decision == "approve" {
+                ("active", "user_verified", None)
+            } else {
+                ("rejected", "rejected", None)
+            };
+        let query = format!(
+            "UPDATE tag_definitions AS td SET lifecycle_status = ?, verification_status = ?, archived_at = ?, updated_at = ?
+             WHERE td.subject = ? AND td.tag_type = ? AND td.id IN ({placeholders})
+               AND td.lifecycle_status NOT IN ('archived', 'merged', 'rejected')
+               AND td.verification_status NOT IN ('user_verified', 'rejected')
+               AND (td.lifecycle_status = 'candidate' OR td.verification_status = 'needs_review')
+               AND (td.tag_type != 'knowledge' OR (
+                 ? IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM knowledge_nodes kn
+                   WHERE kn.id = td.knowledge_node_id AND kn.subject = td.subject
+                     AND kn.textbook_id = ? AND kn.archived_at IS NULL
+                 )
+               ))",
+        );
+        let now = chrono_millis()?;
+        let mut statement = sqlx::query(&query)
+            .bind(lifecycle)
+            .bind(verification)
+            .bind(archived)
+            .bind(now)
+            .bind(subject)
+            .bind(&request.tag_type);
+        for id in &definition_ids {
+            statement = statement.bind(id);
+        }
+        statement = statement.bind(textbook_id).bind(textbook_id);
+        let affected = statement
+            .execute(&mut *conn)
+            .await
+            .map_err(|error| format!("批量审核标签定义失败：{error}"))?
+            .rows_affected() as i64;
+        if request.decision == "approve" {
+            result.approved_definitions = affected;
+        } else {
+            result.rejected_definitions = affected;
+        }
+        result.skipped_invalid += definition_ids.len() as i64 - affected;
+    }
+
+    if !problem_tag_ids.is_empty() {
+        let placeholders = sql_placeholders(problem_tag_ids.len());
+        let approve = request.decision == "approve";
+        let (set_clause, eligibility) = if approve {
+            (
+                "verification_status = 'user_verified', is_locked = 1, source = 'user', updated_at = ?",
+                "pt.mapping_status = 'mapped' AND pt.tag_id IS NOT NULL
+                 AND EXISTS (
+                   SELECT 1 FROM tag_definitions td
+                   LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+                   WHERE td.id = pt.tag_id AND td.subject = pt.subject AND td.tag_type = pt.tag_type
+                     AND td.lifecycle_status = 'active' AND td.verification_status != 'rejected'
+                     AND (pt.tag_type != 'knowledge' OR (
+                       ? IS NOT NULL AND kn.textbook_id = ? AND kn.archived_at IS NULL
+                     ))
+                 )",
+            )
+        } else {
+            (
+                "mapping_status = 'rejected', tag_id = NULL,
+                 candidate_name = COALESCE(NULLIF(candidate_name, ''), '已驳回映射'),
+                 verification_status = 'rejected', is_locked = 1, source = 'user', updated_at = ?",
+                "pt.mapping_status != 'rejected'",
+            )
+        };
+        let base = format!(
+            "UPDATE problem_tags AS pt SET {set_clause}
+             WHERE pt.subject = ? AND pt.tag_type = ? AND pt.id IN ({placeholders})
+               AND pt.superseded_at IS NULL AND pt.is_locked = 0
+               AND pt.verification_status NOT IN ('user_verified', 'rejected')
+               AND {eligibility}",
+        );
+        let now = chrono_millis()?;
+        let mut statement = sqlx::query(&base);
+        statement = statement.bind(now).bind(subject).bind(&request.tag_type);
+        for id in &problem_tag_ids {
+            statement = statement.bind(id);
+        }
+        if approve {
+            statement = statement.bind(textbook_id).bind(textbook_id);
+        }
+        let affected = statement
+            .execute(&mut *conn)
+            .await
+            .map_err(|error| format!("批量审核题目标签失败：{error}"))?
+            .rows_affected() as i64;
+        if approve {
+            result.approved_problem_tags = affected;
+            let unmapped_sql = format!(
+                "SELECT count(*) FROM problem_tags WHERE subject = ? AND tag_type = ? AND id IN ({placeholders})
+                 AND superseded_at IS NULL AND (mapping_status != 'mapped' OR tag_id IS NULL)"
+            );
+            let mut unmapped_query = sqlx::query_scalar::<_, i64>(&unmapped_sql)
+                .bind(subject)
+                .bind(&request.tag_type);
+            for id in &problem_tag_ids {
+                unmapped_query = unmapped_query.bind(id);
+            }
+            let unmapped = unmapped_query
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(|error| format!("统计未映射题目标签失败：{error}"))?;
+            result.skipped_unmapped += unmapped;
+        } else {
+            result.rejected_problem_tags = affected;
+        }
+        let locked_sql = format!(
+            "SELECT count(*) FROM problem_tags WHERE subject = ? AND tag_type = ? AND id IN ({placeholders})
+             AND superseded_at IS NULL AND (is_locked = 1 OR verification_status = 'user_verified')"
+        );
+        let mut locked_query = sqlx::query_scalar::<_, i64>(&locked_sql)
+            .bind(subject)
+            .bind(&request.tag_type);
+        for id in &problem_tag_ids {
+            locked_query = locked_query.bind(id);
+        }
+        let locked = locked_query
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|error| format!("统计已锁定题目标签失败：{error}"))?;
+        result.skipped_locked += locked;
+        let accounted = affected + locked + if approve { result.skipped_unmapped } else { 0 };
+        result.skipped_invalid += (problem_tag_ids.len() as i64 - accounted).max(0);
+    }
+    Ok(result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn bulk_review_curriculum_tags(
+    state: State<'_, DbState>,
+    request: BulkReviewCurriculumTagsRequest,
+) -> Result<BulkReviewCurriculumTagsResult, String> {
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    conn.execute("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("无法开始批量审核事务：{error}"))?;
+    let result = bulk_review_curriculum_tags_in_transaction(conn, &request).await;
+    match result {
+        Ok(value) => conn
+            .execute("COMMIT")
+            .await
+            .map(|_| value)
+            .map_err(|error| format!("提交批量审核事务失败：{error}")),
+        Err(error) => {
+            let _ = conn.execute("ROLLBACK").await;
+            Err(error)
+        }
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn merge_tag_definitions(
     state: State<'_, DbState>,
@@ -1328,6 +1557,202 @@ mod curriculum_attempt_tests {
                     .map(|name| name == "idx_curriculum_import_attempt_one_active_stage")
                     .unwrap_or(false)
             }));
+        });
+    }
+}
+
+#[cfg(test)]
+mod bulk_review_tests {
+    use super::*;
+    use sqlx::Connection;
+
+    async fn test_connection() -> SqliteConnection {
+        let mut conn = SqliteConnection::connect(":memory:").await.unwrap();
+        for statement in [
+            "CREATE TABLE knowledge_nodes (id TEXT PRIMARY KEY, subject TEXT NOT NULL, textbook_id TEXT NOT NULL, archived_at INTEGER)",
+            "CREATE TABLE tag_definitions (id TEXT PRIMARY KEY, subject TEXT NOT NULL, tag_type TEXT NOT NULL, knowledge_node_id TEXT, lifecycle_status TEXT NOT NULL, verification_status TEXT NOT NULL, archived_at INTEGER, updated_at INTEGER)",
+            "CREATE TABLE problem_tags (id TEXT PRIMARY KEY, problem_id TEXT NOT NULL, subject TEXT NOT NULL, tag_type TEXT NOT NULL, tag_id TEXT, candidate_name TEXT, mapping_status TEXT NOT NULL, verification_status TEXT NOT NULL, is_locked INTEGER NOT NULL, source TEXT NOT NULL, superseded_at INTEGER, evidence TEXT NOT NULL DEFAULT '', updated_at INTEGER)",
+        ] {
+            conn.execute(statement).await.unwrap();
+        }
+        conn
+    }
+
+    async fn run(
+        conn: &mut SqliteConnection,
+        request: BulkReviewCurriculumTagsRequest,
+    ) -> BulkReviewCurriculumTagsResult {
+        conn.execute("BEGIN IMMEDIATE").await.unwrap();
+        let result = bulk_review_curriculum_tags_in_transaction(conn, &request)
+            .await
+            .unwrap();
+        conn.execute("COMMIT").await.unwrap();
+        result
+    }
+
+    #[test]
+    fn approves_only_scoped_mapped_and_candidate_rows() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = test_connection().await;
+            conn.execute("INSERT INTO knowledge_nodes VALUES ('node-1', '数学', 'book-1', NULL)")
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO tag_definitions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind("def-knowledge")
+                .bind("数学")
+                .bind("knowledge")
+                .bind("node-1")
+                .bind("candidate")
+                .bind("needs_review")
+                .bind(None::<i64>)
+                .bind(0_i64)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO tag_definitions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind("def-other-subject")
+                .bind("英语")
+                .bind("knowledge")
+                .bind("node-1")
+                .bind("candidate")
+                .bind("needs_review")
+                .bind(None::<i64>)
+                .bind(0_i64)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO problem_tags (id, problem_id, subject, tag_type, tag_id, candidate_name, mapping_status, verification_status, is_locked, source, superseded_at, updated_at) VALUES (?, 'p-1', ?, ?, ?, NULL, 'mapped', 'needs_review', 0, 'model', NULL, 0), (?, 'p-2', ?, ?, NULL, '未映射', 'candidate', 'needs_review', 0, 'model', NULL, 0), (?, 'p-3', ?, ?, ?, NULL, 'mapped', 'user_verified', 1, 'user', NULL, 0), (?, 'p-4', ?, ?, ?, NULL, 'mapped', 'needs_review', 0, 'model', NULL, 0)")
+                .bind("pt-mapped")
+                .bind("数学")
+                .bind("knowledge")
+                .bind("def-knowledge")
+                .bind("pt-unmapped")
+                .bind("数学")
+                .bind("knowledge")
+                .bind("pt-locked")
+                .bind("数学")
+                .bind("knowledge")
+                .bind("def-knowledge")
+                .bind("pt-other")
+                .bind("英语")
+                .bind("knowledge")
+                .bind("def-other-subject")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+
+            let result = run(
+                &mut conn,
+                BulkReviewCurriculumTagsRequest {
+                    subject: "数学".to_string(),
+                    tag_type: "knowledge".to_string(),
+                    textbook_id: Some("book-1".to_string()),
+                    definition_ids: vec![
+                        "def-knowledge".to_string(),
+                        "def-other-subject".to_string(),
+                    ],
+                    problem_tag_ids: vec![
+                        "pt-mapped".to_string(),
+                        "pt-unmapped".to_string(),
+                        "pt-locked".to_string(),
+                        "pt-other".to_string(),
+                    ],
+                    decision: "approve".to_string(),
+                },
+            )
+            .await;
+            assert_eq!(result.approved_definitions, 1);
+            assert_eq!(result.approved_problem_tags, 1);
+            assert_eq!(result.skipped_unmapped, 1);
+            assert!(result.skipped_locked >= 1);
+            let verified: String = sqlx::query_scalar(
+                "SELECT verification_status FROM tag_definitions WHERE id = 'def-knowledge'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(verified, "user_verified");
+            let locked: i64 =
+                sqlx::query_scalar("SELECT is_locked FROM problem_tags WHERE id = 'pt-mapped'")
+                    .fetch_one(&mut conn)
+                    .await
+                    .unwrap();
+            assert_eq!(locked, 1);
+            let other: String = sqlx::query_scalar(
+                "SELECT verification_status FROM tag_definitions WHERE id = 'def-other-subject'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(other, "needs_review");
+        });
+    }
+
+    #[test]
+    fn rejection_is_idempotent_and_preserves_candidate_evidence() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = test_connection().await;
+            conn.execute("INSERT INTO tag_definitions VALUES ('def-1', '数学', 'method', NULL, 'candidate', 'needs_review', NULL, 0)")
+                .await
+                .unwrap();
+            conn.execute("INSERT INTO problem_tags (id, problem_id, subject, tag_type, tag_id, candidate_name, mapping_status, verification_status, is_locked, source, superseded_at, evidence, updated_at) VALUES ('pt-1', 'p-1', '数学', 'method', NULL, '待审方法', 'candidate', 'needs_review', 0, 'model', NULL, '题目依据', 0)")
+                .await
+                .unwrap();
+            let request = BulkReviewCurriculumTagsRequest {
+                subject: "数学".to_string(),
+                tag_type: "method".to_string(),
+                textbook_id: None,
+                definition_ids: vec!["def-1".to_string()],
+                problem_tag_ids: vec!["pt-1".to_string()],
+                decision: "reject".to_string(),
+            };
+            let first = run(&mut conn, request.clone()).await;
+            let second = run(&mut conn, request).await;
+            assert_eq!(first.rejected_definitions, 1);
+            assert_eq!(first.rejected_problem_tags, 1);
+            assert_eq!(second.rejected_definitions, 0);
+            assert_eq!(second.rejected_problem_tags, 0);
+            let (status, evidence): (String, String) = sqlx::query_as(
+                "SELECT mapping_status, evidence FROM problem_tags WHERE id = 'pt-1'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(status, "rejected");
+            assert_eq!(evidence, "题目依据");
+        });
+    }
+
+    #[test]
+    fn failed_second_scope_update_rolls_back_the_first_update() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = test_connection().await;
+            conn.execute("INSERT INTO tag_definitions VALUES ('def-1', '数学', 'method', NULL, 'candidate', 'needs_review', NULL, 0)")
+                .await
+                .unwrap();
+            conn.execute("BEGIN IMMEDIATE").await.unwrap();
+            let request = BulkReviewCurriculumTagsRequest {
+                subject: "数学".to_string(),
+                tag_type: "method".to_string(),
+                textbook_id: None,
+                definition_ids: vec!["def-1".to_string()],
+                problem_tag_ids: vec!["missing-problem-tag".to_string()],
+                decision: "approve".to_string(),
+            };
+            conn.execute("DROP TABLE problem_tags").await.unwrap();
+            assert!(
+                bulk_review_curriculum_tags_in_transaction(&mut conn, &request)
+                    .await
+                    .is_err()
+            );
+            conn.execute("ROLLBACK").await.unwrap();
+            let status: String = sqlx::query_scalar(
+                "SELECT lifecycle_status FROM tag_definitions WHERE id = 'def-1'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(status, "candidate");
         });
     }
 }

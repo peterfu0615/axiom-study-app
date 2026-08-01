@@ -292,6 +292,27 @@ export async function mergeKnowledgeNodes(
   })
 }
 
+export interface BulkReviewCurriculumTagsResult {
+  approvedDefinitions: number
+  rejectedDefinitions: number
+  approvedProblemTags: number
+  rejectedProblemTags: number
+  skippedUnmapped: number
+  skippedLocked: number
+  skippedInvalid: number
+}
+
+export async function bulkReviewCurriculumTags(request: {
+  subject: string
+  tagType: 'knowledge' | 'method' | 'model' | 'error'
+  textbookId?: string | null
+  definitionIds?: string[]
+  problemTagIds?: string[]
+  decision: 'approve' | 'reject'
+}) {
+  return invoke<BulkReviewCurriculumTagsResult>('bulk_review_curriculum_tags', { request })
+}
+
 export async function analyzeProblemWithAntigravityCLI(request: {
   commandPath: string
   model: string
