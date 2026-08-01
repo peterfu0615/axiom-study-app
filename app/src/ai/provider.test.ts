@@ -20,6 +20,17 @@ import {
 } from './provider'
 
 describe('MockAIProvider', () => {
+  it('provides a confirmation-safe textbook recognition fallback', async () => {
+    const result = await new MockAIProvider(0).recognizeTextbook({
+      sourceName: '七年级数学上册.pdf',
+      pageCount: 120,
+      outline: [],
+      pages: [],
+    })
+    expect(result.recognition.title.value).toBe('七年级数学上册')
+    expect(result.recognition.subject.value).toBeNull()
+    expect(result.recognition.subject.confidence).toBeLessThan(0.5)
+  })
   it('returns the problem-understanding schema from image input only', async () => {
     const result = await new MockAIProvider(0).analyzeProblemImage({
       problemId: 'problem-1',

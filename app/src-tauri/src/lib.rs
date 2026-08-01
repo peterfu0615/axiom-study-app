@@ -124,6 +124,12 @@ pub fn run() {
             sql: include_str!("../migrations/0016_horizon_tag_foundation.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "add_curriculum_import_jobs",
+            sql: include_str!("../migrations/0017_curriculum_import_jobs.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。

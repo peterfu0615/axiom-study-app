@@ -2,17 +2,27 @@ import { invoke } from '@tauri-apps/api/core'
 import type { AIProblemAnalysis, HorizonTagType } from '../domain/models'
 import {
   mapCandidatesToControlledTags,
+  type CurriculumImportJob,
   type KnowledgeNode,
   type KnowledgeEdge,
   type ProblemTag,
   type TagDefinition,
   type Textbook,
+  type TextbookRecognition,
 } from '../domain/horizon'
+import {
+  getTextbookRecognitionProvider,
+} from '../ai/provider'
+import {
+  TEXTBOOK_RECOGNITION_PROMPT_VERSION,
+  TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
+} from '../ai/textbookRecognitionContract'
 import {
   importTextbookSource,
   mergeKnowledgeNodes,
   mergeTagDefinitions,
   removeTextbookSource,
+  type ImportedTextbookSource,
 } from './native'
 
 interface ExecuteResult {
@@ -28,6 +38,21 @@ const id = () => crypto.randomUUID()
 const bool = (value: unknown) => Number(value) === 1
 const nullableString = (value: unknown) => value == null ? null : String(value)
 const nullableNumber = (value: unknown) => value == null ? null : Number(value)
+
+function parseJSON<T>(value: unknown, fallback: T): T {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  try { return JSON.parse(value) as T } catch { return fallback }
+}
+
+function sourceNameFromPath(sourcePath: string) {
+  return sourcePath.split(/[\\/]/u).filter(Boolean).at(-1) || '未命名教材'
+}
+
+async function inputHash(value: unknown) {
+  const source = new TextEncoder().encode(JSON.stringify(value))
+  const digest = await crypto.subtle.digest('SHA-256', source)
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
 
 async function transaction<T>(operation: () => Promise<T>): Promise<T> {
   await execute('BEGIN IMMEDIATE')
@@ -76,6 +101,34 @@ function rowToTextbook(row: Record<string, unknown>): Textbook {
     archivedAt: nullableNumber(row.archived_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+  }
+}
+
+function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImportJob {
+  return {
+    id: String(row.id),
+    sourcePath: String(row.source_path),
+    sourceName: String(row.source_name),
+    sourceType: nullableString(row.source_type) as CurriculumImportJob['sourceType'],
+    contentHash: nullableString(row.content_hash),
+    status: String(row.status) as CurriculumImportJob['status'],
+    stage: String(row.stage) as CurriculumImportJob['stage'],
+    pageCount: nullableNumber(row.page_count),
+    extractionMethod: nullableString(row.extraction_method) as CurriculumImportJob['extractionMethod'],
+    extraction: parseJSON<CurriculumImportJob['extraction']>(row.extraction_json, null),
+    recognition: parseJSON<TextbookRecognition | null>(row.metadata_json, null),
+    provider: nullableString(row.provider),
+    model: nullableString(row.model),
+    promptVersion: nullableString(row.prompt_version),
+    schemaVersion: nullableString(row.schema_version),
+    inputHash: nullableString(row.input_hash),
+    rawOutput: nullableString(row.raw_output),
+    errorMessage: nullableString(row.error_message),
+    textbookId: nullableString(row.textbook_id),
+    cancelledAt: nullableNumber(row.cancelled_at),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    completedAt: nullableNumber(row.completed_at),
   }
 }
 
@@ -241,6 +294,237 @@ export async function importTextbook(
   return textbookId
 }
 
+export async function createCurriculumImportJob(sourcePath: string) {
+  const now = Date.now()
+  const job: CurriculumImportJob = {
+    id: id(), sourcePath, sourceName: sourceNameFromPath(sourcePath), sourceType: null,
+    contentHash: null, status: 'pending', stage: 'preview', pageCount: null,
+    extractionMethod: null, extraction: null, recognition: null, provider: null,
+    model: null, promptVersion: null, schemaVersion: null, inputHash: null,
+    rawOutput: null, errorMessage: null, textbookId: null, cancelledAt: null,
+    createdAt: now, updatedAt: now, completedAt: null,
+  }
+  await execute(
+    `INSERT INTO curriculum_import_jobs (
+      id, source_path, source_name, status, stage, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+    [job.id, job.sourcePath, job.sourceName, job.status, job.stage, now],
+  )
+  return job
+}
+
+export async function getCurriculumImportJob(jobId: string): Promise<CurriculumImportJob | null> {
+  const rows = await select<Record<string, unknown>[]>(
+    'SELECT * FROM curriculum_import_jobs WHERE id = $1', [jobId],
+  )
+  return rows[0] ? rowToCurriculumImportJob(rows[0]) : null
+}
+
+export async function listCurriculumImportJobs(): Promise<CurriculumImportJob[]> {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT * FROM curriculum_import_jobs
+     WHERE status IN ('pending', 'extracting', 'recognizing', 'needs_review', 'failed')
+     ORDER BY updated_at DESC`,
+  )
+  return rows.map(rowToCurriculumImportJob)
+}
+
+async function assertImportJobActive(jobId: string) {
+  const job = await getCurriculumImportJob(jobId)
+  if (!job) throw new Error('找不到教材导入任务')
+  if (job.status === 'cancelled') throw new Error('教材导入已取消')
+  return job
+}
+
+export async function cancelCurriculumImportJob(jobId: string) {
+  const now = Date.now()
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'cancelled', cancelled_at = $1,
+       updated_at = $1 WHERE id = $2 AND status NOT IN ('completed', 'cancelled')`,
+    [now, jobId],
+  )
+}
+
+export async function runCurriculumImportJob(jobId: string): Promise<CurriculumImportJob | null> {
+  const initial = await assertImportJobActive(jobId)
+  const now = Date.now()
+  try {
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'extracting', stage = 'extracting',
+       error_message = NULL, updated_at = $1 WHERE id = $2 AND status != 'cancelled'`,
+      [now, jobId],
+    )
+    const imported = await importTextbookSource(initial.sourcePath)
+    const afterExtraction = await getCurriculumImportJob(jobId)
+    if (!afterExtraction || afterExtraction.status === 'cancelled') return afterExtraction
+
+    const recognitionInput = {
+      sourceName: initial.sourceName,
+      pageCount: imported.extraction.pageCount,
+      outline: imported.extraction.outline,
+      pages: imported.extraction.pages,
+    }
+    const hash = await inputHash(recognitionInput)
+    await execute(
+      `UPDATE curriculum_import_jobs SET source_path = $1, source_type = $2,
+       content_hash = $3, page_count = $4, extraction_method = $5, extraction_json = $6,
+       input_hash = $7, status = 'recognizing', stage = 'recognizing', updated_at = $8
+       WHERE id = $9 AND status != 'cancelled'`,
+      [
+        imported.sourcePath, imported.sourceType, imported.contentHash,
+        imported.extraction.pageCount, imported.extraction.extractionMethod,
+        JSON.stringify(imported.extraction), hash, Date.now(), jobId,
+      ],
+    )
+    const provider = getTextbookRecognitionProvider()
+    const result = await provider.recognizeTextbook(recognitionInput)
+    const afterRecognition = await getCurriculumImportJob(jobId)
+    if (!afterRecognition || afterRecognition.status === 'cancelled') return afterRecognition
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'needs_review', stage = 'confirm_info',
+       metadata_json = $1, provider = $2, model = $3, prompt_version = $4,
+       schema_version = $5, raw_output = $6, error_message = NULL, updated_at = $7
+       WHERE id = $8 AND status != 'cancelled'`,
+      [
+        JSON.stringify(result.recognition), provider.id, provider.model,
+        TEXTBOOK_RECOGNITION_PROMPT_VERSION, TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
+        result.rawOutput, Date.now(), jobId,
+      ],
+    )
+  } catch (error) {
+    const current = await getCurriculumImportJob(jobId)
+    if (!current || current.status === 'cancelled') return current
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'failed', error_message = $1,
+       updated_at = $2 WHERE id = $3`,
+      [String(error), Date.now(), jobId],
+    )
+  }
+  return getCurriculumImportJob(jobId)
+}
+
+export async function retryCurriculumImportJob(jobId: string) {
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'pending', stage = 'preview',
+     cancelled_at = NULL, error_message = NULL, updated_at = $1
+     WHERE id = $2 AND status IN ('failed', 'cancelled', 'pending')`,
+    [Date.now(), jobId],
+  )
+  return runCurriculumImportJob(jobId)
+}
+
+export interface TextbookImportConfirmation {
+  subject: string
+  title: string
+  grade?: string | null
+  volume?: string | null
+  publisher?: string | null
+  edition?: string | null
+  outline?: ImportedTextbookSource['extraction']['outline']
+}
+
+export async function saveCurriculumImportOutline(
+  jobId: string,
+  outline: ImportedTextbookSource['extraction']['outline'],
+) {
+  const job = await assertImportJobActive(jobId)
+  if (!job.extraction) throw new Error('目录提取尚未完成')
+  const extraction = { ...job.extraction, outline }
+  await execute(
+    `UPDATE curriculum_import_jobs SET extraction_json = $1, stage = 'review_structure',
+     updated_at = $2 WHERE id = $3 AND status = 'needs_review'`,
+    [JSON.stringify(extraction), Date.now(), jobId],
+  )
+  return getCurriculumImportJob(jobId)
+}
+
+async function persistImportedTextbook(
+  imported: ImportedTextbookSource,
+  confirmation: TextbookImportConfirmation,
+) {
+  const subject = confirmation.subject.trim()
+  const title = confirmation.title.trim()
+  if (!subject || !title) throw new Error('请确认教材名称和科目')
+  const textbookId = id()
+  const now = Date.now()
+  const outline = confirmation.outline ?? imported.extraction.outline
+  await ensureTaxonomyVersion(subject)
+  await transaction(async () => {
+    await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [subject])
+    await execute(
+      `INSERT INTO textbooks (
+        id, subject, title, grade, volume, publisher, edition, source_type, source_path,
+        content_hash, extraction_status, extraction_method, is_current, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'needs_review', $11, 1, $12, $12)`,
+      [
+        textbookId, subject, title, confirmation.grade?.trim() || null,
+        confirmation.volume?.trim() || null, confirmation.publisher?.trim() || null,
+        confirmation.edition?.trim() || null, imported.sourceType, imported.sourcePath,
+        imported.contentHash, imported.extraction.extractionMethod, now,
+      ],
+    )
+    for (const page of imported.extraction.pages) {
+      await execute(
+        `INSERT INTO textbook_pages (
+          id, textbook_id, subject, page_number, evidence_text, source_path,
+          extraction_method, confidence, verification_status, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'needs_review', $9, $9)`,
+        [id(), textbookId, subject, page.pageNumber, page.evidenceText, imported.sourcePath,
+          page.extractionMethod, page.confidence, now],
+      )
+    }
+    const parents = new Map<number, { id: string; path: string }>()
+    for (const [index, candidate] of outline.entries()) {
+      const level = Math.max(1, Math.min(3, candidate.level))
+      const parent = parents.get(level - 1) ?? null
+      const nodeId = id()
+      const path = parent ? `${parent.path}/${candidate.title}` : candidate.title
+      await execute(
+        `INSERT INTO knowledge_nodes (
+          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
+          sort_order, source_page_start, source_page_end, evidence_text, source_path,
+          extraction_method, confidence, verification_status, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13,
+          'needs_review', $14, $14)`,
+        [
+          nodeId, textbookId, subject, candidate.title,
+          level === 1 ? 'chapter' : level === 2 ? 'section' : 'knowledge', parent?.id ?? null,
+          path, index, candidate.pageNumber, candidate.evidenceText, imported.sourcePath,
+          imported.extraction.extractionMethod, candidate.confidence, now,
+        ],
+      )
+      parents.set(level, { id: nodeId, path })
+      for (let deeper = level + 1; deeper <= 3; deeper += 1) parents.delete(deeper)
+    }
+  })
+  return textbookId
+}
+
+export async function confirmCurriculumImportJob(
+  jobId: string,
+  confirmation: TextbookImportConfirmation,
+) {
+  const job = await assertImportJobActive(jobId)
+  if (!job.extraction || !job.contentHash || !job.sourceType || !job.extractionMethod) {
+    throw new Error('教材内容尚未提取完成')
+  }
+  const imported: ImportedTextbookSource = {
+    sourcePath: job.sourcePath,
+    contentHash: job.contentHash,
+    byteLength: 0,
+    sourceType: job.sourceType === 'directory_image' ? 'directory_image' : 'pdf',
+    extraction: job.extraction,
+  }
+  const textbookId = await persistImportedTextbook(imported, confirmation)
+  const now = Date.now()
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'completed', stage = 'completed',
+     textbook_id = $1, completed_at = $2, updated_at = $2 WHERE id = $3`,
+    [textbookId, now, jobId],
+  )
+  return textbookId
+}
+
 export async function listKnowledgeNodes(textbookId: string): Promise<KnowledgeNode[]> {
   const rows = await select<Record<string, unknown>[]>(
     `SELECT * FROM knowledge_nodes
@@ -281,6 +565,84 @@ export async function addKnowledgeEdge(
   )
 }
 
+export async function moveKnowledgeNode(input: {
+  id: string
+  textbookId: string
+  subject: string
+  canonicalName: string
+  nodeType: KnowledgeNode['nodeType']
+  parentId: string | null
+  description?: string
+}) {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT * FROM knowledge_nodes
+     WHERE id = $1 AND subject = $2 AND textbook_id = $3 AND archived_at IS NULL`,
+    [input.id, input.subject, input.textbookId],
+  )
+  const node = rows[0]
+  if (!node) throw new Error('找不到需要移动的知识节点')
+  let parent: Record<string, unknown> | null = null
+  if (input.parentId) {
+    const parents = await select<Record<string, unknown>[]>(
+      `SELECT * FROM knowledge_nodes
+       WHERE id = $1 AND subject = $2 AND textbook_id = $3 AND archived_at IS NULL`,
+      [input.parentId, input.subject, input.textbookId],
+    )
+    parent = parents[0] ?? null
+    if (!parent) throw new Error('目标章节不属于当前教材')
+    if (String(parent.id) === input.id) throw new Error('节点不能移动到自身')
+    const descendants = await select<Array<{ id: string }>>(
+      `WITH RECURSIVE tree(id) AS (
+         SELECT id FROM knowledge_nodes WHERE id = $1
+         UNION ALL
+         SELECT node.id FROM knowledge_nodes node JOIN tree ON node.parent_id = tree.id
+       ) SELECT id FROM tree`,
+      [input.id],
+    )
+    if (descendants.some((item) => item.id === String(parent?.id))) {
+      throw new Error('节点不能移动到自己的子节点中')
+    }
+  }
+  const canonicalName = input.canonicalName.trim()
+  if (!canonicalName) throw new Error('节点名称不能为空')
+  const oldPath = String(node.path || node.canonical_name)
+  const nextPath = parent
+    ? `${String(parent.path || parent.canonical_name)}/${canonicalName}`
+    : canonicalName
+  const now = Date.now()
+  const siblingRows = await select<Array<{ sort_order: number }>>(
+    `SELECT COALESCE(max(sort_order), -1) AS sort_order FROM knowledge_nodes
+     WHERE textbook_id = $1 AND subject = $2
+       AND (($3 IS NULL AND parent_id IS NULL) OR parent_id = $3)
+       AND id != $4 AND archived_at IS NULL`,
+    [input.textbookId, input.subject, input.parentId, input.id],
+  )
+  const sortOrder = Number(siblingRows[0]?.sort_order ?? -1) + 1
+  await transaction(async () => {
+    await execute(
+      `UPDATE knowledge_nodes
+       SET canonical_name = CASE WHEN id = $1 THEN $2 ELSE canonical_name END,
+           node_type = CASE WHEN id = $1 THEN $3 ELSE node_type END,
+           parent_id = CASE WHEN id = $1 THEN $4 ELSE parent_id END,
+           description = CASE WHEN id = $1 THEN $5 ELSE description END,
+           sort_order = CASE WHEN id = $1 THEN $6 ELSE sort_order END,
+           path = CASE
+             WHEN id = $1 THEN $7
+             ELSE $7 || substr(path, length($8) + 1)
+           END,
+           updated_at = $9
+       WHERE (id = $1 OR path LIKE $8 || '/%')
+         AND textbook_id = $10 AND subject = $11`,
+      [
+        input.id, canonicalName, input.nodeType, input.parentId,
+        input.description?.trim() || null, sortOrder, nextPath, oldPath, now,
+        input.textbookId, input.subject,
+      ],
+    )
+  })
+  return input.id
+}
+
 export async function saveKnowledgeNode(input: {
   id?: string
   textbookId: string
@@ -292,23 +654,35 @@ export async function saveKnowledgeNode(input: {
 }) {
   const now = Date.now()
   if (input.id) {
-    await execute(
-      `UPDATE knowledge_nodes SET canonical_name = $1, node_type = $2,
-       parent_id = $3, description = $4, updated_at = $5
-       WHERE id = $6 AND subject = $7 AND textbook_id = $8`,
-      [input.canonicalName.trim(), input.nodeType, input.parentId,
-        input.description?.trim() || null, now, input.id, input.subject, input.textbookId],
-    )
-    return input.id
+    return moveKnowledgeNode({ ...input, id: input.id })
   }
   const nodeId = id()
+  const parentRows = input.parentId
+    ? await select<Record<string, unknown>[]>(
+      `SELECT path, canonical_name FROM knowledge_nodes
+       WHERE id = $1 AND textbook_id = $2 AND subject = $3 AND archived_at IS NULL`,
+      [input.parentId, input.textbookId, input.subject],
+    )
+    : []
+  if (input.parentId && !parentRows[0]) throw new Error('目标章节不属于当前教材')
+  const parent = parentRows[0]
+  const siblings = await select<Array<{ sort_order: number }>>(
+    `SELECT COALESCE(max(sort_order), -1) AS sort_order FROM knowledge_nodes
+     WHERE textbook_id = $1 AND subject = $2
+       AND (($3 IS NULL AND parent_id IS NULL) OR parent_id = $3)
+       AND archived_at IS NULL`,
+    [input.textbookId, input.subject, input.parentId],
+  )
+  const name = input.canonicalName.trim()
+  if (!name) throw new Error('节点名称不能为空')
+  const path = parent ? `${String(parent.path || parent.canonical_name)}/${name}` : name
   await execute(
     `INSERT INTO knowledge_nodes (
       id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-      extraction_method, confidence, verification_status, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $4, 'manual', 1, 'user_verified', $7, $7)`,
-    [nodeId, input.textbookId, input.subject, input.canonicalName.trim(), input.nodeType,
-      input.parentId, now],
+      sort_order, description, extraction_method, confidence, verification_status, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'manual', 1, 'user_verified', $10, $10)`,
+    [nodeId, input.textbookId, input.subject, name, input.nodeType, input.parentId, path,
+      Number(siblings[0]?.sort_order ?? -1) + 1, input.description?.trim() || null, now],
   )
   return nodeId
 }
@@ -365,6 +739,120 @@ export async function listTagDefinitions(
     [subject, tagType ?? ''],
   )
   return rows.map(rowToTagDefinition)
+}
+
+export interface TagDefinitionSummary extends TagDefinition {
+  problemCount: number
+}
+
+export interface CurriculumTagStats {
+  knowledgeCount: number
+  methodCount: number
+  modelCount: number
+  errorCount: number
+  needsReviewCount: number
+  unmappedCount: number
+  linkedProblemCount: number
+}
+
+export async function listTagDefinitionSummaries(
+  subject: string,
+  tagType: HorizonTagType,
+  textbookId: string | null,
+): Promise<TagDefinitionSummary[]> {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT td.*, kn.textbook_id,
+       COALESCE((SELECT group_concat(alias, char(31)) FROM tag_aliases
+                 WHERE tag_id = td.id AND subject = td.subject), '') AS aliases,
+       count(DISTINCT pt.problem_id) AS problem_count
+     FROM tag_definitions td
+     LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+     LEFT JOIN problem_tags pt ON pt.tag_id = td.id AND pt.subject = td.subject
+       AND pt.superseded_at IS NULL
+     WHERE td.subject = $1 AND td.tag_type = $2
+       AND ($2 != 'knowledge' OR $3 = '' OR kn.textbook_id = $3)
+     GROUP BY td.id
+     ORDER BY td.lifecycle_status = 'candidate' DESC, td.canonical_name COLLATE NOCASE`,
+    [subject, tagType, textbookId ?? ''],
+  )
+  return rows.map((row) => ({ ...rowToTagDefinition(row), problemCount: Number(row.problem_count) }))
+}
+
+export async function getCurriculumTagStats(
+  subject: string,
+  textbookId: string | null,
+): Promise<CurriculumTagStats> {
+  const [definitions, review, unmapped, linked] = await Promise.all([
+    select<Array<{ tag_type: HorizonTagType; count: number }>>(
+      `SELECT td.tag_type, count(*) AS count
+       FROM tag_definitions td
+       LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+       WHERE td.subject = $1 AND td.lifecycle_status NOT IN ('archived', 'merged', 'rejected')
+         AND (td.tag_type != 'knowledge' OR $2 = '' OR kn.textbook_id = $2)
+       GROUP BY td.tag_type`,
+      [subject, textbookId ?? ''],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT count(*) AS count FROM (
+         SELECT td.id FROM tag_definitions td
+         LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+         WHERE td.subject = $1
+           AND (td.verification_status = 'needs_review' OR td.lifecycle_status = 'candidate')
+           AND (td.tag_type != 'knowledge' OR $2 = '' OR kn.textbook_id = $2)
+         UNION ALL
+         SELECT pt.id FROM problem_tags pt
+         WHERE pt.subject = $1 AND pt.superseded_at IS NULL
+           AND (pt.verification_status = 'needs_review' OR pt.mapping_status != 'mapped')
+       )`,
+      [subject, textbookId ?? ''],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT count(*) AS count FROM problem_tags
+       WHERE subject = $1 AND superseded_at IS NULL AND mapping_status != 'mapped'`,
+      [subject],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT count(DISTINCT problem_id) AS count FROM problem_tags
+       WHERE subject = $1 AND superseded_at IS NULL`, [subject],
+    ),
+  ])
+  const counts = new Map(definitions.map((item) => [item.tag_type, Number(item.count)]))
+  return {
+    knowledgeCount: counts.get('knowledge') ?? 0,
+    methodCount: counts.get('method') ?? 0,
+    modelCount: counts.get('model') ?? 0,
+    errorCount: counts.get('error') ?? 0,
+    needsReviewCount: Number(review[0]?.count ?? 0),
+    unmappedCount: Number(unmapped[0]?.count ?? 0),
+    linkedProblemCount: Number(linked[0]?.count ?? 0),
+  }
+}
+
+export interface TagReviewItem {
+  id: string
+  problemId: string
+  candidateName: string
+  confidence: number
+  evidence: string
+  mappingStatus: ProblemTag['mappingStatus']
+  verificationStatus: ProblemTag['verificationStatus']
+}
+
+export async function listTagReviewItems(subject: string, tagType: HorizonTagType) {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT * FROM problem_tags WHERE subject = $1 AND tag_type = $2
+       AND superseded_at IS NULL
+       AND (mapping_status != 'mapped' OR verification_status = 'needs_review')
+     ORDER BY updated_at DESC`,
+    [subject, tagType],
+  )
+  return rows.map((row): TagReviewItem => ({
+    id: String(row.id), problemId: String(row.problem_id),
+    candidateName: String(row.candidate_name ?? ''), confidence: Number(row.confidence),
+    evidence: String(row.evidence ?? ''),
+    mappingStatus: String(row.mapping_status) as TagReviewItem['mappingStatus'],
+    verificationStatus: String(row.verification_status) as TagReviewItem['verificationStatus'],
+  }))
 }
 
 export async function createTagDefinition(input: {
@@ -642,10 +1130,12 @@ export async function applyControlledProblemAnalysis(
 export interface RelabelBatch {
   id: string
   subject: string
-  status: 'pending' | 'processing' | 'completed' | 'cancelled' | 'failed'
+  status: 'pending' | 'processing' | 'paused' | 'completed' | 'cancelled' | 'failed'
   totalCount: number
   completedCount: number
   failedCount: number
+  needsReviewCount: number
+  pausedAt: number | null
   createdAt: number
   updatedAt: number
 }
@@ -687,12 +1177,15 @@ export async function markRelabelItemQueued(batchId: string, problemId: string, 
   await transaction(async () => {
     await execute(
       `UPDATE tag_relabel_items SET status = 'queued', model_run_id = $1, updated_at = $2
-       WHERE batch_id = $3 AND problem_id = $4 AND status = 'pending'`,
+       WHERE batch_id = $3 AND problem_id = $4 AND status = 'pending'
+         AND EXISTS (SELECT 1 FROM tag_relabel_batches batch
+                     WHERE batch.id = $3 AND batch.paused_at IS NULL
+                       AND batch.status NOT IN ('cancelled', 'completed'))`,
       [modelRunId, now, batchId, problemId],
     )
     await execute(
       `UPDATE tag_relabel_batches SET status = 'processing', updated_at = $1
-       WHERE id = $2 AND status = 'pending'`,
+       WHERE id = $2 AND status = 'pending' AND paused_at IS NULL`,
       [now, batchId],
     )
   })
@@ -716,9 +1209,10 @@ export async function refreshRelabelBatch(batchId: string): Promise<RelabelBatch
         failed_count = (SELECT count(*) FROM tag_relabel_items WHERE batch_id = $1 AND status = 'failed'),
         status = CASE
           WHEN status = 'cancelled' THEN 'cancelled'
+          WHEN paused_at IS NOT NULL THEN status
           WHEN NOT EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing')) THEN 'completed'
           ELSE status END,
-        completed_at = CASE WHEN NOT EXISTS (
+        completed_at = CASE WHEN paused_at IS NULL AND NOT EXISTS (
           SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing')
         ) THEN $2 ELSE completed_at END,
         updated_at = $2 WHERE id = $1`,
@@ -729,11 +1223,60 @@ export async function refreshRelabelBatch(batchId: string): Promise<RelabelBatch
     'SELECT * FROM tag_relabel_batches WHERE id = $1', [batchId],
   )
   const row = rows[0]
-  return row ? {
-    id: String(row.id), subject: String(row.subject), status: String(row.status) as RelabelBatch['status'],
+  if (!row) return null
+  const review = await select<Array<{ count: number }>>(
+    `SELECT count(*) AS count FROM problem_tags tag
+     JOIN tag_relabel_items item ON item.problem_id = tag.problem_id
+     WHERE item.batch_id = $1 AND item.status = 'completed' AND tag.superseded_at IS NULL
+       AND (tag.verification_status = 'needs_review' OR tag.mapping_status != 'mapped')`,
+    [batchId],
+  )
+  return {
+    id: String(row.id), subject: String(row.subject),
+    status: row.paused_at != null ? 'paused' : String(row.status) as RelabelBatch['status'],
     totalCount: Number(row.total_count), completedCount: Number(row.completed_count),
-    failedCount: Number(row.failed_count), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-  } : null
+    failedCount: Number(row.failed_count), needsReviewCount: Number(review[0]?.count ?? 0),
+    pausedAt: nullableNumber(row.paused_at), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  }
+}
+
+export async function getLatestRelabelBatch(subject: string): Promise<RelabelBatch | null> {
+  const rows = await select<Array<{ id: string }>>(
+    `SELECT id FROM tag_relabel_batches WHERE subject = $1
+     ORDER BY updated_at DESC LIMIT 1`, [subject],
+  )
+  return rows[0] ? refreshRelabelBatch(rows[0].id) : null
+}
+
+export async function pauseRelabelBatch(batchId: string) {
+  await execute(
+    `UPDATE tag_relabel_batches SET paused_at = $1, updated_at = $1
+     WHERE id = $2 AND status IN ('pending', 'processing')`,
+    [Date.now(), batchId],
+  )
+  return refreshRelabelBatch(batchId)
+}
+
+export async function resumeRelabelBatch(batchId: string) {
+  await execute(
+    `UPDATE tag_relabel_batches SET paused_at = NULL,
+       status = CASE WHEN status = 'pending' THEN 'processing' ELSE status END,
+       updated_at = $1 WHERE id = $2 AND paused_at IS NOT NULL`,
+    [Date.now(), batchId],
+  )
+  return refreshRelabelBatch(batchId)
+}
+
+export async function nextPendingRelabelItem(batchId: string) {
+  const rows = await select<Array<{ problem_id: string }>>(
+    `SELECT item.problem_id FROM tag_relabel_items item
+     JOIN tag_relabel_batches batch ON batch.id = item.batch_id
+     WHERE item.batch_id = $1 AND item.status = 'pending'
+       AND batch.paused_at IS NULL AND batch.status IN ('pending', 'processing')
+     ORDER BY item.created_at LIMIT 1`,
+    [batchId],
+  )
+  return rows[0]?.problem_id ?? null
 }
 
 export async function cancelRelabelBatch(batchId: string) {
@@ -759,7 +1302,7 @@ export async function cancelRelabelBatch(batchId: string) {
     )
     await execute(
       `UPDATE tag_relabel_batches SET status = 'cancelled', updated_at = $1,
-       completed_at = $1 WHERE id = $2`,
+       completed_at = $1, paused_at = NULL WHERE id = $2`,
       [now, batchId],
     )
   })

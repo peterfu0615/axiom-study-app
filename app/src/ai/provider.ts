@@ -12,6 +12,7 @@ import type {
   StudentAttemptInput,
   SolutionInput,
 } from '../domain/models'
+import type { TextbookRecognition } from '../domain/horizon'
 import {
   PROBLEM_ANALYSIS_PROMPT,
   problemAnalysisAntigravityJSONSchema,
@@ -46,6 +47,14 @@ import {
   analyzeProblemWithAntigravityCLI,
   analyzeProblemWithOpenAICompatible,
 } from '../platform/native'
+import {
+  buildTextbookRecognitionPrompt,
+  textbookRecognitionAntigravityJSONSchema,
+} from './textbookRecognitionContract'
+import {
+  parseTextbookRecognition,
+  TextbookRecognitionParseError,
+} from './textbookRecognitionParser'
 
 export const VISION_MODEL_REQUIRED =
   '当前模型不支持图片输入，请选择支持视觉的 VLM Provider。'
@@ -87,6 +96,19 @@ export interface ReasoningProviderResult {
     | 'knowledgeGaps'
     | 'suggestion'
   >
+  rawOutput: string
+  repairStrategy: string | null
+}
+
+export interface TextbookRecognitionInput {
+  sourceName: string
+  pageCount: number
+  outline: Array<{ title: string; level: number; pageNumber: number; evidenceText: string }>
+  pages: Array<{ pageNumber: number; evidenceText: string }>
+}
+
+export interface TextbookRecognitionProviderResult {
+  recognition: TextbookRecognition
   rawOutput: string
   repairStrategy: string | null
 }
@@ -134,6 +156,9 @@ export interface AIProvider {
   ) => Promise<SolutionProviderResult>
   explainStep?: (input: ExplainSolutionStepInput) => Promise<unknown>
   generateDiagram?: (input: unknown) => Promise<unknown>
+  recognizeTextbook?: (
+    input: TextbookRecognitionInput,
+  ) => Promise<TextbookRecognitionProviderResult>
 }
 
 export interface SolutionCapableProvider extends AIProvider {
@@ -259,6 +284,27 @@ export class MockAIProvider implements AIProvider {
         key_point: null,
         related_knowledge_points: [],
       }),
+      repairStrategy: null,
+    }
+  }
+
+  async recognizeTextbook(
+    input: TextbookRecognitionInput,
+  ): Promise<TextbookRecognitionProviderResult> {
+    const title = input.sourceName.replace(/\.[^.]+$/u, '') || '未命名教材'
+    const rawOutput = JSON.stringify({
+      title: { value: title, confidence: 0.45, evidence: input.sourceName },
+      subject: { value: null, confidence: 0.1, evidence: '' },
+      grade: { value: null, confidence: 0, evidence: '' },
+      volume: { value: null, confidence: 0, evidence: '' },
+      publisher: { value: null, confidence: 0, evidence: '' },
+      edition: { value: null, confidence: 0, evidence: '' },
+      overall_confidence: 0.1,
+      warnings: ['当前由 Mock Provider 生成教材信息，请确认或配置真实 Provider。'],
+    })
+    return {
+      recognition: parseTextbookRecognition(rawOutput),
+      rawOutput,
       repairStrategy: null,
     }
   }
@@ -508,6 +554,38 @@ ${JSON.stringify(structuredProblem)}
       throw error
     }
   }
+
+  async recognizeTextbook(
+    input: TextbookRecognitionInput,
+  ): Promise<TextbookRecognitionProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const { baseUrl, model, credentialRef } = this.profile
+    const prompt = buildTextbookRecognitionPrompt(input)
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl,
+      model,
+      credentialRef,
+      prompt,
+      userText: `教材文件：${input.sourceName}；共 ${input.pageCount} 页。`,
+      jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
+    })
+    if (response.errorMessage) {
+      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    }
+    try {
+      return {
+        recognition: parseTextbookRecognition(response.rawOutput),
+        rawOutput: response.rawOutput,
+        repairStrategy: null,
+      }
+    } catch (error) {
+      if (error instanceof TextbookRecognitionParseError) {
+        throw new AIProviderFailure(error.message, response.rawOutput)
+      }
+      throw error
+    }
+  }
+
 }
 
 export class AntigravityCLIProvider implements AIProvider {
@@ -734,6 +812,33 @@ ${JSON.stringify(structuredProblem)}
       throw error
     }
   }
+
+  async recognizeTextbook(
+    input: TextbookRecognitionInput,
+  ): Promise<TextbookRecognitionProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath,
+      model: this.profile.model,
+      prompt: buildTextbookRecognitionPrompt(input),
+      jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
+    })
+    if (response.errorMessage) {
+      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    }
+    try {
+      return {
+        recognition: parseTextbookRecognition(response.rawOutput),
+        rawOutput: response.rawOutput,
+        repairStrategy: null,
+      }
+    } catch (error) {
+      if (error instanceof TextbookRecognitionParseError) {
+        throw new AIProviderFailure(error.message, response.rawOutput)
+      }
+      throw error
+    }
+  }
 }
 
 let activeProviders: AIProvider[] = [new MockAIProvider()]
@@ -787,6 +892,16 @@ export function getSolutionProvider() {
       typeof candidate.generateSolution === 'function',
   )
   if (!provider) throw new Error(SOLUTION_PROVIDER_REQUIRED)
+  return provider
+}
+
+export function getTextbookRecognitionProvider() {
+  const provider = activeProviders.find(
+    (candidate): candidate is AIProvider & {
+      recognizeTextbook: NonNullable<AIProvider['recognizeTextbook']>
+    } => candidate.supportsText && typeof candidate.recognizeTextbook === 'function',
+  )
+  if (!provider) throw new Error(TEXT_MODEL_REQUIRED)
   return provider
 }
 

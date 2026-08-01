@@ -36,6 +36,84 @@ export interface Textbook {
   updatedAt: number
 }
 
+export interface TextbookMetadataField {
+  value: string | null
+  confidence: number
+  evidence: string
+}
+
+export interface TextbookRecognition {
+  title: TextbookMetadataField
+  subject: TextbookMetadataField
+  grade: TextbookMetadataField
+  volume: TextbookMetadataField
+  publisher: TextbookMetadataField
+  edition: TextbookMetadataField
+  overallConfidence: number
+  warnings: string[]
+}
+
+export type CurriculumImportStatus =
+  | 'pending'
+  | 'extracting'
+  | 'recognizing'
+  | 'needs_review'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export type CurriculumImportStage =
+  | 'select_file'
+  | 'preview'
+  | 'extracting'
+  | 'recognizing'
+  | 'confirm_info'
+  | 'review_structure'
+  | 'completed'
+
+export interface CurriculumImportJob {
+  id: string
+  sourcePath: string
+  sourceName: string
+  sourceType: Textbook['sourceType'] | null
+  contentHash: string | null
+  status: CurriculumImportStatus
+  stage: CurriculumImportStage
+  pageCount: number | null
+  extractionMethod: Textbook['extractionMethod'] | null
+  extraction: {
+    pageCount: number
+    extractionMethod: 'pdf_text' | 'vision_ocr' | 'mixed'
+    pages: Array<{
+      pageNumber: number
+      evidenceText: string
+      extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual'
+      confidence: number
+    }>
+    outline: Array<{
+      title: string
+      level: number
+      pageNumber: number
+      evidenceText: string
+      confidence: number
+    }>
+    warnings: string[]
+  } | null
+  recognition: TextbookRecognition | null
+  provider: string | null
+  model: string | null
+  promptVersion: string | null
+  schemaVersion: string | null
+  inputHash: string | null
+  rawOutput: string | null
+  errorMessage: string | null
+  textbookId: string | null
+  cancelledAt: number | null
+  createdAt: number
+  updatedAt: number
+  completedAt: number | null
+}
+
 export interface KnowledgeNode {
   id: string
   textbookId: string
