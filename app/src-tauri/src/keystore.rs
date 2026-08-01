@@ -16,14 +16,37 @@ fn entry_name(provider_id: &str) -> String {
 #[tauri::command(rename_all = "camelCase")]
 pub fn store_api_key(provider_id: String, api_key: String) -> Result<String, String> {
     let provider_id = provider_id.trim();
-    if provider_id.is_empty() || api_key.trim().is_empty() {
+    let api_key = api_key.trim();
+    if provider_id.is_empty() || api_key.is_empty() {
         return Err("Provider ID 和 API Key 不能为空".to_string());
     }
-    Entry::new(SERVICE, &entry_name(provider_id))
-        .map_err(|error| format!("Keychain 创建失败：{error}"))?
-        .set_password(api_key.trim())
+    let entry = Entry::new(SERVICE, &entry_name(provider_id))
+        .map_err(|error| format!("Keychain 创建失败：{error}"))?;
+    entry
+        .set_password(api_key)
         .map_err(|error| format!("Keychain 写入失败：{error}"))?;
+    let stored = entry
+        .get_password()
+        .map_err(|error| format!("Keychain 写入后校验失败：{error}"))?;
+    if stored != api_key {
+        return Err("Keychain 写入后校验失败：保存内容不一致".to_string());
+    }
     Ok(provider_id.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn has_api_key(credential_ref: String) -> Result<bool, String> {
+    let credential_ref = credential_ref.trim();
+    if credential_ref.is_empty() {
+        return Ok(false);
+    }
+    let entry = Entry::new(SERVICE, &entry_name(credential_ref))
+        .map_err(|error| format!("Keychain 状态检查失败：{error}"))?;
+    match entry.get_password() {
+        Ok(password) => Ok(!password.trim().is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(error) => Err(format!("Keychain 状态检查失败：{error}")),
+    }
 }
 
 pub fn load_api_key_internal(credential_ref: &str) -> Result<String, String> {

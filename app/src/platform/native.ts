@@ -213,6 +213,10 @@ export async function storeApiKey(providerId: string, apiKey: string) {
   return invoke<string>('store_api_key', { providerId, apiKey })
 }
 
+export async function hasApiKey(credentialRef: string) {
+  return invoke<boolean>('has_api_key', { credentialRef })
+}
+
 export async function deleteApiKey(credentialRef: string) {
   return invoke<void>('delete_api_key', { credentialRef })
 }

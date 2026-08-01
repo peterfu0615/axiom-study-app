@@ -13,6 +13,17 @@ import {
 import { UpdateSettings } from './UpdateSettings'
 
 type SettingsTab = 'providers' | 'appearance' | 'about' | 'update'
+type SettingsMessage = { text: string; tone: 'success' | 'error' }
+
+function readableError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
 
 function newProvider(index: number): AIProviderProfile {
   const now = Date.now()
@@ -51,7 +62,7 @@ export function AISettings() {
   const [profiles, setProfiles] = useState<AIProviderProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<SettingsMessage | null>(null)
   const [tab, setTab] = useState<SettingsTab>('providers')
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
@@ -64,7 +75,7 @@ export function AISettings() {
         setProfiles(next)
         setSelectedProviderId(next[0]?.id ?? null)
       })
-      .catch((error) => setMessage(`读取设置失败：${String(error)}`))
+      .catch((error) => setMessage({ text: `读取设置失败：${readableError(error)}`, tone: 'error' }))
       .finally(() => setLoading(false))
     void getAppVersion()
       .then(setAppVersion)
@@ -102,10 +113,10 @@ export function AISettings() {
       const saved = await saveAIProviderProfiles(profiles)
       configureAIProviders(saved)
       setProfiles(saved)
-      setMessage('Provider 配置已保存并立即生效')
+      setMessage({ text: 'Provider 配置已保存并立即生效', tone: 'success' })
       window.setTimeout(() => setMessage(null), 3200)
     } catch (error) {
-      setMessage(`保存失败：${String(error)}`)
+      setMessage({ text: `保存失败：${readableError(error)}`, tone: 'error' })
     } finally {
       setSaving(false)
     }
@@ -534,7 +545,7 @@ export function AISettings() {
 
           {tab === 'providers' && (
             <div className="settings-save-row">
-              <span>{message}</span>
+              <span className={message?.tone === 'error' ? 'is-error' : ''} role={message?.tone === 'error' ? 'alert' : 'status'}>{message?.text}</span>
               <button
                 className="primary-button"
                 disabled={loading || saving || profiles.length === 0}

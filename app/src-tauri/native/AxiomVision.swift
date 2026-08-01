@@ -1105,6 +1105,9 @@ private final class DocumentProcessor {
 @main
 private enum AxiomVisionCLI {
     static func main() {
+        // PDFKit may initialize AppKit even for a command-line process. Keep
+        // the helper out of the Dock and prohibit it from creating UI.
+        _ = NSApplication.shared.setActivationPolicy(.prohibited)
         do {
             let arguments = CommandLine.arguments
             guard arguments.count >= 2 else {

@@ -190,6 +190,7 @@ pub fn run() {
             db::canonicalize_path,
             db::migrate_database,
             keystore::store_api_key,
+            keystore::has_api_key,
             keystore::delete_api_key,
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,

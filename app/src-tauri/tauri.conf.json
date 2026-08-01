@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Axiom",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "identifier": "com.axiom.study",
   "build": {
     "frontendDist": "../dist",
@@ -36,9 +36,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/axiom-vision"
-    ],
+    "resources": {
+      "binaries/axiom-vision-aarch64-apple-darwin": "bin/axiom-vision"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

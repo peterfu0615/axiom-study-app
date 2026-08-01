@@ -62,6 +62,7 @@ import {
   cropProblemImage,
   deleteMediaFile,
   getDatabasePath,
+  hasApiKey,
   isDesktopRuntime,
   listMediaDirectory,
   removeProblemImage,
@@ -3156,9 +3157,21 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
      FROM ai_provider_profiles
      ORDER BY sort_order, created_at`,
   )
-  return rows.length
+  const profiles = rows.length
     ? rows.map(rowToAIProviderProfile)
     : defaultAIProviderProfiles
+  return Promise.all(profiles.map(async (profile) => {
+    if (profile.provider !== 'openai_compatible' || !profile.credentialRef) {
+      return profile
+    }
+    try {
+      return await hasApiKey(profile.credentialRef)
+        ? profile
+        : { ...profile, credentialRef: '' }
+    } catch (error) {
+      throw new Error(`无法读取“${profile.name}”的 Keychain 状态：${String(error)}`)
+    }
+  }))
 }
 
 export async function saveAIProviderProfiles(
@@ -3176,11 +3189,9 @@ export async function saveAIProviderProfiles(
     if (
       profile.provider === 'openai_compatible' &&
       profile.enabled &&
-      (!profile.baseUrl.trim() ||
-        !profile.model.trim() ||
-        (!profile.apiKey.trim() && !profile.credentialRef.trim()))
+      (!profile.baseUrl.trim() || !profile.model.trim())
     ) {
-      throw new Error(`“${profile.name}”启用前请填写 Base URL、Model 和 API Key`)
+      throw new Error(`“${profile.name}”启用前请填写 Base URL 和 Model`)
     }
     if (
       profile.provider === 'antigravity_cli' &&
@@ -3196,7 +3207,10 @@ export async function saveAIProviderProfiles(
     name: profile.name.trim(),
     baseUrl: profile.baseUrl.trim(),
     apiKey: profile.apiKey.trim(),
-    credentialRef: profile.provider === 'openai_compatible' ? profile.id : '',
+    credentialRef:
+      profile.provider === 'openai_compatible'
+        ? profile.credentialRef.trim()
+        : '',
     commandPath: profile.commandPath.trim(),
     model:
       profile.provider === 'mock'
@@ -3210,10 +3224,30 @@ export async function saveAIProviderProfiles(
   const existingRows = await db.select<Array<{ id: string; credential_ref: string }>>(
     'SELECT id, credential_ref FROM ai_provider_profiles',
   )
+  const resolved = [] as typeof normalized
   for (const profile of normalized) {
-    if (profile.provider === 'openai_compatible' && profile.apiKey) {
-      await storeApiKey(profile.id, profile.apiKey)
+    let credentialRef = profile.credentialRef
+    if (profile.provider === 'openai_compatible') {
+      if (profile.apiKey) {
+        try {
+          credentialRef = await storeApiKey(profile.id, profile.apiKey)
+        } catch (error) {
+          throw new Error(`“${profile.name}”的 API Key 保存失败：${String(error)}`)
+        }
+      } else if (credentialRef) {
+        try {
+          if (!await hasApiKey(credentialRef)) credentialRef = ''
+        } catch (error) {
+          throw new Error(`无法校验“${profile.name}”的 Keychain 状态：${String(error)}`)
+        }
+      }
+      if (profile.enabled && !credentialRef) {
+        throw new Error(`“${profile.name}”启用前请保存 API Key`)
+      }
     }
+    resolved.push({ ...profile, credentialRef })
+  }
+  for (const profile of resolved) {
     await db.execute(
       `INSERT INTO ai_provider_profiles (
          id, name, provider, base_url, api_key, credential_ref, command_path, model,
@@ -3251,20 +3285,20 @@ export async function saveAIProviderProfiles(
       ],
     )
   }
-  const placeholders = normalized
+  const placeholders = resolved
     .map((_, index) => `$${index + 1}`)
     .join(', ')
   await db.execute(
     `DELETE FROM ai_provider_profiles WHERE id NOT IN (${placeholders})`,
-    normalized.map((profile) => profile.id),
+    resolved.map((profile) => profile.id),
   )
-  const retainedIds = new Set(normalized.map((profile) => profile.id))
+  const retainedIds = new Set(resolved.map((profile) => profile.id))
   await Promise.all(
     existingRows
       .filter((row) => !retainedIds.has(String(row.id)) && row.credential_ref)
       .map((row) => deleteApiKey(String(row.credential_ref))),
   )
-  return normalized.map((profile) => ({
+  return resolved.map((profile) => ({
     ...profile,
     apiKey: '',
   }))

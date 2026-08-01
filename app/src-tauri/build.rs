@@ -15,7 +15,6 @@ fn build_vision_helper() {
     let source = manifest_dir.join("native/AxiomVision.swift");
     let target = env::var("TARGET").expect("missing Cargo target triple");
     println!("cargo:rustc-env=AXIOM_TARGET={target}");
-    let profile = env::var("PROFILE").expect("missing Cargo profile");
     let binaries = manifest_dir.join("binaries");
     let output = binaries.join(format!("axiom-vision-{target}"));
     let temporary_output = PathBuf::from(env::var("OUT_DIR").unwrap()).join("axiom-vision");
@@ -50,13 +49,11 @@ fn build_vision_helper() {
 
     assert!(status.success(), "failed to compile the Vision helper");
 
-    if profile != "debug" {
-        let compiled = fs::read(&temporary_output).expect("failed to read native helper");
-        let unchanged = fs::read(&output)
-            .map(|current| current == compiled)
-            .unwrap_or(false);
-        if !unchanged {
-            fs::write(&output, compiled).expect("failed to update native helper");
-        }
+    let compiled = fs::read(&temporary_output).expect("failed to read native helper");
+    let unchanged = fs::read(&output)
+        .map(|current| current == compiled)
+        .unwrap_or(false);
+    if !unchanged {
+        fs::write(&output, compiled).expect("failed to update native helper");
     }
 }
