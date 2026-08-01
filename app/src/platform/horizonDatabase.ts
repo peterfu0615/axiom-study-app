@@ -204,6 +204,17 @@ export async function listTextbooks(subject?: string): Promise<Textbook[]> {
   return rows.map(rowToTextbook)
 }
 
+export async function setCurrentTextbook(textbook: Pick<Textbook, 'id' | 'subject'>) {
+  await transaction(async () => {
+    await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [textbook.subject])
+    await execute(
+      `UPDATE textbooks SET is_current = 1, updated_at = $1
+       WHERE id = $2 AND subject = $3 AND archived_at IS NULL`,
+      [Date.now(), textbook.id, textbook.subject],
+    )
+  })
+}
+
 export async function createManualTextbook(subject: string, title: string) {
   const now = Date.now()
   const textbookId = id()
@@ -1165,6 +1176,15 @@ export async function createRelabelBatch(subject: string): Promise<string> {
   return batchId
 }
 
+export async function getRelabelScopeCount(subject: string) {
+  const rows = await select<Array<{ count: number }>>(
+    `SELECT count(*) AS count FROM problems WHERE status = 'saved' AND deleted_at IS NULL
+     AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1`,
+    [subject],
+  )
+  return Number(rows[0]?.count ?? 0)
+}
+
 export async function listRelabelItems(batchId: string) {
   return select<Array<{ problem_id: string; status: string; model_run_id: string | null }>>(
     'SELECT problem_id, status, model_run_id FROM tag_relabel_items WHERE batch_id = $1 ORDER BY created_at',
@@ -1277,6 +1297,14 @@ export async function nextPendingRelabelItem(batchId: string) {
     [batchId],
   )
   return rows[0]?.problem_id ?? null
+}
+
+export async function failRelabelItem(batchId: string, problemId: string, error: unknown) {
+  await execute(
+    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1, updated_at = $2
+     WHERE batch_id = $3 AND problem_id = $4 AND status IN ('pending', 'queued', 'processing')`,
+    [String(error), Date.now(), batchId, problemId],
+  )
 }
 
 export async function cancelRelabelBatch(batchId: string) {

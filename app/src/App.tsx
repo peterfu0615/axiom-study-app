@@ -9,8 +9,10 @@ import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
+import { resumeCurriculumImports } from './features/curriculum/importCoordinator'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
+import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
 import { checkForUpdates } from './platform/native'
 import { useToast } from './platform/useToast'
@@ -26,7 +28,7 @@ function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
   void getCurrentWindow().startDragging()
 }
 
-function App() {
+function AppRuntime() {
   const [section, setSection] = useState<AppSection>('capture')
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
   const { toast, notify } = useToast()
@@ -46,6 +48,7 @@ function App() {
           resumeProblemAIPipeline(),
           resumeSolutionPipeline(),
           resumeIntelligencePipeline(),
+          resumeCurriculumImports(),
         ])
       } catch (error) {
         console.error('恢复 AI Pipeline 失败', error)
@@ -92,6 +95,16 @@ function App() {
       <Toast toast={toast} />
     </div>
   )
+}
+
+function App() {
+  const preview = import.meta.env.DEV
+    ? new URLSearchParams(window.location.search).get('ui-preview')
+    : null
+  if (preview === 'curriculum') {
+    return <CurriculumPreview state={new URLSearchParams(window.location.search).get('state') ?? 'populated'} />
+  }
+  return <AppRuntime />
 }
 
 export default App

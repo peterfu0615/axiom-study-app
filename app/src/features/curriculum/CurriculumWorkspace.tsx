@@ -1,292 +1,365 @@
-import { open } from '@tauri-apps/plugin-dialog'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { runProblemAIWorker } from '../../ai/pipeline'
-import type { HorizonTagType } from '../../domain/models'
-import type {
-  KnowledgeNode,
-  KnowledgeEdge,
-  TagDefinition,
-  Textbook,
-} from '../../domain/horizon'
-import { queueProblemAI } from '../../platform/database'
+import { Icon } from '../../components/Icon'
 import {
-  addTagAlias,
+  AsyncState,
+  Button,
+  Dialog,
+  EmptyState,
+  IconButton,
+  Menu,
+  MenuItem,
+  SelectField,
+  StatusBadge,
+  Surface,
+  Tabs,
+} from '../../components/ui'
+import type { KnowledgeNode, Textbook } from '../../domain/horizon'
+import {
   addKnowledgeEdge,
   archiveKnowledgeNode,
-  cancelRelabelBatch,
   confirmKnowledgeNode,
   createManualTextbook,
-  createRelabelBatch,
-  createTagDefinition,
-  importTextbook,
+  listCurriculumImportJobs,
   listHorizonSubjects,
-  listKnowledgeNodes,
   listKnowledgeEdges,
-  listRelabelItems,
-  listTagDefinitions,
+  listKnowledgeNodes,
   listTextbooks,
-  markRelabelItemQueued,
   mergeKnowledgeNodes,
-  mergeTagDefinitions,
-  publishTaxonomyVersion,
-  refreshRelabelBatch,
-  reviewTagDefinition,
   saveKnowledgeNode,
-  type RelabelBatch,
+  setCurrentTextbook,
 } from '../../platform/horizonDatabase'
-import './Horizon.css'
+import { CurriculumImportFlow } from './CurriculumImportFlow'
+import { buildKnowledgeTree, knowledgeNodeLabel, matchingKnowledgeNodeIds, type KnowledgeTreeItem } from './curriculumTree'
+import { TagOverview } from './TagOverview'
+import './Curriculum.css'
 
-type WorkspaceTab = 'knowledge' | 'taxonomy' | 'relabel'
-const tagTypeLabels: Record<HorizonTagType, string> = {
-  knowledge: '知识点', method: '方法', model: '题型模型', error: '错误类型',
+type CourseView = 'structure' | 'tags'
+type NodeEditor = { node: KnowledgeNode | null; parentId: string | null } | null
+type NodeRelation = { node: KnowledgeNode; targetId: string; relation: 'contains' | 'prerequisite_of' | 'derived_from' | 'similar_to' | 'confusable_with' | 'used_by' | 'appears_in' } | null
+
+const nodeTypes: Array<[KnowledgeNode['nodeType'], string]> = [
+  ['chapter', '章'], ['section', '节'], ['knowledge', '知识点'],
+  ['definition', '定义'], ['formula', '公式'], ['theorem', '定理'], ['property', '性质'],
+]
+
+function verification(node: KnowledgeNode) {
+  if (node.verificationStatus === 'user_verified') return { label: '已确认', tone: 'success' as const }
+  if (node.verificationStatus === 'needs_review') return { label: '待确认', tone: 'warning' as const }
+  return { label: '待整理', tone: 'neutral' as const }
 }
 
-export function CurriculumWorkspace() {
+function KnowledgeTree({
+  items,
+  selectedId,
+  visibleIds,
+  expanded,
+  onSelect,
+  onToggle,
+}: {
+  items: KnowledgeTreeItem[]
+  selectedId: string | null
+  visibleIds: Set<string>
+  expanded: Set<string>
+  onSelect: (node: KnowledgeNode) => void
+  onToggle: (id: string) => void
+}) {
+  return (
+    <ul className="curriculum-tree" role="tree">
+      {items.map((item) => {
+        if (!visibleIds.has(item.node.id)) return null
+        const hasChildren = item.children.some((child) => visibleIds.has(child.node.id))
+        const isExpanded = expanded.has(item.node.id)
+        return (
+          <li key={item.node.id} role="treeitem">
+            <div className={`curriculum-tree-row ${selectedId === item.node.id ? 'is-selected' : ''}`}>
+              {hasChildren
+                ? <IconButton className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
+                : <span className="curriculum-tree-toggle-placeholder" />}
+              <button onClick={() => onSelect(item.node)} type="button"><span>{item.node.canonicalName}</span><small>{knowledgeNodeLabel(item.node)}</small></button>
+              {item.node.verificationStatus === 'needs_review' && <i aria-label="待确认" />}
+            </div>
+            {hasChildren && isExpanded && <KnowledgeTree expanded={expanded} items={item.children} onSelect={onSelect} onToggle={onToggle} selectedId={selectedId} visibleIds={visibleIds} />}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+export function CurriculumWorkspace({ initialView = 'structure' }: { initialView?: CourseView }) {
+  const [view, setView] = useState<CourseView>(initialView)
   const [subjects, setSubjects] = useState<string[]>([])
-  const [subject, setSubject] = useState('数学')
+  const [subject, setSubject] = useState('')
   const [textbooks, setTextbooks] = useState<Textbook[]>([])
   const [textbookId, setTextbookId] = useState<string | null>(null)
   const [nodes, setNodes] = useState<KnowledgeNode[]>([])
-  const [edges, setEdges] = useState<KnowledgeEdge[]>([])
-  const [tags, setTags] = useState<TagDefinition[]>([])
-  const [tab, setTab] = useState<WorkspaceTab>('knowledge')
-  const [tagType, setTagType] = useState<HorizonTagType>('method')
-  const [newTagName, setNewTagName] = useState('')
+  const [edgeCount, setEdgeCount] = useState(0)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [importMode, setImportMode] = useState(false)
+  const [continueImportId, setContinueImportId] = useState<string | null>(null)
+  const [openImportCount, setOpenImportCount] = useState(0)
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manualSubject, setManualSubject] = useState('')
+  const [manualTitle, setManualTitle] = useState('')
+  const [nodeEditor, setNodeEditor] = useState<NodeEditor>(null)
+  const [nodeName, setNodeName] = useState('')
+  const [nodeType, setNodeType] = useState<KnowledgeNode['nodeType']>('knowledge')
+  const [nodeParentId, setNodeParentId] = useState<string | null>(null)
+  const [nodeDescription, setNodeDescription] = useState('')
+  const [mergeSource, setMergeSource] = useState<KnowledgeNode | null>(null)
+  const [mergeTargetId, setMergeTargetId] = useState('')
+  const [relation, setRelation] = useState<NodeRelation>(null)
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [batch, setBatch] = useState<RelabelBatch | null>(null)
 
-  const refresh = useCallback(async () => {
-    const [nextSubjects, nextTextbooks, nextTags] = await Promise.all([
-      listHorizonSubjects(), listTextbooks(subject), listTagDefinitions(subject),
-    ])
-    setSubjects(nextSubjects)
-    setTextbooks(nextTextbooks)
-    const nextTextbookId = textbookId && nextTextbooks.some((book) => book.id === textbookId)
-      ? textbookId
-      : nextTextbooks.find((book) => book.isCurrent)?.id ?? nextTextbooks[0]?.id ?? null
-    setTextbookId(nextTextbookId)
-    setTags(nextTags)
-    if (nextTextbookId) {
-      const [nextNodes, nextEdges] = await Promise.all([
-        listKnowledgeNodes(nextTextbookId), listKnowledgeEdges(nextTextbookId),
-      ])
-      setNodes(nextNodes); setEdges(nextEdges)
-    } else { setNodes([]); setEdges([]) }
-  }, [subject, textbookId])
+  const selectedTextbook = textbooks.find((book) => book.id === textbookId) ?? null
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
 
-  useEffect(() => { void refresh().catch((error) => setMessage(String(error))) }, [refresh])
+  const refreshSubjects = useCallback(async () => {
+    const next = await listHorizonSubjects()
+    setSubjects(next)
+    setSubject((current) => current || next[0] || '')
+  }, [])
+
+  const refreshImportJobs = useCallback(async () => {
+    const jobs = await listCurriculumImportJobs()
+    setOpenImportCount(jobs.length)
+    if (!continueImportId) setContinueImportId(jobs[0]?.id ?? null)
+  }, [continueImportId])
+
   useEffect(() => {
-    if (!textbookId) { setNodes([]); setEdges([]); return }
-    void Promise.all([listKnowledgeNodes(textbookId), listKnowledgeEdges(textbookId)])
-      .then(([nextNodes, nextEdges]) => { setNodes(nextNodes); setEdges(nextEdges) })
+    void Promise.all([refreshSubjects(), refreshImportJobs()]).catch((reason) => setError(String(reason)))
+  }, [refreshImportJobs, refreshSubjects])
+
+  useEffect(() => {
+    if (!subject) {
+      setTextbooks([])
+      setTextbookId(null)
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    void listTextbooks(subject)
+      .then((next) => {
+        setTextbooks(next)
+        setTextbookId((current) => current && next.some((book) => book.id === current)
+          ? current
+          : next.find((book) => book.isCurrent)?.id ?? next[0]?.id ?? null)
+      })
+      .catch((reason) => setError(String(reason)))
+      .finally(() => setLoading(false))
+  }, [subject])
+
+  const refreshTree = useCallback(async () => {
+    if (!textbookId) {
+      setNodes([])
+      setEdgeCount(0)
+      return
+    }
+    const [nextNodes, nextEdges] = await Promise.all([listKnowledgeNodes(textbookId), listKnowledgeEdges(textbookId)])
+    setNodes(nextNodes)
+    setEdgeCount(nextEdges.length)
+    setSelectedNodeId((current) => current && nextNodes.some((node) => node.id === current) ? current : nextNodes[0]?.id ?? null)
+    setExpanded((current) => new Set([...current, ...nextNodes.filter((node) => node.parentId === null).map((node) => node.id)]))
   }, [textbookId])
 
-  const depths = useMemo(() => {
-    const byId = new Map(nodes.map((node) => [node.id, node]))
-    const result = new Map<string, number>()
-    for (const node of nodes) {
-      let current = node.parentId ? byId.get(node.parentId) : null
-      let depth = 0
-      const visited = new Set<string>()
-      while (current && !visited.has(current.id) && depth < 8) {
-        visited.add(current.id); depth += 1
-        current = current.parentId ? byId.get(current.parentId) : null
-      }
-      result.set(node.id, depth)
-    }
-    return result
-  }, [nodes])
+  useEffect(() => { void refreshTree().catch((reason) => setError(String(reason))) }, [refreshTree])
 
-  const handleImport = async () => {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: '教材或目录', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp'] }],
-    })
-    if (!selected) return
-    const title = window.prompt('教材名称', selected.split('/').pop()?.replace(/\.[^.]+$/u, '') ?? '新教材')
-    if (!title?.trim() || !subject.trim()) return
-    setBusy(true); setMessage('正在提取 PDF 文本或执行本地 OCR…')
-    try {
-      const created = await importTextbook(subject, title, selected)
-      setTextbookId(created); await refresh(); setMessage('目录候选已生成，请逐项校正确认。')
-    } catch (error) { setMessage(`导入失败：${String(error)}`) }
-    finally { setBusy(false) }
+  const selectSubject = (next: string) => {
+    setSubject(next)
+    setTextbookId(null)
+    setSelectedNodeId(null)
   }
 
-  const handleManualBook = async () => {
-    const title = window.prompt('课程/教材名称')
-    if (!title?.trim() || !subject.trim()) return
+  const openNodeEditor = (node: KnowledgeNode | null, parentId: string | null) => {
+    setNodeEditor({ node, parentId })
+    setNodeName(node?.canonicalName ?? '')
+    setNodeType(node?.nodeType ?? 'knowledge')
+    setNodeParentId(node?.parentId ?? parentId)
+    setNodeDescription(node?.description ?? '')
+  }
+
+  const saveNode = async () => {
+    if (!selectedTextbook || !nodeEditor) return
     setBusy(true)
-    try { setTextbookId(await createManualTextbook(subject, title)); await refresh() }
-    catch (error) { setMessage(String(error)) }
-    finally { setBusy(false) }
-  }
-
-  const handleAddNode = async () => {
-    if (!textbookId) return
-    const name = window.prompt('节点名称')
-    if (!name?.trim()) return
-    await saveKnowledgeNode({
-      textbookId, subject, canonicalName: name, nodeType: 'knowledge', parentId: null,
-    })
-    setNodes(await listKnowledgeNodes(textbookId))
-  }
-
-  const handleEditNode = async (node: KnowledgeNode) => {
-    const name = window.prompt('节点名称', node.canonicalName)
-    if (!name?.trim()) return
-    const parentId = window.prompt('父节点 ID（留空为根节点）', node.parentId ?? '')
-    await saveKnowledgeNode({
-      id: node.id,
-      textbookId: node.textbookId,
-      subject: node.subject,
-      canonicalName: name,
-      nodeType: node.nodeType,
-      parentId: parentId?.trim() || null,
-      description: node.description ?? undefined,
-    })
-    setNodes(await listKnowledgeNodes(node.textbookId))
-  }
-
-  const handleMergeNode = async (node: KnowledgeNode) => {
-    const target = window.prompt('合并到节点 ID（必须同科目、同教材）')
-    if (!target?.trim()) return
-    await mergeKnowledgeNodes(node.subject, node.id, target.trim())
-    setNodes(await listKnowledgeNodes(node.textbookId))
-  }
-
-  const handleAddEdge = async (node: KnowledgeNode) => {
-    const target = window.prompt('目标知识节点 ID（必须属于当前科目）')
-    if (!target?.trim()) return
-    const relation = window.prompt(
-      '关系：contains / prerequisite_of / derived_from / similar_to / confusable_with / used_by / appears_in',
-      'prerequisite_of',
-    ) as KnowledgeEdge['relationType'] | null
-    if (!relation || !['contains','prerequisite_of','derived_from','similar_to','confusable_with','used_by','appears_in'].includes(relation)) return
-    await addKnowledgeEdge(node.subject, node.id, target.trim(), relation)
-    setEdges(await listKnowledgeEdges(node.textbookId))
-  }
-
-  const handleCreateTag = async () => {
-    if (!newTagName.trim()) return
-    await createTagDefinition({
-      subject, tagType, canonicalName: newTagName,
-      methodClass: tagType === 'method' ? 'core' : null, approved: true,
-    })
-    setNewTagName(''); setTags(await listTagDefinitions(subject))
-  }
-
-  const handleAlias = async (tag: TagDefinition) => {
-    const alias = window.prompt('添加科目内别名')
-    if (!alias?.trim()) return
-    await addTagAlias(tag, alias); setTags(await listTagDefinitions(subject))
-  }
-
-  const handleMergeTag = async (tag: TagDefinition) => {
-    const target = window.prompt('合并到正式标签 ID（必须同科目、同类型）')
-    if (!target?.trim()) return
-    await mergeTagDefinitions(tag.subject, tag.id, target.trim())
-    setTags(await listTagDefinitions(subject))
-  }
-
-  const startRelabel = async () => {
-    setBusy(true); setMessage(null)
     try {
-      const batchId = await createRelabelBatch(subject)
-      const items = await listRelabelItems(batchId)
-      for (const item of items) {
-        const problem = await queueProblemAI(item.problem_id)
-        if (problem.aiActiveModelRunId) {
-          await markRelabelItemQueued(batchId, problem.id, problem.aiActiveModelRunId)
-        }
-      }
-      void runProblemAIWorker()
-      setBatch(await refreshRelabelBatch(batchId))
-    } catch (error) { setMessage(`批量重标注启动失败：${String(error)}`) }
-    finally { setBusy(false) }
+      const nodeId = await saveKnowledgeNode({
+        id: nodeEditor.node?.id,
+        textbookId: selectedTextbook.id,
+        subject: selectedTextbook.subject,
+        canonicalName: nodeName,
+        nodeType,
+        parentId: nodeParentId,
+        description: nodeDescription,
+      })
+      setNodeEditor(null)
+      await refreshTree()
+      setSelectedNodeId(nodeId)
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
   }
 
-  useEffect(() => {
-    if (!batch || !['pending', 'processing'].includes(batch.status)) return
-    const timer = window.setInterval(() => {
-      void refreshRelabelBatch(batch.id).then(setBatch)
-    }, 1500)
-    return () => window.clearInterval(timer)
-  }, [batch])
+  const createManual = async () => {
+    if (!manualSubject.trim() || !manualTitle.trim()) return
+    setBusy(true)
+    try {
+      const newId = await createManualTextbook(manualSubject, manualTitle)
+      setManualOpen(false)
+      setManualTitle('')
+      setSubject(manualSubject.trim())
+      setTextbookId(newId)
+      await refreshSubjects()
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
 
-  const visibleTags = tags.filter((tag) => tag.tagType === tagType)
+  const confirmNode = async (node: KnowledgeNode) => {
+    setBusy(true)
+    try { await confirmKnowledgeNode(node); await refreshTree() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const archiveNode = async (node: KnowledgeNode) => {
+    setBusy(true)
+    try { await archiveKnowledgeNode(node); await refreshTree() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const mergeNode = async () => {
+    if (!mergeSource || !mergeTargetId) return
+    setBusy(true)
+    try {
+      await mergeKnowledgeNodes(mergeSource.subject, mergeSource.id, mergeTargetId)
+      setMergeSource(null)
+      await refreshTree()
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const addRelation = async () => {
+    if (!relation) return
+    setBusy(true)
+    try {
+      await addKnowledgeEdge(relation.node.subject, relation.node.id, relation.targetId, relation.relation)
+      setRelation(null)
+      await refreshTree()
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const setCurrent = async () => {
+    if (!selectedTextbook) return
+    setBusy(true)
+    try {
+      await setCurrentTextbook(selectedTextbook)
+      setTextbooks(await listTextbooks(selectedTextbook.subject))
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
+  const visibleNodeIds = useMemo(() => matchingKnowledgeNodeIds(nodes, query), [nodes, query])
+  const chapterCount = nodes.filter((node) => node.nodeType === 'chapter').length
+  const knowledgeCount = nodes.filter((node) => ['knowledge', 'definition', 'formula', 'theorem', 'property'].includes(node.nodeType)).length
+  const reviewCount = nodes.filter((node) => node.verificationStatus === 'needs_review').length
+
+  if (importMode) {
+    return <CurriculumImportFlow
+      initialJobId={continueImportId}
+      onBack={() => { setImportMode(false); void refreshImportJobs() }}
+      onCompleted={(newTextbookId) => {
+        setImportMode(false)
+        setContinueImportId(null)
+        void (async () => {
+          const newBook = (await listTextbooks()).find((item) => item.id === newTextbookId)
+          if (newBook) setSubject(newBook.subject)
+          setTextbookId(newTextbookId)
+          await refreshSubjects(); await refreshImportJobs()
+        })()
+      }}
+      onManual={() => { setImportMode(false); setManualSubject(subject); setManualOpen(true) }}
+    />
+  }
 
   return (
-    <main className="horizon-workspace">
-      <header className="horizon-header">
-        <div><p>Horizon Tag Foundation</p><h1>课程与标签体系</h1></div>
-        <div className="horizon-subject-picker">
-          <label>科目根作用域</label>
-          <input list="horizon-subjects" onChange={(event) => setSubject(event.target.value)} value={subject} />
-          <datalist id="horizon-subjects">{subjects.map((item) => <option key={item} value={item} />)}</datalist>
-        </div>
+    <main className="workspace curriculum-workspace">
+      <header className="workspace-header curriculum-page-header">
+        <div><p className="eyebrow">学习资料</p><h1>课程</h1><p className="subtitle">管理教材、知识结构与当前科目的标签概况。</p></div>
+        <Button onClick={() => { setContinueImportId(null); setImportMode(true) }} variant="primary">导入教材</Button>
       </header>
-      <nav className="horizon-tabs">
-        <button className={tab === 'knowledge' ? 'active' : ''} onClick={() => setTab('knowledge')}>教材与知识树</button>
-        <button className={tab === 'taxonomy' ? 'active' : ''} onClick={() => setTab('taxonomy')}>受控标签库</button>
-        <button className={tab === 'relabel' ? 'active' : ''} onClick={() => setTab('relabel')}>旧题重标注</button>
-      </nav>
-      {message && <div className="horizon-message" role="status">{message}</div>}
 
-      {tab === 'knowledge' && <div className="horizon-grid">
-        <aside className="horizon-panel book-panel">
-          <div className="panel-title"><div><span>教材</span><strong>{subject}</strong></div></div>
-          <div className="book-actions">
-            <button disabled={busy} onClick={() => void handleImport()}>导入 PDF / 目录图片</button>
-            <button disabled={busy} onClick={() => void handleManualBook()}>手动建立</button>
-          </div>
-          <ul>{textbooks.map((book) => <li key={book.id}>
-            <button className={book.id === textbookId ? 'selected' : ''} onClick={() => setTextbookId(book.id)}>
-              <strong>{book.title}</strong><small>{book.extractionMethod ?? 'manual'} · {book.extractionStatus}</small>
-            </button>
-          </li>)}</ul>
-        </aside>
-        <section className="horizon-panel tree-panel">
-          <div className="panel-title"><div><span>可编辑知识树</span><strong>{textbooks.find((book) => book.id === textbookId)?.title ?? '请选择教材'}</strong></div>
-            <button disabled={!textbookId} onClick={() => void handleAddNode()}>新增知识点</button></div>
-          <div className="knowledge-tree">
-            {nodes.map((node) => <article key={node.id} style={{ '--depth': depths.get(node.id) ?? 0 } as React.CSSProperties}>
-              <div><strong>{node.canonicalName}</strong><small>p.{node.sourcePageStart ?? '—'} · {Math.round(node.confidence * 100)}% · {node.verificationStatus}</small></div>
-              <code>{node.id.slice(0, 8)}</code>
-              <button onClick={() => void handleEditNode(node)}>编辑/移动</button>
-              {node.verificationStatus !== 'user_verified' && <button onClick={() => void confirmKnowledgeNode(node).then(refresh)}>确认</button>}
-              <button onClick={() => void handleMergeNode(node)}>合并</button>
-              <button onClick={() => void handleAddEdge(node)}>关系</button>
-              <button onClick={() => void archiveKnowledgeNode(node).then(refresh)}>归档</button>
-              {edges.some((edge) => edge.fromNodeId === node.id) && <small className="node-relations">{edges.filter((edge) => edge.fromNodeId === node.id).map((edge) => `${edge.relationType} → ${edge.toNodeId.slice(0, 8)}`).join('；')}</small>}
-              {node.evidenceText && <details><summary>教材证据</summary><p>{node.evidenceText}</p></details>}
-            </article>)}
-            {!nodes.length && <div className="horizon-empty">导入教材目录，或手动建立课程结构。</div>}
-          </div>
-        </section>
-      </div>}
+      <div className="curriculum-filters">
+        <SelectField label="科目" onChange={(event) => selectSubject(event.target.value)} value={subject}>
+          {!subjects.length && <option value="">暂无课程</option>}
+          {subjects.map((item) => <option key={item} value={item}>{item}</option>)}
+        </SelectField>
+        <SelectField disabled={!subject || !textbooks.length} label="教材" onChange={(event) => setTextbookId(event.target.value || null)} value={textbookId ?? ''}>
+          {!textbooks.length && <option value="">暂无教材</option>}
+          {textbooks.map((book) => <option key={book.id} value={book.id}>{book.title}{book.isCurrent ? ' · 当前使用' : ''}</option>)}
+        </SelectField>
+        {openImportCount > 0 && <button className="curriculum-task-link" onClick={() => { setImportMode(true) }} type="button">有 {openImportCount} 个教材导入任务待继续</button>}
+      </div>
 
-      {tab === 'taxonomy' && <section className="horizon-panel taxonomy-panel">
-        <div className="taxonomy-heading"><div className="taxonomy-types">{(['knowledge','method','model','error'] as HorizonTagType[]).map((type) =>
-          <button className={tagType === type ? 'active' : ''} key={type} onClick={() => setTagType(type)}>{tagTypeLabels[type]}</button>)}</div>
-          <button onClick={() => { const note = window.prompt('新体系版本说明') ?? ''; void publishTaxonomyVersion(subject, note).then((version) => setMessage(`已发布 ${subject} 标签体系 v${version}`)) }}>发布新版本</button></div>
-        <div className="tag-create"><input onChange={(event) => setNewTagName(event.target.value)} placeholder={`新增${tagTypeLabels[tagType]}`} value={newTagName} /><button onClick={() => void handleCreateTag()}>创建正式标签</button></div>
-        <div className="taxonomy-list">{visibleTags.map((tag) => <article key={tag.id}>
-          <div><span className={`tag-status ${tag.lifecycleStatus}`}>{tag.lifecycleStatus}</span><strong>{tag.canonicalName}</strong><small>{tag.aliases.length ? `别名：${tag.aliases.join('、')}` : '无别名'} · v{tag.taxonomyVersion}</small></div>
-          <code>{tag.id}</code>
-          {tag.lifecycleStatus === 'candidate' && <><button onClick={() => void reviewTagDefinition(tag, 'approve').then(refresh)}>审核通过</button><button onClick={() => void reviewTagDefinition(tag, 'reject').then(refresh)}>拒绝</button></>}
-          {tag.lifecycleStatus === 'active' && <><button onClick={() => void handleAlias(tag)}>别名</button><button onClick={() => void handleMergeTag(tag)}>合并</button><button onClick={() => void reviewTagDefinition(tag, 'archive').then(refresh)}>归档</button></>}
-        </article>)}</div>
-      </section>}
+      <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }]} value={view} />
 
-      {tab === 'relabel' && <section className="horizon-panel relabel-panel">
-        <h2>{subject}旧题批量重新标注</h2>
-        <p>每道题创建独立 ModelRun 并保留输入哈希与原始输出；已由用户确认并锁定的标签不会被覆盖。</p>
-        <button disabled={busy || batch?.status === 'processing'} onClick={() => void startRelabel()}>开始批量重标注</button>
-        {batch && <div className="batch-progress"><strong>{batch.status}</strong><progress max={batch.totalCount || 1} value={batch.completedCount + batch.failedCount} /><span>{batch.completedCount}/{batch.totalCount} 完成 · {batch.failedCount} 失败</span>
-          {batch.status === 'processing' && <button onClick={() => void cancelRelabelBatch(batch.id).then(() => refreshRelabelBatch(batch.id).then(setBatch))}>取消任务</button>}</div>}
-      </section>}
+      {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
+
+      {view === 'tags' ? <TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} subject={subject} textbook={selectedTextbook} /> : (
+        <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
+          {!selectedTextbook ? (
+            <EmptyState
+              action={<Button onClick={() => { setContinueImportId(null); setImportMode(true) }} variant="primary">导入教材</Button>}
+              description="导入正在使用的教材，Axiom 会自动识别科目、版本、章节目录和候选知识点。"
+              icon={<Icon name="curriculum" size={23} />}
+              secondaryAction={<Button onClick={() => { setManualSubject(subject); setManualOpen(true) }} variant="secondary">手动创建</Button>}
+              title="建立你的课程知识结构"
+            />
+          ) : (
+            <>
+              <section className="curriculum-book-summary">
+                <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2>{selectedTextbook.isCurrent && <StatusBadge tone="brand">当前使用</StatusBadge>}</div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
+                <dl><div><dt>章节</dt><dd>{chapterCount}</dd></div><div><dt>知识点</dt><dd>{knowledgeCount}</dd></div><div><dt>待确认</dt><dd>{reviewCount}</dd></div></dl>
+                <Menu label="教材操作"><MenuItem disabled={selectedTextbook.isCurrent || busy} onClick={() => void setCurrent()}>设为当前教材</MenuItem></Menu>
+              </section>
+              <Surface className="curriculum-structure-shell">
+                <aside className="curriculum-tree-panel">
+                  <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><Button onClick={() => openNodeEditor(null, selectedNode?.id ?? null)}>新增节点</Button></div>
+                  <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
+                  <div className="curriculum-tree-scroll"><KnowledgeTree expanded={expanded} items={tree} onSelect={(node) => setSelectedNodeId(node.id)} onToggle={(nodeId) => setExpanded((current) => { const next = new Set(current); if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId); return next })} selectedId={selectedNodeId} visibleIds={visibleNodeIds} /></div>
+                </aside>
+                <section className="curriculum-node-detail">
+                  {selectedNode ? <>
+                    <header><div><div className="curriculum-detail-kicker"><span>{knowledgeNodeLabel(selectedNode)}</span><StatusBadge tone={verification(selectedNode).tone}>{verification(selectedNode).label}</StatusBadge></div><h2>{selectedNode.canonicalName}</h2><p>{selectedNode.path}</p></div><div className="curriculum-node-actions"><Button onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>编辑</Button><Menu><MenuItem disabled={busy || selectedNode.verificationStatus === 'user_verified'} onClick={() => void confirmNode(selectedNode)}>确认节点</MenuItem><MenuItem onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>移动到章节</MenuItem><MenuItem onClick={() => { setMergeSource(selectedNode); setMergeTargetId('') }}>合并节点</MenuItem><MenuItem onClick={() => setRelation({ node: selectedNode, targetId: '', relation: 'prerequisite_of' })}>添加关联</MenuItem><MenuItem className="is-danger" onClick={() => void archiveNode(selectedNode)}>归档节点</MenuItem></Menu></div></header>
+                    <dl className="curriculum-node-facts"><div><dt>教材页码</dt><dd>{selectedNode.sourcePageStart ? `第 ${selectedNode.sourcePageStart}${selectedNode.sourcePageEnd && selectedNode.sourcePageEnd !== selectedNode.sourcePageStart ? `–${selectedNode.sourcePageEnd}` : ''} 页` : '手动建立'}</dd></div><div><dt>来源</dt><dd>{selectedNode.extractionMethod === 'manual' ? '手动建立' : selectedNode.extractionMethod === 'vision_ocr' ? '扫描识别' : '教材文字提取'}</dd></div><div><dt>识别可信度</dt><dd>{Math.round(selectedNode.confidence * 100)}%</dd></div><div><dt>关联关系</dt><dd>{edgeCount ? `${edgeCount} 条课程关系` : '尚未添加'}</dd></div></dl>
+                    <section className="curriculum-evidence"><h3>教材依据</h3><p>{selectedNode.evidenceText || '该节点由你手动建立，尚未添加教材依据。'}</p></section>
+                    {selectedNode.description && <section className="curriculum-evidence"><h3>备注</h3><p>{selectedNode.description}</p></section>}
+                  </> : <EmptyState description="从左侧选择章节或知识点，即可查看教材依据并进行编辑。" title="选择一个课程节点" />}
+                </section>
+              </Surface>
+            </>
+          )}
+        </AsyncState>
+      )}
+
+      <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
+        <div className="curriculum-dialog-form"><label>科目<input onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /></label><label>教材或课程名称<input onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
+        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><label>类型<select onChange={(event) => setNodeType(event.target.value as KnowledgeNode['nodeType'])} value={nodeType}>{nodeTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>所属章节<select onChange={(event) => setNodeParentId(event.target.value || null)} value={nodeParentId ?? ''}><option value="">作为根节点</option>{nodes.filter((node) => node.id !== nodeEditor?.node?.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">
+        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的节点，历史引用会保留。</p><label>合并到<select onChange={(event) => setMergeTargetId(event.target.value)} value={mergeTargetId}><option value="">请选择节点</option>{nodes.filter((node) => node.id !== mergeSource?.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setRelation(null)} open={Boolean(relation)} title="添加课程关联">
+        <div className="curriculum-dialog-form"><label>关联类型<select onChange={(event) => setRelation((current) => current ? { ...current, relation: event.target.value as NonNullable<NodeRelation>['relation'] } : current)} value={relation?.relation ?? 'prerequisite_of'}><option value="prerequisite_of">前置知识</option><option value="derived_from">由此推导</option><option value="similar_to">相似知识</option><option value="confusable_with">易混淆</option><option value="used_by">被用于</option><option value="appears_in">出现于</option><option value="contains">包含</option></select></label><label>关联到<select onChange={(event) => setRelation((current) => current ? { ...current, targetId: event.target.value } : current)} value={relation?.targetId ?? ''}><option value="">请选择节点</option>{nodes.filter((node) => node.id !== relation?.node.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><div className="curriculum-dialog-actions"><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加关联</Button></div></div>
+      </Dialog>
     </main>
   )
 }
