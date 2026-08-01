@@ -763,8 +763,9 @@
 }
 
 @media (max-width: 1050px) {
-  .app-shell {
-    grid-template-columns: 194px minmax(0, 1fr);
+  .sidebar {
+    width: 194px;
+    flex-basis: 194px;
   }
 
   .workspace {
