@@ -39,6 +39,7 @@ import {
   ExplainableProblemMarkdown,
   SolutionComparison,
 } from './SolutionComparison'
+import './ProblemTags.css'
 import {
   INTELLIGENCE_STATUS_EVENT,
   runIntelligenceWorker,
