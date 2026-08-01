@@ -15,6 +15,7 @@ import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } f
 import { checkForUpdates } from './platform/native'
 import { useToast } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
+import './components/ui/ui.css'
 import './App.css'
 
 function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
