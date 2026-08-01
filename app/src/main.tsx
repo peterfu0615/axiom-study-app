@@ -10,8 +10,13 @@ const storedTheme = localStorage.getItem('axiom.theme') as
   | 'dark'
   | null
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+const previewTheme = import.meta.env.DEV
+  ? new URLSearchParams(window.location.search).get('theme')
+  : null
 const initialTheme: 'light' | 'dark' =
-  storedTheme ?? (prefersDark ? 'dark' : 'light')
+  previewTheme === 'light' || previewTheme === 'dark'
+    ? previewTheme
+    : storedTheme ?? (prefersDark ? 'dark' : 'light')
 document.documentElement.setAttribute('data-theme', initialTheme)
 
 createRoot(document.getElementById('root')!).render(

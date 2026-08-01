@@ -39,6 +39,7 @@ import {
   completeCurriculumImportAttempt,
   createCurriculumImportAttempt,
   failCurriculumImportAttempt,
+  updateCurriculumImportProgress,
   importTextbookSource,
   cleanupTextbookImportTemp,
   mergeKnowledgeNodes,
@@ -156,6 +157,10 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
     structure: parseJSON<unknown | null>(row.structure_json, null),
     tags: parseJSON<unknown | null>(row.tags_json, null),
     audit: parseJSON<unknown | null>(row.audit_json, null),
+    progressCurrent: Number(row.progress_current ?? 0),
+    progressTotal: Math.max(1, Number(row.progress_total ?? 1)),
+    progressFraction: Math.min(1, Math.max(0, Number(row.progress_fraction ?? 0))),
+    progressLabel: String(row.progress_label ?? ''),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   }
@@ -419,6 +424,21 @@ function attemptIdentity(
   }
 }
 
+async function persistCurriculumProgress(
+  jobId: string,
+  stage: CurriculumAIAnalysisStage,
+  lease: CurriculumImportAttemptLease,
+  progress: { current: number; total: number; fraction: number; label: string },
+) {
+  return updateCurriculumImportProgress({
+    ...attemptIdentity(jobId, stage, lease),
+    progressCurrent: progress.current,
+    progressTotal: progress.total,
+    progressFraction: progress.fraction,
+    progressLabel: progress.label,
+  })
+}
+
 async function failCurriculumAttempt(
   jobId: string,
   stage: CurriculumAIAnalysisStage,
@@ -448,6 +468,9 @@ async function runStructureStage(
   if (!lease.created) return getCurriculumImportJob(jobId)
   const initial = await assertImportJobActive(jobId)
   try {
+    await persistCurriculumProgress(jobId, 'ai_analyzing_structure', lease, {
+      current: 0, total: 1, fraction: .05, label: '正在识别教材结构',
+    })
     const recognitionInput = {
       sourceName: initial.sourceName,
       pageCount: initial.extraction?.pageCount ?? 0,
@@ -498,9 +521,13 @@ async function runTagStage(
       id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
     }))
     const chunks = chunkTextbookPages(job.extraction.pages, job.extraction.outline)
+    const totalChunks = Math.max(1, chunks.length)
+    await persistCurriculumProgress(jobId, 'ai_generating_tags', lease, {
+      current: 0, total: totalChunks, fraction: .3, label: '标签创建中',
+    })
     const results = []
     const parsedChunks = []
-    for (const pages of chunks) {
+    for (const [index, pages] of chunks.entries()) {
       const result = await provider.analyzeCurriculumStage({
         prompt: buildCurriculumTagPrompt({
           recognition: job.recognition, outline: job.structure, pages, existingTags,
@@ -509,6 +536,12 @@ async function runTagStage(
       })
       results.push(result)
       parsedChunks.push(parseCurriculumTags(result.rawOutput, subject))
+      const current = index + 1
+      await persistCurriculumProgress(jobId, 'ai_generating_tags', lease, {
+        current, total: totalChunks,
+        fraction: .3 + .55 * current / totalChunks,
+        label: `标签创建中 · ${current}/${totalChunks}`,
+      })
     }
     const parsed: CurriculumTagAnalysis = {
       subject,
@@ -548,6 +581,9 @@ async function runAuditStage(
   })
   if (!lease.created) return getCurriculumImportJob(jobId)
   try {
+    await persistCurriculumProgress(jobId, 'ai_auditing', lease, {
+      current: 0, total: 1, fraction: .85, label: '正在检查分析结果',
+    })
     const tags = job.tags as CurriculumTagAnalysis | null
     const subject = job.recognition?.subject.value?.trim()
     if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
@@ -605,9 +641,12 @@ export async function createCurriculumImportJob(
       `INSERT INTO curriculum_import_jobs (
         id, original_source_path, source_path, source_name, source_type, content_hash,
         status, resume_stage, page_count, extraction_method, extraction_json,
-        provider, model, prompt_version, schema_version, input_hash, created_at, updated_at
+        provider, model, prompt_version, schema_version, input_hash,
+        progress_current, progress_total, progress_fraction, progress_label,
+        created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, 'ai_analyzing_structure',
-        'ai_analyzing_structure', $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
+        'ai_analyzing_structure', $7, $8, $9, $10, $11, $12, $13, $14,
+        0, 1, 0.05, '正在识别教材结构', $15, $15)`,
       [jobId, originalSourcePath, imported.sourcePath, sourceNameFromPath(originalSourcePath),
         imported.sourceType, imported.contentHash, imported.extraction.pageCount,
         imported.extraction.extractionMethod, JSON.stringify(imported.extraction), provider.id,
@@ -626,7 +665,8 @@ export async function createCurriculumImportJob(
   void runStructureStage(jobId, { inFlightRequest }).catch(async (error) => {
     await execute(
       `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       resume_stage = 'waiting_for_review', error_message = $1, updated_at = $2
+       resume_stage = 'waiting_for_review', error_message = $1,
+       progress_label = '分析已暂停', updated_at = $2
        WHERE id = $3`,
       [readableAttemptError(error), Date.now(), jobId],
     ).catch(() => {})
@@ -644,7 +684,8 @@ export async function runCurriculumImportJob(
   } catch (error) {
     await execute(
       `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       error_message = $1, updated_at = $2 WHERE id = $3`,
+       error_message = $1, progress_label = '分析已暂停',
+       updated_at = $2 WHERE id = $3`,
       [String(error), Date.now(), jobId],
     )
     return getCurriculumImportJob(jobId)
@@ -653,7 +694,9 @@ export async function runCurriculumImportJob(
     if (job.status === 'ai_failed_recoverable') {
       await execute(
         `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
-         error_message = NULL, updated_at = $1 WHERE id = $2`,
+         error_message = NULL, progress_current = 1, progress_total = 1,
+         progress_fraction = 1, progress_label = '分析完成',
+         updated_at = $1 WHERE id = $2`,
         [Date.now(), jobId],
       )
       return getCurriculumImportJob(jobId)

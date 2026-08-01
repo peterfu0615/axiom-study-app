@@ -18,7 +18,7 @@ const tags = [
   { id: 'tag-sign-error', subject: '数学', tag_type: 'error', canonical_name: '符号判断错误', aliases: '', description: null, parent_id: null, knowledge_node_id: null, textbook_id: null, source: 'model', taxonomy_version: 1, verification_status: 'needs_review', lifecycle_status: 'candidate', method_class: null, merged_into_id: null, archived_at: null, created_at: now, updated_at: now, problem_count: 4 },
 ]
 
-function importJob(state: string): CurriculumImportJob {
+export function curriculumPreviewImportJob(state: string): CurriculumImportJob {
   const recognition = {
     title: { value: '义务教育教科书 数学 七年级上册', confidence: .97, evidence: '封面标题与目录页' },
     subject: { value: '数学', confidence: .99, evidence: '数学 七年级上册' },
@@ -35,11 +35,27 @@ function importJob(state: string): CurriculumImportJob {
     { title: '相反数', level: 3, pageNumber: 4, evidenceText: '相反数', confidence: .71 },
     { title: '第二章 整式的加减', level: 1, pageNumber: 25, evidenceText: '第二章 整式的加减', confidence: .9 },
   ], warnings: [] }
-  const status = state === 'import-failed' ? 'ai_failed_recoverable' : state === 'import-processing' ? 'ai_analyzing_structure' : 'waiting_for_review'
+  const status = state === 'import-failed' || state === 'global-analysis-failed'
+    ? 'ai_failed_recoverable'
+    : state === 'global-analysis-tags' || state === 'import-progress-minimal'
+      ? 'ai_generating_tags'
+      : state === 'global-analysis-audit'
+        ? 'ai_auditing'
+        : state === 'import-processing' || state === 'global-analysis-structure'
+          ? 'ai_analyzing_structure' : 'waiting_for_review'
+  const progress = status === 'ai_analyzing_structure'
+    ? { current: 0, total: 1, fraction: .18, label: '正在识别教材结构' }
+    : status === 'ai_generating_tags'
+      ? { current: 3, total: 5, fraction: .63, label: '标签创建中 · 3/5' }
+      : status === 'ai_auditing'
+        ? { current: 0, total: 1, fraction: .88, label: '正在检查分析结果' }
+        : status === 'waiting_for_review'
+          ? { current: 1, total: 1, fraction: 1, label: '分析完成' }
+          : { current: 3, total: 5, fraction: .63, label: '分析已暂停' }
   return {
     id: 'preview-import', originalSourcePath: '/preview/math.pdf', sourcePath: '/preview/math.pdf', sourceName: '七年级数学上册.pdf', sourceType: 'pdf', contentHash: 'preview', status,
     stage: status === 'ai_failed_recoverable' ? 'ai_analyzing_structure' : status, pageCount: 128,
-    extractionMethod: 'pdf_text', extraction, recognition, provider: 'preview', model: 'preview', promptVersion: 'v1', schemaVersion: 'v1', inputHash: 'preview', rawOutput: '', errorMessage: status === 'ai_failed_recoverable' ? '模拟的 AI 请求错误，可从安全阶段重试。' : null, providerTaskId: null, structure: extraction.outline, tags: null, audit: null, createdAt: now, updatedAt: now,
+    extractionMethod: 'pdf_text', extraction, recognition, provider: 'preview', model: 'preview', promptVersion: 'v1', schemaVersion: 'v1', inputHash: 'preview', rawOutput: '', errorMessage: status === 'ai_failed_recoverable' ? '模拟的 AI 请求错误，可从安全阶段重试。' : null, providerTaskId: null, structure: extraction.outline, tags: null, audit: null, progressCurrent: progress.current, progressTotal: progress.total, progressFraction: progress.fraction, progressLabel: progress.label, createdAt: now, updatedAt: now,
   }
 }
 
@@ -58,12 +74,16 @@ function relabelBatch(state: string) {
 export function installCurriculumPreviewFixture(state: string) {
   if (typeof window === 'undefined') return
   const fixtureState = state === 'empty' ? 'empty' : state
-  const imports = state.startsWith('import-') ? [importJob(state)] : []
+  const hasImport = state.startsWith('import-') || state.startsWith('global-analysis-')
+  const imports = hasImport ? [curriculumPreviewImportJob(state)] : []
   const currentBatch = relabelBatch(state)
   const hasTextbook = fixtureState !== 'empty'
   const hasTags = state !== 'tags-empty'
+  const invokedCommands: string[] = []
   const internals = {
     invoke: async (command: string, args: Record<string, unknown> = {}) => {
+      invokedCommands.push(command)
+      document.documentElement.dataset.curriculumPreviewCommands = invokedCommands.join(',')
       if (command === 'db_execute') return { rowsAffected: 1, lastInsertId: 0 }
       if (command !== 'db_select') throw new Error(`预览不支持 ${command}`)
       const sql = String(args.sql || '')
@@ -74,9 +94,9 @@ export function installCurriculumPreviewFixture(state: string) {
       if (sql.includes('FROM knowledge_edges')) return [{ id: 'edge-1', subject: '数学', from_node_id: 'knowledge-1', to_node_id: 'section-2', relation_type: 'prerequisite_of', confidence: .8, source: 'textbook', verification_status: 'needs_review' }]
       if (sql.includes('curriculum_import_jobs')) {
         if (sql.includes('WHERE id')) return imports.filter((job) => job.id === params[0]).map((job) => ({
-          id: job.id, original_source_path: job.originalSourcePath, source_path: job.sourcePath, source_name: job.sourceName, source_type: job.sourceType, content_hash: job.contentHash, status: job.status, resume_stage: job.stage, page_count: job.pageCount, extraction_method: job.extractionMethod, extraction_json: JSON.stringify(job.extraction), metadata_json: JSON.stringify(job.recognition), structure_json: JSON.stringify(job.structure), tags_json: null, audit_json: null, provider: job.provider, model: job.model, provider_task_id: null, prompt_version: job.promptVersion, schema_version: job.schemaVersion, input_hash: job.inputHash, raw_output: job.rawOutput, error_message: job.errorMessage, created_at: now, updated_at: now,
+          id: job.id, original_source_path: job.originalSourcePath, source_path: job.sourcePath, source_name: job.sourceName, source_type: job.sourceType, content_hash: job.contentHash, status: job.status, resume_stage: job.stage, page_count: job.pageCount, extraction_method: job.extractionMethod, extraction_json: JSON.stringify(job.extraction), metadata_json: JSON.stringify(job.recognition), structure_json: JSON.stringify(job.structure), tags_json: null, audit_json: null, provider: job.provider, model: job.model, provider_task_id: null, prompt_version: job.promptVersion, schema_version: job.schemaVersion, input_hash: job.inputHash, raw_output: job.rawOutput, error_message: job.errorMessage, progress_current: job.progressCurrent, progress_total: job.progressTotal, progress_fraction: job.progressFraction, progress_label: job.progressLabel, created_at: now, updated_at: now,
         }))
-        return imports.map((job) => ({ id: job.id, original_source_path: job.originalSourcePath, source_path: job.sourcePath, source_name: job.sourceName, source_type: job.sourceType, content_hash: job.contentHash, status: job.status, resume_stage: job.stage, page_count: job.pageCount, extraction_method: job.extractionMethod, extraction_json: JSON.stringify(job.extraction), metadata_json: JSON.stringify(job.recognition), structure_json: JSON.stringify(job.structure), tags_json: null, audit_json: null, provider: job.provider, model: job.model, provider_task_id: null, prompt_version: job.promptVersion, schema_version: job.schemaVersion, input_hash: job.inputHash, raw_output: job.rawOutput, error_message: job.errorMessage, created_at: now, updated_at: now }))
+        return imports.map((job) => ({ id: job.id, original_source_path: job.originalSourcePath, source_path: job.sourcePath, source_name: job.sourceName, source_type: job.sourceType, content_hash: job.contentHash, status: job.status, resume_stage: job.stage, page_count: job.pageCount, extraction_method: job.extractionMethod, extraction_json: JSON.stringify(job.extraction), metadata_json: JSON.stringify(job.recognition), structure_json: JSON.stringify(job.structure), tags_json: null, audit_json: null, provider: job.provider, model: job.model, provider_task_id: null, prompt_version: job.promptVersion, schema_version: job.schemaVersion, input_hash: job.inputHash, raw_output: job.rawOutput, error_message: job.errorMessage, progress_current: job.progressCurrent, progress_total: job.progressTotal, progress_fraction: job.progressFraction, progress_label: job.progressLabel, created_at: now, updated_at: now }))
       }
       if (sql.includes('SELECT td.tag_type, count(*)')) return hasTags ? [{ tag_type: 'knowledge', count: 2 }, { tag_type: 'method', count: 2 }, { tag_type: 'model', count: 1 }, { tag_type: 'error', count: 1 }] : []
       if (sql.includes('SELECT count(*) AS count FROM (')) return [{ count: hasTags ? 5 : 0 }]
@@ -99,5 +119,8 @@ export function installCurriculumPreviewFixture(state: string) {
     transformCallback: () => 0,
     unregisterCallback: () => {},
   }
-  ;(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = internals
+  const previewWindow = window as Window & {
+    __TAURI_INTERNALS__?: unknown
+  }
+  previewWindow.__TAURI_INTERNALS__ = internals
 }

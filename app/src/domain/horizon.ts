@@ -107,6 +107,10 @@ export interface CurriculumImportJob {
   structure: unknown | null
   tags: unknown | null
   audit: unknown | null
+  progressCurrent: number
+  progressTotal: number
+  progressFraction: number
+  progressLabel: string
   createdAt: number
   updatedAt: number
 }

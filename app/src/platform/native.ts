@@ -401,6 +401,13 @@ export interface CurriculumImportAttemptIdentity {
   runGeneration: number
 }
 
+export interface CurriculumImportProgressUpdate extends CurriculumImportAttemptIdentity {
+  progressCurrent: number
+  progressTotal: number
+  progressFraction: number
+  progressLabel: string
+}
+
 export async function createCurriculumImportAttempt(request: {
   jobId: string
   stage: CurriculumAIStage
@@ -409,6 +416,10 @@ export async function createCurriculumImportAttempt(request: {
   restartActiveAttempt?: boolean
 }) {
   return invoke<CurriculumImportAttemptLease>('create_curriculum_import_attempt', { request })
+}
+
+export async function updateCurriculumImportProgress(request: CurriculumImportProgressUpdate) {
+  return invoke<boolean>('update_curriculum_import_progress', { request })
 }
 
 export async function completeCurriculumImportAttempt(request: CurriculumImportAttemptIdentity & {

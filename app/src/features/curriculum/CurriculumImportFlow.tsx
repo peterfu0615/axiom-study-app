@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CurriculumImportJob, TextbookRecognition } from '../../domain/horizon'
 import {
   Button,
+  Dialog,
   EmptyState,
   FileDropzone,
   IconButton,
@@ -15,12 +16,16 @@ import {
   cancelCurriculumImportJob,
   confirmCurriculumImportJob,
   createCurriculumImportJob,
-  getCurriculumImportJob,
   prepareCurriculumImport,
   retryCurriculumImportJob,
   saveCurriculumImportOutline,
 } from '../../platform/horizonDatabase'
-import { startCurriculumImport } from './importCoordinator'
+import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
+import {
+  curriculumAnalysisProgress,
+  curriculumAnalysisStageLabel,
+  isCurriculumAnalysisRunning,
+} from './curriculumAnalysisStatus'
 
 type ImportPhase = 'select' | 'preview' | 'processing' | 'confirm' | 'structure'
 
@@ -60,14 +65,6 @@ function sourceKind(sourcePath: string) {
   return /\.(png|jpe?g|webp)$/iu.test(sourcePath) ? 'image' : 'pdf'
 }
 
-function stageLabel(job: CurriculumImportJob) {
-  if (job.status === 'ai_analyzing_structure') return '正在分析教材知识结构'
-  if (job.status === 'ai_generating_tags') return '正在生成四维标签'
-  if (job.status === 'ai_auditing') return '正在执行质量审计'
-  if (job.status === 'ai_failed_recoverable') return '分析暂时失败'
-  return '正在准备确认结果'
-}
-
 export function CurriculumImportFlow({
   initialJobId,
   onBack,
@@ -79,44 +76,35 @@ export function CurriculumImportFlow({
   onCompleted: (textbookId: string) => void
   onManual: () => void
 }) {
+  const {
+    job: globalJob,
+    publishJob,
+    refresh: refreshGlobalJob,
+  } = useCurriculumAnalysisStatus()
   const [phase, setPhase] = useState<ImportPhase>('select')
   const [sourcePath, setSourcePath] = useState('')
-  const [job, setJob] = useState<CurriculumImportJob | null>(null)
+  const [createdJobId, setCreatedJobId] = useState<string | null>(null)
   const [form, setForm] = useState<MetadataForm>(() => formFromRecognition(null, ''))
   const [outline, setOutline] = useState<TextbookOutlineCandidate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
   const [extractionProgress, setExtractionProgress] = useState<TextbookExtractionProgress | null>(null)
   const hydratedJob = useRef<string | null>(null)
   const extractionRequestId = useRef<string | null>(null)
+  const targetJobId = initialJobId ?? createdJobId
+  const job: CurriculumImportJob | null = targetJobId && globalJob?.id === targetJobId
+    ? globalJob : null
 
   useEffect(() => {
     if (!initialJobId) return
-    void getCurriculumImportJob(initialJobId).then((next) => {
-      if (next) {
-        setJob(next)
-        setSourcePath(next.originalSourcePath)
-        if (next.status === 'waiting_for_review') {
-          setPhase('confirm')
-        } else {
-          setPhase('processing')
-        }
-        void startCurriculumImport(next.id, true).then((resumed) => {
-          if (!resumed) return
-          setJob(resumed)
-          setPhase(resumed.status === 'waiting_for_review' ? 'confirm' : 'processing')
-        })
-      }
-    })
-  }, [initialJobId])
-
-  useEffect(() => {
-    if (!job || !['ai_analyzing_structure', 'ai_generating_tags', 'ai_auditing'].includes(job.status)) return undefined
-    const timer = window.setInterval(() => {
-      void getCurriculumImportJob(job.id).then((next) => next && setJob(next))
-    }, 900)
-    return () => window.clearInterval(timer)
-  }, [job])
+    if (!globalJob || globalJob.id !== initialJobId) {
+      void refreshGlobalJob()
+      return
+    }
+    setSourcePath(globalJob.originalSourcePath)
+    setPhase(globalJob.status === 'waiting_for_review' ? 'confirm' : 'processing')
+  }, [globalJob, initialJobId, refreshGlobalJob])
 
   useEffect(() => {
     if (!job || job.status !== 'waiting_for_review' || hydratedJob.current === job.id || !job.recognition) return
@@ -129,7 +117,7 @@ export function CurriculumImportFlow({
   const selectSource = (path: string) => {
     setSourcePath(path)
     setForm(formFromRecognition(null, path))
-    setJob(null)
+    setCreatedJobId(null)
     setError(null)
     setPhase('preview')
   }
@@ -153,7 +141,10 @@ export function CurriculumImportFlow({
       const imported = await prepareCurriculumImport(sourcePath, requestId, setExtractionProgress)
       extractionRequestId.current = null
       const finished = await createCurriculumImportJob(sourcePath, imported)
-      if (finished) setJob(finished)
+      if (finished) {
+        setCreatedJobId(finished.id)
+        publishJob(finished)
+      }
     } catch (reason) {
       setError(String(reason))
       setPhase('preview')
@@ -167,11 +158,11 @@ export function CurriculumImportFlow({
     setSubmitting(true)
     setError(null)
     try {
-      const next = await retryCurriculumImportJob(job.id)
-      if (next) {
-        setJob(next)
-        setPhase('processing')
-      }
+      setPhase('processing')
+      const retryPromise = retryCurriculumImportJob(job.id)
+      window.setTimeout(() => { void refreshGlobalJob() }, 60)
+      const next = await retryPromise
+      publishJob(next)
     } catch (reason) {
       setError(String(reason))
     } finally {
@@ -180,12 +171,22 @@ export function CurriculumImportFlow({
   }
 
   const cancel = async () => {
-    if (extractionRequestId.current) {
-      await cancelTextbookImport(extractionRequestId.current)
-      extractionRequestId.current = null
+    setCancelConfirmOpen(false)
+    setSubmitting(true)
+    setError(null)
+    try {
+      if (extractionRequestId.current) {
+        await cancelTextbookImport(extractionRequestId.current)
+        extractionRequestId.current = null
+      }
+      if (job) await cancelCurriculumImportJob(job.id)
+      publishJob(null)
+      onBack()
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setSubmitting(false)
     }
-    if (job) await cancelCurriculumImportJob(job.id)
-    onBack()
   }
 
   const continueToStructure = () => {
@@ -222,16 +223,16 @@ export function CurriculumImportFlow({
           <h1>导入教材</h1>
           <p className="subtitle">先在本地识别带页码全文，再由 AI 分析结构与候选标签。</p>
         </div>
-        <Button onClick={() => void cancel()} variant="ghost">返回课程</Button>
+        <Button onClick={onBack} variant="ghost">返回课程</Button>
       </header>
 
-      <ol className="curriculum-import-steps" aria-label="教材导入步骤">
+      {!(phase === 'processing' && job) && <ol className="curriculum-import-steps" aria-label="教材导入步骤">
         {['选择文件', '文件预览', 'AI 识别', '确认教材信息', '检查课程结构'].map((label, index) => (
           <li className={index + 1 === step ? 'is-active' : index + 1 < step ? 'is-complete' : ''} key={label}>
             <span>{index + 1}</span>{label}
           </li>
         ))}
-      </ol>
+      </ol>}
 
       {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
 
@@ -289,29 +290,36 @@ export function CurriculumImportFlow({
               ? Math.max(2, Math.round(extractionProgress.currentPage / extractionProgress.totalPages * 46))
               : 2}
           />
-          <div className="curriculum-import-card__actions"><Button onClick={() => void cancel()}>取消</Button></div>
+          <div className="curriculum-import-card__actions"><Button onClick={() => setCancelConfirmOpen(true)}>取消</Button></div>
         </section>
       )}
 
-      {phase === 'processing' && job && ['ai_analyzing_structure', 'ai_generating_tags', 'ai_auditing'].includes(job.status) && (
-        <section className="curriculum-import-card curriculum-import-processing">
-          <span className="ax-spinner" />
-          <h2>{stageLabel(job)}</h2>
-          <p>AI 请求已经开始。你可以返回课程，稍后从唯一恢复入口继续。</p>
-          <Progress
-            detail={stageLabel(job)}
-            label="教材 AI 分析"
-            value={job.status === 'ai_analyzing_structure' ? 52 : job.status === 'ai_generating_tags' ? 72 : 88}
-          />
-          <div className="curriculum-import-card__actions"><Button onClick={onBack}>后台继续</Button><Button onClick={() => void cancel()} variant="ghost">取消导入</Button></div>
+      {phase === 'processing' && job && isCurriculumAnalysisRunning(job) && (
+        <section className="curriculum-analysis-card" aria-live="polite">
+          <span aria-hidden="true" className="curriculum-analysis-card__glow" />
+          <h2>{curriculumAnalysisStageLabel(job)}</h2>
+          <div
+            aria-label={job.progressLabel || curriculumAnalysisStageLabel(job)}
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={Math.round(curriculumAnalysisProgress(job) * 100)}
+            className="curriculum-analysis-progress"
+            role="progressbar"
+          >
+            <div
+              className="curriculum-analysis-progress__fill"
+              style={{ width: `${curriculumAnalysisProgress(job) * 100}%` }}
+            />
+          </div>
+          <button className="curriculum-analysis-cancel" onClick={() => setCancelConfirmOpen(true)} type="button">取消分析</button>
         </section>
       )}
 
       {job?.status === 'ai_failed_recoverable' && (
         <section className="curriculum-import-card curriculum-import-processing curriculum-import-processing--error">
-          <h2>这次识别没有完成</h2>
+          <h2>分析已暂停</h2>
           <p>{job.errorMessage || '请检查文件后重试。'}</p>
-          <div className="curriculum-import-card__actions"><Button loading={submitting} onClick={() => void retry()} variant="primary">重试</Button><Button onClick={() => setPhase('select')}>重新选择文件</Button></div>
+          <div className="curriculum-import-card__actions"><Button loading={submitting} onClick={() => void retry()} variant="primary">重新尝试</Button><Button onClick={() => setCancelConfirmOpen(true)} variant="ghost">放弃分析</Button></div>
         </section>
       )}
 
@@ -348,6 +356,16 @@ export function CurriculumImportFlow({
           <div className="curriculum-import-card__actions"><Button loading={submitting} onClick={() => void confirmStructure()} variant="primary">使用此课程结构</Button><Button onClick={() => setPhase('confirm')}>返回教材信息</Button></div>
         </section>
       )}
+
+      <Dialog onClose={() => setCancelConfirmOpen(false)} open={cancelConfirmOpen} title="取消教材分析">
+        <div className="curriculum-dialog-form">
+          <p>取消后将清理本次分析的断点和临时数据，不会删除原始 PDF。</p>
+          <div className="curriculum-dialog-actions">
+            <Button onClick={() => setCancelConfirmOpen(false)} variant="ghost">暂不取消</Button>
+            <Button loading={submitting} onClick={() => void cancel()} variant="secondary">确认取消</Button>
+          </div>
+        </div>
+      </Dialog>
     </main>
   )
 }

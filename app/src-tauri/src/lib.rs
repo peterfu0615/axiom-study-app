@@ -154,6 +154,12 @@ pub fn run() {
             sql: include_str!("../migrations/0021_restore_sqlite_api_keys.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            description: "curriculum_analysis_progress",
+            sql: include_str!("../migrations/0022_curriculum_analysis_progress.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
@@ -223,6 +229,7 @@ pub fn run() {
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,
             horizon::create_curriculum_import_attempt,
+            horizon::update_curriculum_import_progress,
             horizon::complete_curriculum_import_attempt,
             horizon::fail_curriculum_import_attempt,
             updater::get_app_version,

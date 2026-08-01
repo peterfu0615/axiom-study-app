@@ -3,8 +3,10 @@ import {
   reconcileCurriculumImportResumeSlot,
   runCurriculumImportJob,
 } from '../../platform/horizonDatabase'
+import { isCurriculumAnalysisRunning } from './curriculumAnalysisStatus'
 
 const activeJobs = new Set<string>()
+let startupResume: Promise<Awaited<ReturnType<typeof getCurriculumImportJob>>> | null = null
 
 export async function startCurriculumImport(jobId: string, resumeAfterRestart = false) {
   if (activeJobs.has(jobId)) return getCurriculumImportJob(jobId)
@@ -21,5 +23,16 @@ export async function startCurriculumImport(jobId: string, resumeAfterRestart = 
 }
 
 export async function resumeCurriculumImports() {
-  return reconcileCurriculumImportResumeSlot()
+  if (startupResume) return startupResume
+  startupResume = (async () => {
+    const slot = await reconcileCurriculumImportResumeSlot()
+    if (slot && isCurriculumAnalysisRunning(slot)) {
+      // App startup is the only implicit recovery signal. Opening the progress
+      // page never reaches this coordinator and therefore cannot create an
+      // attempt or redispatch a provider request.
+      void startCurriculumImport(slot.id, true)
+    }
+    return slot
+  })()
+  return startupResume
 }

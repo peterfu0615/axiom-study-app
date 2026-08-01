@@ -222,6 +222,21 @@ pub struct CurriculumImportAttemptLease {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateCurriculumImportProgressRequest {
+    job_id: String,
+    stage: String,
+    attempt_id: String,
+    attempt_number: i64,
+    run_token: String,
+    run_generation: i64,
+    progress_current: i64,
+    progress_total: i64,
+    progress_fraction: f64,
+    progress_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompleteCurriculumImportAttemptRequest {
     job_id: String,
     stage: String,
@@ -277,6 +292,24 @@ fn next_curriculum_stage(stage: &str) -> Result<(&'static str, &'static str), St
         "ai_analyzing_structure" => Ok(("ai_generating_tags", "ai_generating_tags")),
         "ai_generating_tags" => Ok(("ai_auditing", "ai_auditing")),
         "ai_auditing" => Ok(("waiting_for_review", "waiting_for_review")),
+        _ => Err("无效的教材 AI 分析阶段".to_string()),
+    }
+}
+
+fn curriculum_stage_progress(stage: &str) -> Result<(i64, i64, f64, &'static str), String> {
+    match stage {
+        "ai_analyzing_structure" => Ok((0, 1, 0.05, "正在识别教材结构")),
+        "ai_generating_tags" => Ok((0, 1, 0.30, "标签创建中")),
+        "ai_auditing" => Ok((0, 1, 0.85, "正在检查分析结果")),
+        _ => Err("无效的教材 AI 分析阶段".to_string()),
+    }
+}
+
+fn next_curriculum_progress(stage: &str) -> Result<(i64, i64, f64, &'static str), String> {
+    match stage {
+        "ai_analyzing_structure" => curriculum_stage_progress("ai_generating_tags"),
+        "ai_generating_tags" => curriculum_stage_progress("ai_auditing"),
+        "ai_auditing" => Ok((1, 1, 1.0, "分析完成")),
         _ => Err("无效的教材 AI 分析阶段".to_string()),
     }
 }
@@ -422,6 +455,7 @@ async fn create_curriculum_import_attempt_in_transaction(
     let run_token = Uuid::new_v4().to_string();
     let next_generation = run_generation.saturating_add(1);
     let now = chrono_millis()?;
+    let (_, _, stage_fraction, stage_label) = curriculum_stage_progress(stage)?;
     sqlx::query(
         "INSERT INTO curriculum_import_attempts ( \
            id, job_id, stage, attempt_number, status, started_at, run_token, run_generation \
@@ -441,7 +475,10 @@ async fn create_curriculum_import_attempt_in_transaction(
         "UPDATE curriculum_import_jobs SET status = $1, resume_stage = $1, \
          active_attempt_id = $2, active_attempt_number = $3, stage_started_at = $4, \
          run_token = $5, run_generation = $6, prompt_version = $7, schema_version = $8, \
-         error_message = NULL, updated_at = $4 WHERE id = $9",
+         progress_current = CASE WHEN progress_fraction < $9 THEN 0 ELSE progress_current END, \
+         progress_total = CASE WHEN progress_fraction < $9 THEN 1 ELSE progress_total END, \
+         progress_fraction = MAX(progress_fraction, $9), progress_label = $10, \
+         error_message = NULL, updated_at = $4 WHERE id = $11",
     )
     .bind(stage)
     .bind(&attempt_id)
@@ -451,6 +488,8 @@ async fn create_curriculum_import_attempt_in_transaction(
     .bind(next_generation)
     .bind(request.prompt_version.trim())
     .bind(request.schema_version.trim())
+    .bind(stage_fraction)
+    .bind(stage_label)
     .bind(&request.job_id)
     .execute(&mut *conn)
     .await
@@ -462,6 +501,86 @@ async fn create_curriculum_import_attempt_in_transaction(
         run_generation: next_generation,
         created: true,
     })
+}
+
+async fn update_curriculum_import_progress_in_transaction(
+    conn: &mut SqliteConnection,
+    request: &UpdateCurriculumImportProgressRequest,
+) -> Result<bool, String> {
+    let stage = validate_curriculum_ai_stage(&request.stage)?;
+    if request.progress_current < 0
+        || request.progress_total <= 0
+        || request.progress_current > request.progress_total
+        || !request.progress_fraction.is_finite()
+        || !(0.0..=1.0).contains(&request.progress_fraction)
+        || request.progress_label.trim().is_empty()
+    {
+        return Err("教材分析进度数据无效".to_string());
+    }
+    if !active_attempt_matches(
+        conn,
+        &request.job_id,
+        stage,
+        &request.attempt_id,
+        request.attempt_number,
+        &request.run_token,
+        request.run_generation,
+    )
+    .await?
+    {
+        return Ok(false);
+    }
+    let now = chrono_millis()?;
+    let result = sqlx::query(
+        "UPDATE curriculum_import_jobs SET \
+         progress_current = CASE WHEN $1 > progress_current THEN $1 ELSE progress_current END, \
+         progress_total = $2, \
+         progress_fraction = CASE WHEN $3 > progress_fraction THEN $3 ELSE progress_fraction END, \
+         progress_label = CASE \
+           WHEN $1 >= progress_current AND $3 >= progress_fraction THEN $4 \
+           ELSE progress_label END, updated_at = $5 \
+         WHERE id = $6 AND resume_stage = $7 AND active_attempt_id = $8 \
+           AND active_attempt_number = $9 AND run_token = $10 AND run_generation = $11",
+    )
+    .bind(request.progress_current)
+    .bind(request.progress_total)
+    .bind(request.progress_fraction)
+    .bind(request.progress_label.trim())
+    .bind(now)
+    .bind(&request.job_id)
+    .bind(stage)
+    .bind(&request.attempt_id)
+    .bind(request.attempt_number)
+    .bind(&request.run_token)
+    .bind(request.run_generation)
+    .execute(&mut *conn)
+    .await
+    .map_err(|error| format!("更新教材分析进度失败：{error}"))?;
+    Ok(result.rows_affected() == 1)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_curriculum_import_progress(
+    state: State<'_, DbState>,
+    request: UpdateCurriculumImportProgressRequest,
+) -> Result<bool, String> {
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    conn.execute("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("无法开始教材进度事务：{error}"))?;
+    let result = update_curriculum_import_progress_in_transaction(conn, &request).await;
+    match result {
+        Ok(value) => conn
+            .execute("COMMIT")
+            .await
+            .map(|_| value)
+            .map_err(|error| format!("提交教材进度事务失败：{error}")),
+        Err(error) => {
+            let _ = conn.execute("ROLLBACK").await;
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -520,6 +639,7 @@ async fn complete_curriculum_import_attempt_in_transaction(
 ) -> Result<bool, String> {
     let stage = validate_curriculum_ai_stage(&request.stage)?;
     let (next_status, next_stage) = next_curriculum_stage(stage)?;
+    let (next_current, next_total, next_fraction, next_label) = next_curriculum_progress(stage)?;
     if !active_attempt_matches(
         conn,
         &request.job_id,
@@ -562,9 +682,10 @@ async fn complete_curriculum_import_attempt_in_transaction(
          tags_json = COALESCE($5, tags_json), audit_json = COALESCE($6, audit_json), \
          provider_task_id = COALESCE($7, provider_task_id), raw_output = $8, \
          error_message = NULL, active_attempt_id = NULL, active_attempt_number = NULL, \
-         stage_started_at = NULL, updated_at = $9 \
-         WHERE id = $10 AND resume_stage = $11 AND active_attempt_id = $12 \
-           AND active_attempt_number = $13 AND run_token = $14 AND run_generation = $15",
+         stage_started_at = NULL, progress_current = $9, progress_total = $10, \
+         progress_fraction = $11, progress_label = $12, updated_at = $13 \
+         WHERE id = $14 AND resume_stage = $15 AND active_attempt_id = $16 \
+           AND active_attempt_number = $17 AND run_token = $18 AND run_generation = $19",
     )
     .bind(next_status)
     .bind(next_stage)
@@ -574,6 +695,10 @@ async fn complete_curriculum_import_attempt_in_transaction(
     .bind(&request.audit_json)
     .bind(&request.provider_task_id)
     .bind(&request.raw_output)
+    .bind(next_current)
+    .bind(next_total)
+    .bind(next_fraction)
+    .bind(next_label)
     .bind(now)
     .bind(&request.job_id)
     .bind(stage)
@@ -656,7 +781,8 @@ async fn fail_curriculum_import_attempt_in_transaction(
     let job = sqlx::query(
         "UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable', \
          resume_stage = $1, error_message = $2, active_attempt_id = NULL, \
-         active_attempt_number = NULL, stage_started_at = NULL, updated_at = $3 \
+         active_attempt_number = NULL, stage_started_at = NULL, \
+         progress_label = '分析已暂停', updated_at = $3 \
          WHERE id = $4 AND resume_stage = $5 AND active_attempt_id = $6 \
            AND active_attempt_number = $7 AND run_token = $8 AND run_generation = $9",
     )
@@ -729,6 +855,10 @@ mod curriculum_attempt_tests {
                provider_task_id TEXT,
                raw_output TEXT,
                error_message TEXT,
+               progress_current INTEGER NOT NULL DEFAULT 0,
+               progress_total INTEGER NOT NULL DEFAULT 1,
+               progress_fraction REAL NOT NULL DEFAULT 0,
+               progress_label TEXT NOT NULL DEFAULT '',
                updated_at INTEGER NOT NULL DEFAULT 0
              )",
         )
@@ -842,6 +972,24 @@ mod curriculum_attempt_tests {
         }
     }
 
+    async fn update_progress(
+        conn: &mut SqliteConnection,
+        request: &UpdateCurriculumImportProgressRequest,
+    ) -> Result<bool, String> {
+        conn.execute("BEGIN IMMEDIATE").await.unwrap();
+        let result = update_curriculum_import_progress_in_transaction(conn, request).await;
+        match result {
+            Ok(value) => {
+                conn.execute("COMMIT").await.unwrap();
+                Ok(value)
+            }
+            Err(error) => {
+                conn.execute("ROLLBACK").await.unwrap();
+                Err(error)
+            }
+        }
+    }
+
     fn identity(
         job_id: &str,
         stage: &str,
@@ -895,6 +1043,30 @@ mod curriculum_attempt_tests {
             run_token,
             run_generation,
             error_message: "Provider unavailable".to_string(),
+        }
+    }
+
+    fn progress_request(
+        job_id: &str,
+        stage: &str,
+        lease: &CurriculumImportAttemptLease,
+        current: i64,
+        total: i64,
+        fraction: f64,
+    ) -> UpdateCurriculumImportProgressRequest {
+        let (job_id, stage, attempt_id, attempt_number, run_token, run_generation) =
+            identity(job_id, stage, lease);
+        UpdateCurriculumImportProgressRequest {
+            job_id,
+            stage,
+            attempt_id,
+            attempt_number,
+            run_token,
+            run_generation,
+            progress_current: current,
+            progress_total: total,
+            progress_fraction: fraction,
+            progress_label: format!("标签创建中 · {current}/{total}"),
         }
     }
 
@@ -1045,6 +1217,62 @@ mod curriculum_attempt_tests {
             .await
             .unwrap();
             assert_eq!(active, retry.attempt_id);
+        });
+    }
+
+    #[test]
+    fn progress_is_persisted_monotonically_and_rejects_a_stale_attempt() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = test_connection().await;
+            insert_job(&mut conn, "job", "ai_generating_tags").await;
+            let first = create_attempt(
+                &mut conn,
+                &create_request("job", "ai_generating_tags", false),
+            )
+            .await
+            .unwrap();
+            assert!(update_progress(
+                &mut conn,
+                &progress_request("job", "ai_generating_tags", &first, 2, 5, 0.52),
+            )
+            .await
+            .unwrap());
+            assert!(update_progress(
+                &mut conn,
+                &progress_request("job", "ai_generating_tags", &first, 1, 5, 0.41),
+            )
+            .await
+            .unwrap());
+            let persisted: (i64, i64, f64, String) = sqlx::query_as(
+                "SELECT progress_current, progress_total, progress_fraction, progress_label
+                 FROM curriculum_import_jobs WHERE id = 'job'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(persisted.0, 2);
+            assert_eq!(persisted.1, 5);
+            assert!((persisted.2 - 0.52).abs() < f64::EPSILON);
+            assert_eq!(persisted.3, "标签创建中 · 2/5");
+
+            let retry = create_attempt(
+                &mut conn,
+                &create_request("job", "ai_generating_tags", true),
+            )
+            .await
+            .unwrap();
+            assert!(!update_progress(
+                &mut conn,
+                &progress_request("job", "ai_generating_tags", &first, 5, 5, 0.85),
+            )
+            .await
+            .unwrap());
+            assert!(update_progress(
+                &mut conn,
+                &progress_request("job", "ai_generating_tags", &retry, 3, 5, 0.63),
+            )
+            .await
+            .unwrap());
         });
     }
 

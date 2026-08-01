@@ -42,6 +42,10 @@ function applyTheme(resolved: ResolvedTheme) {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
+    const previewTheme = import.meta.env.DEV
+      ? new URLSearchParams(window.location.search).get('theme')
+      : null
+    if (previewTheme === 'light' || previewTheme === 'dark') return previewTheme
     if (typeof localStorage === 'undefined') return 'system'
     return (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? 'system'
   })

@@ -9,13 +9,14 @@ import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
-import { resumeCurriculumImports } from './features/curriculum/importCoordinator'
+import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
+import { CurriculumAnalysisStatusButton } from './features/curriculum/CurriculumAnalysisStatusButton'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
 import { checkForUpdates } from './platform/native'
-import { useToast } from './platform/useToast'
+import { useToast, type ToastState } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
 import './components/ui/ui.css'
 import './App.css'
@@ -26,6 +27,42 @@ function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
     return
   }
   void getCurrentWindow().startDragging()
+}
+
+function AppRuntimeShell({
+  section,
+  setSection,
+  toast,
+}: {
+  section: AppSection
+  setSection: (section: AppSection) => void
+  toast: ToastState | null
+}) {
+  return (
+    <div className="app-shell">
+      <div
+        className="window-drag-strip"
+        onMouseDown={startWindowDrag}
+      />
+      <Sidebar
+        active={section}
+        onChange={setSection}
+        statusControl={<CurriculumAnalysisStatusButton onOpen={() => setSection('curriculum')} />}
+      />
+      {section === 'capture' ? (
+        <CaptureWorkspace />
+      ) : section === 'library' ? (
+        <ProblemLibrary />
+      ) : section === 'curriculum' ? (
+        <CurriculumWorkspace />
+      ) : section === 'settings' ? (
+        <AISettings />
+      ) : (
+        <ModulePlaceholder section={section} />
+      )}
+      <Toast toast={toast} />
+    </div>
+  )
 }
 
 function AppRuntime() {
@@ -48,7 +85,6 @@ function AppRuntime() {
           resumeProblemAIPipeline(),
           resumeSolutionPipeline(),
           resumeIntelligencePipeline(),
-          resumeCurriculumImports(),
         ])
       } catch (error) {
         console.error('恢复 AI Pipeline 失败', error)
@@ -74,35 +110,22 @@ function AppRuntime() {
     return <DatabaseLocationErrorDialog check={dbCheck} />
   }
 
-  return (
-    <div className="app-shell">
-      <div
-        className="window-drag-strip"
-        onMouseDown={startWindowDrag}
-      />
-      <Sidebar active={section} onChange={setSection} />
-      {section === 'capture' ? (
-        <CaptureWorkspace />
-      ) : section === 'library' ? (
-        <ProblemLibrary />
-      ) : section === 'curriculum' ? (
-        <CurriculumWorkspace />
-      ) : section === 'settings' ? (
-        <AISettings />
-      ) : (
-        <ModulePlaceholder section={section} />
-      )}
-      <Toast toast={toast} />
-    </div>
-  )
+  return <CurriculumAnalysisProvider enabled={dbCheck?.ok === true}>
+    <AppRuntimeShell section={section} setSection={setSection} toast={toast} />
+  </CurriculumAnalysisProvider>
 }
 
 function App() {
-  const preview = import.meta.env.DEV
-    ? new URLSearchParams(window.location.search).get('ui-preview')
+  const previewParams = import.meta.env.DEV
+    ? new URLSearchParams(window.location.search)
     : null
+  const preview = previewParams?.get('ui-preview') ?? null
   if (preview === 'curriculum') {
-    return <CurriculumPreview state={new URLSearchParams(window.location.search).get('state') ?? 'populated'} />
+    const previewTheme = previewParams?.get('theme')
+    if (previewTheme === 'light' || previewTheme === 'dark') {
+      document.documentElement.setAttribute('data-theme', previewTheme)
+    }
+    return <CurriculumPreview state={previewParams?.get('state') ?? 'populated'} />
   }
   return <AppRuntime />
 }
