@@ -156,7 +156,7 @@ export interface TagDefinition {
   parentId: string | null
   knowledgeNodeId: string | null
   textbookId: string | null
-  source: 'textbook' | 'model' | 'user' | 'template' | 'legacy'
+  source: 'textbook_extracted' | 'ai_inferred' | 'existing_library' | 'user_created'
   taxonomyVersion: number
   verificationStatus: VerificationStatus
   lifecycleStatus: TagLifecycleStatus

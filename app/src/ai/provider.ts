@@ -56,6 +56,16 @@ import {
   TextbookRecognitionParseError,
 } from './textbookRecognitionParser'
 
+export interface CurriculumStageInput {
+  prompt: string
+  jsonSchema: object
+}
+
+export interface CurriculumStageProviderResult {
+  rawOutput: string
+  providerTaskId: string | null
+}
+
 export const VISION_MODEL_REQUIRED =
   '当前模型不支持图片输入，请选择支持视觉的 VLM Provider。'
 export const TEXT_MODEL_REQUIRED =
@@ -159,6 +169,9 @@ export interface AIProvider {
   recognizeTextbook?: (
     input: TextbookRecognitionInput,
   ) => Promise<TextbookRecognitionProviderResult>
+  analyzeCurriculumStage?: (
+    input: CurriculumStageInput,
+  ) => Promise<CurriculumStageProviderResult>
 }
 
 export interface SolutionCapableProvider extends AIProvider {
@@ -307,6 +320,16 @@ export class MockAIProvider implements AIProvider {
       rawOutput,
       repairStrategy: null,
     }
+  }
+
+  async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
+    const isAudit = input.prompt.includes('质量审计助手')
+    const subject = input.prompt.match(/"subject"\s*:\s*\{\s*"value"\s*:\s*"([^"]+)"/u)?.[1] ?? '数学'
+    return { rawOutput: JSON.stringify(isAudit ? {
+      accepted_names: [], rejected_names: [], warnings: ['Mock Provider 未执行真实质量审计。'],
+    } : {
+      subject, tags: [], warnings: ['Mock Provider 未生成真实课程标签。'],
+    }), providerTaskId: null }
   }
 }
 
@@ -586,6 +609,17 @@ ${JSON.stringify(structuredProblem)}
     }
   }
 
+  async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const { baseUrl, model, credentialRef } = this.profile
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl, model, credentialRef, prompt: input.prompt,
+      jsonSchema: JSON.stringify(input.jsonSchema),
+    })
+    if (response.errorMessage) throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    return { rawOutput: response.rawOutput, providerTaskId: null }
+  }
+
 }
 
 export class AntigravityCLIProvider implements AIProvider {
@@ -839,6 +873,16 @@ ${JSON.stringify(structuredProblem)}
       throw error
     }
   }
+
+  async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath, model: this.profile.model,
+      prompt: input.prompt, jsonSchema: JSON.stringify(input.jsonSchema),
+    })
+    if (response.errorMessage) throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    return { rawOutput: response.rawOutput, providerTaskId: null }
+  }
 }
 
 let activeProviders: AIProvider[] = [new MockAIProvider()]
@@ -903,6 +947,17 @@ export function getTextbookRecognitionProvider() {
   )
   if (!provider) throw new Error(TEXT_MODEL_REQUIRED)
   return provider
+}
+
+export function getCurriculumAnalysisProvider(providerId?: string, model?: string) {
+  const providers = activeProviders.filter(
+    (candidate): candidate is AIProvider & {
+      analyzeCurriculumStage: NonNullable<AIProvider['analyzeCurriculumStage']>
+    } => candidate.supportsText && typeof candidate.analyzeCurriculumStage === 'function',
+  )
+  if (!providers.length) throw new Error(TEXT_MODEL_REQUIRED)
+  if (!providerId || !model) return providers[0]
+  return orderMatchingProviders(providers, providerId, model)[0]
 }
 
 function orderMatchingProviders<T extends AIProvider>(

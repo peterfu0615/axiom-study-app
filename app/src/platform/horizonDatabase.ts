@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { AIProblemAnalysis, HorizonTagType } from '../domain/models'
 import {
   mapCandidatesToControlledTags,
+  normalizeTagName,
   type CurriculumImportJob,
   type KnowledgeNode,
   type KnowledgeEdge,
@@ -12,7 +13,22 @@ import {
 } from '../domain/horizon'
 import {
   getTextbookRecognitionProvider,
+  getCurriculumAnalysisProvider,
 } from '../ai/provider'
+import {
+  buildCurriculumAuditPrompt,
+  buildCurriculumTagPrompt,
+  CURRICULUM_AUDIT_PROMPT_VERSION,
+  CURRICULUM_AUDIT_SCHEMA_VERSION,
+  CURRICULUM_TAG_PROMPT_VERSION,
+  CURRICULUM_TAG_SCHEMA_VERSION,
+  curriculumAuditJSONSchema,
+  curriculumTagsJSONSchema,
+  parseCurriculumAudit,
+  parseCurriculumTags,
+  reconcileCurriculumTagCandidates,
+  type CurriculumTagAnalysis,
+} from '../ai/curriculumAnalysis'
 import {
   TEXTBOOK_RECOGNITION_PROMPT_VERSION,
   TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
@@ -171,7 +187,7 @@ function rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
     parentId: nullableString(row.parent_id),
     knowledgeNodeId: nullableString(row.knowledge_node_id),
     textbookId: nullableString(row.textbook_id),
-    source: String(row.source) as TagDefinition['source'],
+    source: String(row.origin_kind || 'user_created') as TagDefinition['source'],
     taxonomyVersion: Number(row.taxonomy_version),
     verificationStatus: String(row.verification_status) as TagDefinition['verificationStatus'],
     lifecycleStatus: String(row.lifecycle_status) as TagDefinition['lifecycleStatus'],
@@ -413,8 +429,8 @@ async function runStructureStage(
       [result.rawOutput, Date.now(), attemptId],
     )
     await execute(
-      `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
-       resume_stage = 'waiting_for_review', metadata_json = $1, structure_json = $2,
+      `UPDATE curriculum_import_jobs SET status = 'ai_generating_tags',
+       resume_stage = 'ai_generating_tags', metadata_json = $1, structure_json = $2,
        raw_output = $3, error_message = NULL, updated_at = $4
        WHERE id = $5 AND status = 'ai_analyzing_structure'`,
       [JSON.stringify(result.recognition), JSON.stringify(initial.extraction?.outline ?? []),
@@ -432,7 +448,124 @@ async function runStructureStage(
        WHERE id = $3`, [String(error), Date.now(), jobId],
     )
   }
+  const next = await getCurriculumImportJob(jobId)
+  return next?.stage === 'ai_generating_tags' ? runTagStage(jobId) : next
+}
+
+async function runTagStage(jobId: string): Promise<CurriculumImportJob | null> {
+  const job = await assertImportJobActive(jobId)
+  if (!job.recognition || !job.extraction) throw new Error('知识结构阶段结果不完整')
+  const subject = job.recognition.subject.value?.trim()
+  if (!subject) throw new Error('请先识别并确认教材科目')
+  const existing = await listTagDefinitions(subject)
+  const attemptId = await startAttempt(jobId, 'ai_generating_tags')
+  try {
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'ai_generating_tags',
+       resume_stage = 'ai_generating_tags', error_message = NULL,
+       prompt_version = $1, schema_version = $2, updated_at = $3 WHERE id = $4`,
+      [CURRICULUM_TAG_PROMPT_VERSION, CURRICULUM_TAG_SCHEMA_VERSION, Date.now(), jobId],
+    )
+    const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
+    const result = await provider.analyzeCurriculumStage({
+      prompt: buildCurriculumTagPrompt({
+        recognition: job.recognition, outline: job.structure,
+        pages: job.extraction.pages,
+        existingTags: existing.map((tag) => ({
+          id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
+        })),
+      }),
+      jsonSchema: curriculumTagsJSONSchema,
+    })
+    const parsed = parseCurriculumTags(result.rawOutput, subject)
+    const tags: CurriculumTagAnalysis = {
+      ...parsed,
+      candidates: reconcileCurriculumTagCandidates(parsed.candidates, existing.map((tag) => ({
+        id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
+      }))),
+    }
+    const currentAttempt = await select<Array<{ status: string }>>(
+      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
+    )
+    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
+    await execute(
+      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
+       provider_task_id = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
+      [result.rawOutput, result.providerTaskId, Date.now(), attemptId],
+    )
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'ai_auditing', resume_stage = 'ai_auditing',
+       tags_json = $1, provider_task_id = $2, raw_output = $3, updated_at = $4
+       WHERE id = $5 AND status = 'ai_generating_tags'`,
+      [JSON.stringify(tags), result.providerTaskId, result.rawOutput, Date.now(), jobId],
+    )
+  } catch (error) {
+    await failCurriculumAttempt(jobId, attemptId, 'ai_generating_tags', error)
+    return getCurriculumImportJob(jobId)
+  }
+  return runAuditStage(jobId)
+}
+
+async function runAuditStage(jobId: string): Promise<CurriculumImportJob | null> {
+  const job = await assertImportJobActive(jobId)
+  const tags = job.tags as CurriculumTagAnalysis | null
+  const subject = job.recognition?.subject.value?.trim()
+  if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
+  const attemptId = await startAttempt(jobId, 'ai_auditing')
+  try {
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'ai_auditing', resume_stage = 'ai_auditing',
+       error_message = NULL, prompt_version = $1, schema_version = $2,
+       updated_at = $3 WHERE id = $4`,
+      [CURRICULUM_AUDIT_PROMPT_VERSION, CURRICULUM_AUDIT_SCHEMA_VERSION, Date.now(), jobId],
+    )
+    const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
+    const result = await provider.analyzeCurriculumStage({
+      prompt: buildCurriculumAuditPrompt({
+        subject, candidates: tags.candidates,
+        knowledgeNames: tags.candidates.filter((tag) => tag.tagType === 'knowledge').map((tag) => tag.canonicalName),
+      }),
+      jsonSchema: curriculumAuditJSONSchema,
+    })
+    const audit = parseCurriculumAudit(result.rawOutput)
+    const currentAttempt = await select<Array<{ status: string }>>(
+      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
+    )
+    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
+    await execute(
+      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
+       provider_task_id = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
+      [result.rawOutput, result.providerTaskId, Date.now(), attemptId],
+    )
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
+       resume_stage = 'waiting_for_review', audit_json = $1, provider_task_id = $2,
+       raw_output = $3, error_message = NULL, updated_at = $4
+       WHERE id = $5 AND status = 'ai_auditing'`,
+      [JSON.stringify(audit), result.providerTaskId, result.rawOutput, Date.now(), jobId],
+    )
+  } catch (error) {
+    await failCurriculumAttempt(jobId, attemptId, 'ai_auditing', error)
+  }
   return getCurriculumImportJob(jobId)
+}
+
+async function failCurriculumAttempt(
+  jobId: string,
+  attemptId: string,
+  resumeStage: Exclude<CurriculumImportJob['stage'], 'waiting_for_review'>,
+  error: unknown,
+) {
+  await execute(
+    `UPDATE curriculum_import_attempts SET status = 'failed', error_message = $1,
+     finished_at = $2 WHERE id = $3 AND status = 'running'`,
+    [String(error), Date.now(), attemptId],
+  )
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
+     resume_stage = $1, error_message = $2, updated_at = $3 WHERE id = $4`,
+    [resumeStage, String(error), Date.now(), jobId],
+  )
 }
 
 export async function createCurriculumImportJob(
@@ -480,6 +613,8 @@ export async function runCurriculumImportJob(jobId: string) {
   if (job.stage === 'waiting_for_review') return job
   // Providers without a server-side resumable task restart only the current
   // safe stage. A new attempt prevents a late response from replacing it.
+  if (job.stage === 'ai_generating_tags') return runTagStage(jobId)
+  if (job.stage === 'ai_auditing') return runAuditStage(jobId)
   return runStructureStage(jobId)
 }
 
@@ -515,6 +650,8 @@ export async function saveCurriculumImportOutline(
 async function persistImportedTextbook(
   imported: ImportedTextbookSource,
   confirmation: TextbookImportConfirmation,
+  tagAnalysis: CurriculumTagAnalysis | null,
+  rejectedTagNames: string[],
 ) {
   const subject = confirmation.subject.trim()
   const title = confirmation.title.trim()
@@ -548,6 +685,7 @@ async function persistImportedTextbook(
       )
     }
     const parents = new Map<number, { id: string; path: string }>()
+    const knowledgeByName = new Map<string, string>()
     for (const [index, candidate] of outline.entries()) {
       const level = Math.max(1, Math.min(3, candidate.level))
       const parent = parents.get(level - 1) ?? null
@@ -568,7 +706,86 @@ async function persistImportedTextbook(
         ],
       )
       parents.set(level, { id: nodeId, path })
+      knowledgeByName.set(normalizeTagName(candidate.title), nodeId)
       for (let deeper = level + 1; deeper <= 3; deeper += 1) parents.delete(deeper)
+    }
+    const rejected = new Set(rejectedTagNames.map(normalizeTagName))
+    for (const candidate of tagAnalysis?.candidates ?? []) {
+      if (rejected.has(normalizeTagName(candidate.canonicalName))) continue
+      let knowledgeNodeId = candidate.knowledgeNames
+        .map((name) => knowledgeByName.get(normalizeTagName(name)))
+        .find(Boolean) ?? null
+      if (candidate.tagType === 'knowledge' && !knowledgeNodeId) {
+        const nodeId = id()
+        const page = candidate.pageNumbers[0] ?? null
+        await execute(
+          `INSERT OR IGNORE INTO knowledge_nodes (
+            id, textbook_id, subject, canonical_name, node_type, path, sort_order,
+            description, source_page_start, source_page_end, evidence_text, source_path,
+            extraction_method, confidence, verification_status, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, 'knowledge', $4, $5, $6, $7, $7, $8, $9,
+            $10, $11, 'needs_review', $12, $12)`,
+          [nodeId, textbookId, subject, candidate.canonicalName, knowledgeByName.size,
+            candidate.description, page, candidate.evidenceText, imported.sourcePath,
+            imported.extraction.extractionMethod, candidate.confidence, now],
+        )
+        const rows = await select<Array<{ id: string }>>(
+          `SELECT id FROM knowledge_nodes WHERE textbook_id = $1 AND subject = $2
+           AND node_type = 'knowledge' AND canonical_name = $3 COLLATE NOCASE
+           AND archived_at IS NULL LIMIT 1`,
+          [textbookId, subject, candidate.canonicalName],
+        )
+        knowledgeNodeId = rows[0]?.id ?? null
+        if (knowledgeNodeId) knowledgeByName.set(normalizeTagName(candidate.canonicalName), knowledgeNodeId)
+      }
+      if (candidate.existingTagId) {
+        for (const knowledgeName of candidate.knowledgeNames) {
+          const linkedNodeId = knowledgeByName.get(normalizeTagName(knowledgeName))
+          if (linkedNodeId) await execute(
+            `INSERT OR IGNORE INTO curriculum_tag_knowledge_links (
+              tag_id, knowledge_node_id, source, confidence, created_at
+            ) VALUES ($1, $2, 'ai_inferred', $3, $4)`,
+            [candidate.existingTagId, linkedNodeId, candidate.confidence, now],
+          )
+        }
+        continue
+      }
+      const tagId = id()
+      const legacySource = candidate.origin === 'textbook_extracted' ? 'textbook' : 'model'
+      await execute(
+        `INSERT OR IGNORE INTO tag_definitions (
+          id, subject, tag_type, canonical_name, description, knowledge_node_id,
+          source, origin_kind, taxonomy_version, verification_status, lifecycle_status,
+          method_class, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'needs_review', 'candidate',
+          $9, $10, $10)`,
+        [tagId, subject, candidate.tagType, candidate.canonicalName, candidate.description,
+          knowledgeNodeId, legacySource, candidate.origin,
+          candidate.tagType === 'method' ? 'optional' : null, now],
+      )
+      const tagRows = await select<Array<{ id: string }>>(
+        `SELECT id FROM tag_definitions WHERE subject = $1 AND tag_type = $2
+         AND canonical_name = $3 COLLATE NOCASE LIMIT 1`,
+        [subject, candidate.tagType, candidate.canonicalName],
+      )
+      const persistedTagId = tagRows[0]?.id
+      if (!persistedTagId) continue
+      for (const alias of candidate.aliases) await execute(
+        `INSERT OR IGNORE INTO tag_aliases (id, subject, tag_id, alias, source, created_at)
+         VALUES ($1, $2, $3, $4, 'model', $5)`,
+        [id(), subject, persistedTagId, alias, now],
+      )
+      for (const knowledgeName of candidate.knowledgeNames) {
+        const linkedNodeId = knowledgeByName.get(normalizeTagName(knowledgeName))
+        if (linkedNodeId) await execute(
+          `INSERT OR IGNORE INTO curriculum_tag_knowledge_links (
+            tag_id, knowledge_node_id, source, confidence, created_at
+          ) VALUES ($1, $2, $3, $4, $5)`,
+          [persistedTagId, linkedNodeId,
+            candidate.origin === 'textbook_extracted' ? 'textbook_extracted' : 'ai_inferred',
+            candidate.confidence, now],
+        )
+      }
     }
   })
   return textbookId
@@ -589,7 +806,11 @@ export async function confirmCurriculumImportJob(
     sourceType: job.sourceType === 'directory_image' ? 'directory_image' : 'pdf',
     extraction: job.extraction,
   }
-  const textbookId = await persistImportedTextbook(imported, confirmation)
+  const tagAnalysis = job.tags as CurriculumTagAnalysis | null
+  const rejectedTagNames = job.audit && typeof job.audit === 'object' &&
+    Array.isArray((job.audit as { rejectedNames?: unknown }).rejectedNames)
+    ? (job.audit as { rejectedNames: string[] }).rejectedNames : []
+  const textbookId = await persistImportedTextbook(imported, confirmation, tagAnalysis, rejectedTagNames)
   await execute('DELETE FROM curriculum_import_jobs WHERE id = $1', [jobId])
   return textbookId
 }
@@ -937,10 +1158,10 @@ export async function createTagDefinition(input: {
   const taxonomyVersion = await ensureTaxonomyVersion(input.subject)
   await execute(
     `INSERT INTO tag_definitions (
-      id, subject, tag_type, canonical_name, description, source,
+      id, subject, tag_type, canonical_name, description, source, origin_kind,
       verification_status, lifecycle_status, method_class, taxonomy_version,
       created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, 'user', $6, $7, $8, $9, $10, $10)`,
+    ) VALUES ($1, $2, $3, $4, $5, 'user', 'user_created', $6, $7, $8, $9, $10, $10)`,
     [tagId, input.subject, input.tagType, input.canonicalName.trim(),
       input.description?.trim() || null,
       input.approved ? 'user_verified' : 'needs_review',

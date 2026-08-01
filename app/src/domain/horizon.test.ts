@@ -12,7 +12,7 @@ function definition(overrides: Partial<TagDefinition> = {}): TagDefinition {
     parentId: null,
     knowledgeNodeId: 'node-1',
     textbookId: 'math-book',
-    source: 'textbook',
+    source: 'textbook_extracted',
     taxonomyVersion: 1,
     verificationStatus: 'user_verified',
     lifecycleStatus: 'active',
