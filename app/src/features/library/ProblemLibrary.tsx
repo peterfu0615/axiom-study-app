@@ -43,6 +43,7 @@ import {
   INTELLIGENCE_STATUS_EVENT,
   runIntelligenceWorker,
 } from '../../ai/intelligencePipeline'
+import { ProblemTags } from './ProblemTags'
 
 type LibraryView = 'active' | 'archived'
 type DetailTab = 'content' | 'info'
@@ -942,6 +943,11 @@ export function ProblemLibrary() {
                           </div>
                         )}
                       </section>
+
+                      <ProblemTags
+                        problemId={selected.id}
+                        subject={selected.subject}
+                      />
 
                       <SolutionComparison
                         attempt={studentAttempt}

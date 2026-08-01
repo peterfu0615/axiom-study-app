@@ -5,6 +5,7 @@ export type AppSection =
   | 'today'
   | 'capture'
   | 'library'
+  | 'curriculum'
   | 'insights'
   | 'settings'
 
@@ -16,6 +17,7 @@ const items: Array<{
   { id: 'today', label: '今日', icon: 'today' },
   { id: 'capture', label: '采集', icon: 'capture' },
   { id: 'library', label: '错题库', icon: 'library' },
+  { id: 'curriculum', label: '课程', icon: 'curriculum' },
   { id: 'insights', label: '洞察', icon: 'insights' },
 ]
 

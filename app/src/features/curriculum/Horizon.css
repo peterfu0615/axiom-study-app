@@ -1,0 +1,64 @@
+.horizon-workspace { flex: 1; min-width: 0; height: 100vh; overflow: auto; padding: 42px 34px 34px; background: var(--canvas); color: var(--ink); }
+.horizon-header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+.horizon-header p { margin: 0 0 5px; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.horizon-header h1 { margin: 0; font-size: 28px; }
+.horizon-subject-picker { display: grid; gap: 5px; width: 220px; }
+.horizon-subject-picker label { color: var(--ink-muted); font-size: 11px; }
+.horizon-subject-picker input, .tag-create input { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--surface); color: var(--ink); }
+.horizon-tabs { display: flex; gap: 5px; margin-bottom: 16px; padding: 4px; border-radius: 12px; background: var(--surface-muted); width: max-content; }
+.horizon-tabs button, .taxonomy-types button { border: 0; border-radius: 9px; padding: 8px 13px; background: transparent; color: var(--ink-muted); }
+.horizon-tabs button.active, .taxonomy-types button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 5px rgb(0 0 0 / 8%); }
+.horizon-message { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); font-size: 13px; }
+.horizon-grid { display: grid; grid-template-columns: 260px minmax(520px, 1fr); gap: 14px; }
+.horizon-panel { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 8px 28px rgb(0 0 0 / 4%); }
+.panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px; border-bottom: 1px solid var(--line); }
+.panel-title div { display: grid; gap: 3px; }
+.panel-title span { color: var(--ink-muted); font-size: 11px; }
+.panel-title strong { font-size: 14px; }
+.horizon-panel button { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.horizon-panel button:disabled { cursor: default; opacity: .45; }
+.book-actions { display: grid; gap: 7px; padding: 12px; }
+.book-panel ul { display: grid; gap: 5px; margin: 0; padding: 0 8px 14px; list-style: none; }
+.book-panel li button { display: grid; gap: 4px; width: 100%; border-color: transparent; text-align: left; }
+.book-panel li button.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.book-panel small, .knowledge-tree small, .taxonomy-list small { color: var(--ink-muted); }
+.knowledge-tree { padding: 8px; }
+.knowledge-tree article { display: grid; grid-template-columns: minmax(220px, 1fr) auto repeat(5, auto); align-items: center; gap: 7px; margin-left: calc(var(--depth) * 24px); padding: 9px; border-bottom: 1px solid var(--line); }
+.knowledge-tree article > div { display: grid; gap: 3px; }
+.knowledge-tree article code, .taxonomy-list code { color: var(--ink-muted); font-size: 10px; }
+.knowledge-tree details { grid-column: 1 / -1; color: var(--ink-muted); font-size: 12px; }
+.node-relations { grid-column: 1 / -1; color: var(--ink-muted); }
+.knowledge-tree details p { white-space: pre-wrap; }
+.horizon-empty { padding: 42px; color: var(--ink-muted); text-align: center; }
+.taxonomy-panel, .relabel-panel { padding: 18px; }
+.taxonomy-types { display: flex; gap: 5px; margin-bottom: 14px; }
+.taxonomy-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.tag-create { display: flex; gap: 8px; margin-bottom: 14px; }
+.tag-create input { min-width: 260px; }
+.taxonomy-list { display: grid; gap: 7px; }
+.taxonomy-list article { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(120px, auto) repeat(3, auto); align-items: center; gap: 8px; padding: 11px; border: 1px solid var(--line); border-radius: 11px; }
+.taxonomy-list article > div { display: flex; align-items: center; gap: 8px; }
+.tag-status { border-radius: 999px; padding: 3px 7px; background: var(--surface-muted); color: var(--ink-muted); font-size: 10px; }
+.tag-status.active { background: color-mix(in srgb, #2d9b63 14%, var(--surface)); color: #247c50; }
+.tag-status.candidate { background: color-mix(in srgb, #d79824 16%, var(--surface)); color: #936514; }
+.relabel-panel { max-width: 760px; }
+.relabel-panel h2 { margin-top: 0; }
+.relabel-panel p { color: var(--ink-muted); line-height: 1.7; }
+.batch-progress { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 12px; margin-top: 18px; }
+.batch-progress progress { width: 100%; accent-color: var(--accent); }
+.problem-horizon-tags { margin-top: 16px; border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--surface); }
+.problem-horizon-tags > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.problem-horizon-tags h3, .problem-horizon-tags p { margin: 0; }
+.problem-horizon-tags > header > span { color: var(--ink-muted); font-size: 12px; }
+.problem-tag-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.problem-tag-dimension { min-width: 0; border: 1px solid var(--line); border-radius: 11px; padding: 10px; }
+.problem-tag-dimension-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.problem-tag-dimension-title button, .controlled-problem-tag button { border: 1px solid var(--line); border-radius: 7px; padding: 4px 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.controlled-problem-tag { display: grid; gap: 6px; padding: 9px; border-radius: 9px; background: var(--surface-muted); }
+.controlled-problem-tag + .controlled-problem-tag { margin-top: 6px; }
+.controlled-problem-tag > div:first-child { display: flex; justify-content: space-between; gap: 8px; }
+.controlled-problem-tag small, .controlled-problem-tag > span, .empty-tag-dimension { color: var(--ink-muted); font-size: 10px; }
+.controlled-problem-tag p { color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
+.controlled-problem-tag > div:last-child { display: flex; gap: 5px; }
+.controlled-problem-tag.unmapped, .controlled-problem-tag.candidate { outline: 1px solid color-mix(in srgb, #d79824 40%, transparent); }
+.problem-tag-error { margin-bottom: 8px !important; color: #b44; font-size: 12px; }

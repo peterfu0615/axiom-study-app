@@ -2,6 +2,7 @@ type IconName =
   | 'today'
   | 'capture'
   | 'library'
+  | 'curriculum'
   | 'insights'
   | 'settings'
   | 'camera'
@@ -31,6 +32,12 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" />
       <path d="M8 4v16M11 8h5" />
+    </>
+  ),
+  curriculum: (
+    <>
+      <path d="M4 5.5h6.5A3.5 3.5 0 0 1 14 9v10H7.5A3.5 3.5 0 0 0 4 22z" />
+      <path d="M20 5.5h-2A4 4 0 0 0 14 9v10h2.5A3.5 3.5 0 0 1 20 22z" />
     </>
   ),
   insights: (

@@ -8,6 +8,7 @@ import { Sidebar, type AppSection } from './components/Sidebar'
 import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
+import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
@@ -80,6 +81,8 @@ function App() {
         <CaptureWorkspace />
       ) : section === 'library' ? (
         <ProblemLibrary />
+      ) : section === 'curriculum' ? (
+        <CurriculumWorkspace />
       ) : section === 'settings' ? (
         <AISettings />
       ) : (

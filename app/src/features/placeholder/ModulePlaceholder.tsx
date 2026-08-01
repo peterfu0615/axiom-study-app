@@ -1,7 +1,7 @@
 import type { AppSection } from '../../components/Sidebar'
 
 const modules: Record<
-  Exclude<AppSection, 'capture'>,
+  Exclude<AppSection, 'capture' | 'curriculum'>,
   { eyebrow: string; title: string; description: string; phase: string }
 > = {
   today: {
@@ -34,7 +34,7 @@ const modules: Record<
 export function ModulePlaceholder({
   section,
 }: {
-  section: Exclude<AppSection, 'capture'>
+  section: Exclude<AppSection, 'capture' | 'curriculum'>
 }) {
   const module = modules[section]
   return (

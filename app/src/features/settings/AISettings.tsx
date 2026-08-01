@@ -399,7 +399,7 @@ export function AISettings() {
                           <label className="provider-api-key-field">
                             <span>
                               API Key
-                              <small>{selectedProfile.apiKey ? '已保存' : '未保存'}</small>
+                              <small>{selectedProfile.credentialRef ? '已保存到 Keychain' : '未保存'}</small>
                             </span>
                             <input
                               autoComplete="off"
