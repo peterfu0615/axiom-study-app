@@ -89,6 +89,17 @@ pub struct PersistedAIProviderProfile {
     updated_at: i64,
 }
 
+/// Safe post-commit status returned to the frontend.  The full API Key never
+/// leaves SQLite; only a boolean and the final four characters are exposed.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AIProviderSaveStatus {
+    pub id: String,
+    pub provider: String,
+    pub has_api_key: bool,
+    pub api_key_suffix: String,
+}
+
 fn provider_profile_error(profile: &PersistedAIProviderProfile) -> Result<(), String> {
     if profile.id.trim().is_empty() {
         return Err("Provider ID 不能为空".to_string());
@@ -131,7 +142,6 @@ async fn upsert_ai_provider_profile(
            provider = excluded.provider,
            base_url = excluded.base_url,
            api_key = CASE
-             WHEN excluded.provider != 'openai_compatible' THEN ''
              WHEN trim(excluded.api_key) != '' THEN excluded.api_key
              ELSE ai_provider_profiles.api_key
            END,
@@ -165,22 +175,60 @@ async fn upsert_ai_provider_profile(
     .execute(&mut *conn)
     .await
     .map_err(|error| format!("保存 Provider 配置失败：{error}"))?;
+    Ok(())
+}
 
-    // Verify the just-written row without selecting the secret back into the
-    // frontend.  This makes a failed SQLite write explicit.
-    if !profile.api_key.trim().is_empty()
-        || (profile.enabled && profile.provider == "openai_compatible")
-    {
-        let saved: i64 = sqlx::query_scalar(
-            "SELECT CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END
-             FROM ai_provider_profiles WHERE id = $1",
-        )
-        .bind(profile.id.trim())
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|error| format!("校验 Provider API Key 保存失败：{error}"))?;
-        if saved != 1 {
-            return Err(format!("“{}”启用前请保存 API Key", profile.name));
+async fn read_ai_provider_save_statuses(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<Vec<AIProviderSaveStatus>, String> {
+    let rows = sqlx::query(
+        "SELECT id, provider,
+           CAST(CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS INTEGER) AS has_api_key,
+           CASE
+             WHEN length(trim(api_key)) > 4 THEN substr(trim(api_key), -4)
+             ELSE ''
+           END AS api_key_suffix
+         FROM ai_provider_profiles
+         ORDER BY sort_order, created_at",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|error| format!("读取 Provider 保存状态失败：{error}"))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(AIProviderSaveStatus {
+                id: row
+                    .try_get("id")
+                    .map_err(|error| format!("读取 Provider ID 失败：{error}"))?,
+                provider: row
+                    .try_get("provider")
+                    .map_err(|error| format!("读取 Provider 类型失败：{error}"))?,
+                has_api_key: row
+                    .try_get::<i64, _>("has_api_key")
+                    .map_err(|error| format!("读取 Provider API Key 状态失败：{error}"))?
+                    != 0,
+                api_key_suffix: row
+                    .try_get("api_key_suffix")
+                    .map_err(|error| format!("读取 Provider API Key 掩码失败：{error}"))?,
+            })
+        })
+        .collect()
+}
+
+fn validate_provider_save_statuses(
+    profiles: &[PersistedAIProviderProfile],
+    statuses: &[AIProviderSaveStatus],
+) -> Result<(), String> {
+    for profile in profiles {
+        if profile.enabled && profile.provider == "openai_compatible" {
+            let saved = statuses
+                .iter()
+                .find(|status| status.id == profile.id.trim())
+                .is_some_and(|status| status.has_api_key);
+            if !saved {
+                return Err(format!("“{}”启用前请保存 API Key", profile.name));
+            }
         }
     }
     Ok(())
@@ -190,7 +238,7 @@ async fn upsert_ai_provider_profile(
 pub async fn persist_ai_provider_profiles(
     state: State<'_, crate::db::DbState>,
     profiles: Vec<PersistedAIProviderProfile>,
-) -> Result<(), String> {
+) -> Result<Vec<AIProviderSaveStatus>, String> {
     if profiles.is_empty() {
         return Err("请至少保留一个 Provider".to_string());
     }
@@ -226,15 +274,26 @@ pub async fn persist_ai_provider_profiles(
                     .map_err(|error| format!("删除 Provider 配置失败：{error}"))?;
             }
         }
-        Ok::<_, String>(())
+        let statuses = read_ai_provider_save_statuses(conn).await?;
+        validate_provider_save_statuses(&profiles, &statuses)?;
+        Ok::<_, String>(statuses)
     }
     .await;
     match result {
-        Ok(()) => conn
-            .execute("COMMIT")
-            .await
-            .map(|_| ())
-            .map_err(|error| format!("提交 Provider 保存事务失败：{error}")),
+        Ok(statuses) => {
+            conn.execute("COMMIT")
+                .await
+                .map_err(|error| format!("提交 Provider 保存事务失败：{error}"))?;
+            for status in &statuses {
+                log::debug!(
+                    "Provider 配置保存完成：id={} provider={} has_api_key={}",
+                    status.id,
+                    status.provider,
+                    status.has_api_key
+                );
+            }
+            Ok(statuses)
+        }
         Err(error) => {
             let _ = conn.execute("ROLLBACK").await;
             Err(error)
@@ -1009,7 +1068,8 @@ mod tests {
     use super::{
         antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
         is_vision_unsupported, load_provider_api_key_from_connection, provider_error_message,
-        read_bounded, upsert_ai_provider_profile, PersistedAIProviderProfile,
+        read_ai_provider_save_statuses, read_bounded, upsert_ai_provider_profile,
+        validate_provider_save_statuses, PersistedAIProviderProfile,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::sync::{
@@ -1228,10 +1288,43 @@ mod tests {
                 "sk-replacement-key"
             );
 
+            // Switching provider type with an empty edit field must not clear
+            // the durable SQLite key.  Only the explicit delete command may
+            // remove it.
+            profile.provider = "antigravity_cli".to_string();
+            profile.command_path = "agy".to_string();
+            profile.model = "gemini-3.6-flash-high".to_string();
+            profile.enabled = false;
+            profile.api_key.clear();
+            profile.credential_ref.clear();
+            profile.updated_at = 4;
+            upsert_ai_provider_profile(&mut conn, &profile)
+                .await
+                .unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-a")
+                    .await
+                    .unwrap(),
+                "sk-replacement-key"
+            );
+
+            let statuses = read_ai_provider_save_statuses(&mut conn).await.unwrap();
+            let provider_status = statuses
+                .iter()
+                .find(|status| status.id == "provider-a")
+                .unwrap();
+            assert_eq!(provider_status.provider, "antigravity_cli");
+            assert!(provider_status.has_api_key);
+            assert_eq!(provider_status.api_key_suffix, "-key");
+            validate_provider_save_statuses(std::slice::from_ref(&profile), &statuses).unwrap();
+
             let mut second = profile;
             second.id = "provider-b".to_string();
             second.name = "Provider B".to_string();
             second.api_key = "sk-second-key".to_string();
+            second.provider = "openai_compatible".to_string();
+            second.base_url = "https://example.com/v1".to_string();
+            second.enabled = true;
             second.sort_order = 1;
             upsert_ai_provider_profile(&mut conn, &second)
                 .await

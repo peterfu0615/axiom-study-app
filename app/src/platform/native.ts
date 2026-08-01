@@ -19,6 +19,13 @@ export interface NativeAIResponse {
   errorMessage: string | null
 }
 
+export interface AIProviderSaveStatus {
+  id: string
+  provider: string
+  hasApiKey: boolean
+  apiKeySuffix: string
+}
+
 export interface TextbookExtractedPage {
   pageNumber: number
   evidenceText: string
@@ -253,7 +260,7 @@ export async function analyzeProblemWithOpenAICompatible(request: {
  * transaction.  A blank `apiKey` means retain the existing database value.
  */
 export async function persistAIProviderProfiles(profiles: AIProviderProfile[]) {
-  return invoke<void>('persist_ai_provider_profiles', { profiles })
+  return invoke<AIProviderSaveStatus[]>('persist_ai_provider_profiles', { profiles })
 }
 
 /** Explicit deletion is the only path that clears a saved SQLite API Key. */

@@ -33,7 +33,10 @@ wait-timeout = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 dirs = "5"
-keyring = "3"
+# Keep the legacy recovery path able to read macOS Keychain entries.  SQLite
+# remains the durable API-key source; this backend is only used once for
+# recovery from older releases.
+keyring = { version = "3", features = ["apple-native"] }
 
 [profile.release]
 strip = "none"

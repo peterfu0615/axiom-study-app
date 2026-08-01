@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   REFERENCED_MEDIA_PATHS_SQL,
+  assertAIProviderKeySaveStatuses,
   classifyMediaPaths,
   extractReferencedMediaPaths,
   isSameDatabasePath,
@@ -62,6 +63,29 @@ describe('parseSQLiteBoolean', () => {
   it('handles null / undefined gracefully by returning false', () => {
     expect(parseSQLiteBoolean(null)).toBe(false)
     expect(parseSQLiteBoolean(undefined)).toBe(false)
+  })
+})
+
+describe('assertAIProviderKeySaveStatuses', () => {
+  it('accepts a newly entered key only when native SQLite status confirms it', () => {
+    expect(() => assertAIProviderKeySaveStatuses(
+      [{ id: 'gemini', name: 'Gemini 3.6 Flash High', apiKey: 'sk-test-key' }],
+      [{ id: 'gemini', hasApiKey: true }],
+    )).not.toThrow()
+  })
+
+  it('surfaces a failed native save without exposing the key', () => {
+    expect(() => assertAIProviderKeySaveStatuses(
+      [{ id: 'gemini', name: 'Gemini 3.6 Flash High', apiKey: 'sk-test-key' }],
+      [{ id: 'gemini', hasApiKey: false }],
+    )).toThrow('“Gemini 3.6 Flash High”的 API Key 保存事务校验失败')
+  })
+
+  it('ignores providers whose edit field is blank because blank means retain', () => {
+    expect(() => assertAIProviderKeySaveStatuses(
+      [{ id: 'gemini', name: 'Gemini 3.6 Flash High', apiKey: '' }],
+      [{ id: 'gemini', hasApiKey: false }],
+    )).not.toThrow()
   })
 })
 

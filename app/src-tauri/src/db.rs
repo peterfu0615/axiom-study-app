@@ -170,11 +170,23 @@ fn column_to_value(row: &sqlx::sqlite::SqliteRow, col: &sqlx::sqlite::SqliteColu
             .unwrap_or(None)
             .map(|b| Value::String(String::from_utf8_lossy(&b).into_owned()))
             .unwrap_or(Value::Null),
-        _ => row
-            .try_get::<Option<String>, _>(name)
-            .unwrap_or(None)
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        // SQLite reports the type of some computed expressions as `NULL`
+        // even when the value is an integer (for example a CAST/CASE alias).
+        // Try the scalar representations in a deterministic order instead of
+        // silently turning the value into JSON null.
+        _ => {
+            if let Ok(Some(value)) = row.try_get::<Option<i64>, _>(name) {
+                Value::from(value)
+            } else if let Ok(Some(value)) = row.try_get::<Option<f64>, _>(name) {
+                serde_json::Number::from_f64(value)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            } else if let Ok(Some(value)) = row.try_get::<Option<String>, _>(name) {
+                Value::String(value)
+            } else {
+                Value::Null
+            }
+        }
     }
 }
 
@@ -230,4 +242,27 @@ pub async fn db_select(
         out.push(Value::Object(obj));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::column_to_value;
+    use serde_json::json;
+    use sqlx::{Connection, Row};
+
+    #[test]
+    fn computed_integer_columns_are_serialized_as_numbers() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = sqlx::SqliteConnection::connect(":memory:").await.unwrap();
+            let row = sqlx::query(
+                "SELECT CAST(CASE WHEN trim('saved-key') != '' THEN 1 ELSE 0 END AS INTEGER)
+                 AS has_api_key",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            let column = row.columns().first().unwrap();
+            assert_eq!(column_to_value(&row, column), json!(1));
+        });
+    }
 }

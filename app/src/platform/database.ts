@@ -3164,7 +3164,7 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   const rows = await (await database()).select<Record<string, unknown>[]>(
     `SELECT id, name, provider, base_url, credential_ref, command_path, model,
        supports_vision, supports_text, enabled, sort_order, created_at, updated_at,
-       CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS has_api_key,
+       CAST(CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS INTEGER) AS has_api_key,
        CASE
          WHEN length(trim(api_key)) > 4 THEN substr(trim(api_key), -4)
          ELSE ''
@@ -3175,6 +3175,22 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   return rows.length
     ? rows.map(rowToAIProviderProfile)
     : defaultAIProviderProfiles
+}
+
+/**
+ * Verifies only safe native save metadata for keys entered in this edit.
+ * The full secret remains in SQLite and never participates in this check.
+ */
+export function assertAIProviderKeySaveStatuses(
+  profiles: ReadonlyArray<Pick<AIProviderProfile, 'id' | 'name' | 'apiKey'>>,
+  statuses: ReadonlyArray<Pick<AIProviderProfile, 'id' | 'hasApiKey'>>,
+) {
+  for (const profile of profiles.filter((candidate) => candidate.apiKey)) {
+    const status = statuses.find((candidate) => candidate.id === profile.id)
+    if (!status?.hasApiKey) {
+      throw new Error(`“${profile.name || profile.id}”的 API Key 保存事务校验失败`)
+    }
+  }
 }
 
 export async function saveAIProviderProfiles(
@@ -3236,9 +3252,15 @@ export async function saveAIProviderProfiles(
   if (normalized.some((profile) => profile.apiKey.includes('••'))) {
     throw new Error('API Key 输入框只能填写真实的新 Key，不能保存掩码文本')
   }
-  await persistAIProviderProfiles(normalized)
+  const saveStatuses = await persistAIProviderProfiles(normalized)
+  const newlyEnteredKeyIds = new Set(
+    normalized
+      .filter((profile) => profile.apiKey)
+      .map((profile) => profile.id),
+  )
+  assertAIProviderKeySaveStatuses(normalized, saveStatuses)
   const saved = await listAIProviderProfiles()
-  for (const profile of normalized.filter((candidate) => candidate.apiKey)) {
+  for (const profile of normalized.filter((candidate) => newlyEnteredKeyIds.has(candidate.id))) {
     if (!saved.find((candidate) => candidate.id === profile.id)?.hasApiKey) {
       throw new Error(`“${profile.name}”的 API Key 保存后校验失败`)
     }
