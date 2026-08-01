@@ -35,6 +35,9 @@ import {
   TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
 } from '../ai/textbookRecognitionContract'
 import {
+  completeCurriculumImportAttempt,
+  createCurriculumImportAttempt,
+  failCurriculumImportAttempt,
   importTextbookSource,
   cleanupTextbookImportTemp,
   mergeKnowledgeNodes,
@@ -43,6 +46,8 @@ import {
   removeTextbookSource,
   verifyTextbookSource,
   type ImportedTextbookSource,
+  type CurriculumAIStage,
+  type CurriculumImportAttemptLease,
   type TextbookExtractionProgress,
 } from './native'
 
@@ -387,41 +392,61 @@ export async function cancelCurriculumImportJob(jobId: string) {
   await removeTextbookSource(job.sourcePath).catch(() => {})
 }
 
-async function startAttempt(jobId: string, stage: CurriculumImportJob['stage']) {
-  const rows = await select<Array<{ count: number }>>(
-    'SELECT count(*) AS count FROM curriculum_import_attempts WHERE job_id = $1 AND stage = $2',
-    [jobId, stage],
-  )
-  const attemptNumber = Number(rows[0]?.count ?? 0) + 1
-  const attemptId = id()
-  await transaction(async () => {
-    await execute(
-      `UPDATE curriculum_import_attempts SET status = 'superseded', finished_at = $1
-       WHERE job_id = $2 AND stage = $3 AND status = 'running'`,
-      [Date.now(), jobId, stage],
-    )
-    await execute(
-      `INSERT INTO curriculum_import_attempts (
-        id, job_id, stage, attempt_number, status, started_at
-      ) VALUES ($1, $2, $3, $4, 'running', $5)`,
-      [attemptId, jobId, stage, attemptNumber, Date.now()],
-    )
+type CurriculumAIAnalysisStage = Exclude<CurriculumImportJob['stage'], 'waiting_for_review'>
+
+function readableAttemptError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  // Provider failures are user-visible and persisted for recovery.  Do not
+  // preserve a token-shaped value should a non-conforming provider echo it.
+  return message
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/giu, 'Bearer [已隐藏]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/gu, 'sk-[已隐藏]')
+}
+
+function attemptIdentity(
+  jobId: string,
+  stage: CurriculumAIAnalysisStage,
+  lease: CurriculumImportAttemptLease,
+) {
+  return {
+    jobId,
+    stage: stage as CurriculumAIStage,
+    attemptId: lease.attemptId,
+    attemptNumber: lease.attemptNumber,
+    runToken: lease.runToken,
+    runGeneration: lease.runGeneration,
+  }
+}
+
+async function failCurriculumAttempt(
+  jobId: string,
+  stage: CurriculumAIAnalysisStage,
+  lease: CurriculumImportAttemptLease,
+  error: unknown,
+) {
+  await failCurriculumImportAttempt({
+    ...attemptIdentity(jobId, stage, lease),
+    errorMessage: readableAttemptError(error),
   })
-  return attemptId
 }
 
 async function runStructureStage(
   jobId: string,
-  inFlightRequest?: ReturnType<ReturnType<typeof getTextbookRecognitionProvider>['recognizeTextbook']>,
+  options: {
+    inFlightRequest?: ReturnType<ReturnType<typeof getTextbookRecognitionProvider>['recognizeTextbook']>
+    restartActiveAttempt?: boolean
+  } = {},
 ): Promise<CurriculumImportJob | null> {
+  const lease = await createCurriculumImportAttempt({
+    jobId,
+    stage: 'ai_analyzing_structure',
+    promptVersion: TEXTBOOK_RECOGNITION_PROMPT_VERSION,
+    schemaVersion: TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
+    restartActiveAttempt: options.restartActiveAttempt,
+  })
+  if (!lease.created) return getCurriculumImportJob(jobId)
   const initial = await assertImportJobActive(jobId)
-  const attemptId = await startAttempt(jobId, 'ai_analyzing_structure')
   try {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_analyzing_structure',
-       resume_stage = 'ai_analyzing_structure', error_message = NULL, updated_at = $1
-       WHERE id = $2`, [Date.now(), jobId],
-    )
     const recognitionInput = {
       sourceName: initial.sourceName,
       pageCount: initial.extraction?.pageCount ?? 0,
@@ -429,54 +454,40 @@ async function runStructureStage(
       pages: initial.extraction?.pages ?? [],
     }
     const provider = getTextbookRecognitionProvider()
-    const result = await (inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
-    const currentAttempt = await select<Array<{ status: string }>>(
-      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
-    )
-    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
-    await execute(
-      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
-       finished_at = $2 WHERE id = $3 AND status = 'running'`,
-      [result.rawOutput, Date.now(), attemptId],
-    )
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_generating_tags',
-       resume_stage = 'ai_generating_tags', metadata_json = $1, structure_json = $2,
-       raw_output = $3, error_message = NULL, updated_at = $4
-       WHERE id = $5 AND status = 'ai_analyzing_structure'`,
-      [JSON.stringify(result.recognition), JSON.stringify(initial.extraction?.outline ?? []),
-        result.rawOutput, Date.now(), jobId],
-    )
+    const result = await (options.inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
+    const applied = await completeCurriculumImportAttempt({
+      ...attemptIdentity(jobId, 'ai_analyzing_structure', lease),
+      metadataJson: JSON.stringify(result.recognition),
+      structureJson: JSON.stringify(initial.extraction?.outline ?? []),
+      rawOutput: result.rawOutput,
+    })
+    if (!applied) return getCurriculumImportJob(jobId)
   } catch (error) {
-    await execute(
-      `UPDATE curriculum_import_attempts SET status = 'failed', error_message = $1,
-       finished_at = $2 WHERE id = $3 AND status = 'running'`,
-      [String(error), Date.now(), attemptId],
-    )
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       resume_stage = 'ai_analyzing_structure', error_message = $1, updated_at = $2
-       WHERE id = $3`, [String(error), Date.now(), jobId],
-    )
+    await failCurriculumAttempt(jobId, 'ai_analyzing_structure', lease, error)
+    return getCurriculumImportJob(jobId)
   }
   const next = await getCurriculumImportJob(jobId)
   return next?.stage === 'ai_generating_tags' ? runTagStage(jobId) : next
 }
 
-async function runTagStage(jobId: string): Promise<CurriculumImportJob | null> {
+async function runTagStage(
+  jobId: string,
+  restartActiveAttempt = false,
+): Promise<CurriculumImportJob | null> {
   const job = await assertImportJobActive(jobId)
   if (!job.recognition || !job.extraction) throw new Error('知识结构阶段结果不完整')
   const subject = job.recognition.subject.value?.trim()
   if (!subject) throw new Error('请先识别并确认教材科目')
   const existing = await listTagDefinitions(subject)
-  const attemptId = await startAttempt(jobId, 'ai_generating_tags')
+  const lease = await createCurriculumImportAttempt({
+    jobId,
+    stage: 'ai_generating_tags',
+    promptVersion: CURRICULUM_TAG_PROMPT_VERSION,
+    schemaVersion: CURRICULUM_TAG_SCHEMA_VERSION,
+    restartActiveAttempt,
+  })
+  if (!lease.created) return getCurriculumImportJob(jobId)
   try {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_generating_tags',
-       resume_stage = 'ai_generating_tags', error_message = NULL,
-       prompt_version = $1, schema_version = $2, updated_at = $3 WHERE id = $4`,
-      [CURRICULUM_TAG_PROMPT_VERSION, CURRICULUM_TAG_SCHEMA_VERSION, Date.now(), jobId],
-    )
     const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
     const existingTags = existing.map((tag) => ({
       id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
@@ -503,42 +514,38 @@ async function runTagStage(jobId: string): Promise<CurriculumImportJob | null> {
       ...parsed,
       candidates: reconcileCurriculumTagCandidates(parsed.candidates, existingTags),
     }
-    const currentAttempt = await select<Array<{ status: string }>>(
-      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
-    )
-    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
-    await execute(
-      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
-       provider_task_id = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
-      [JSON.stringify(results.map((result) => result.rawOutput)), results.at(-1)?.providerTaskId ?? null, Date.now(), attemptId],
-    )
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_auditing', resume_stage = 'ai_auditing',
-       tags_json = $1, provider_task_id = $2, raw_output = $3, updated_at = $4
-       WHERE id = $5 AND status = 'ai_generating_tags'`,
-      [JSON.stringify(tags), results.at(-1)?.providerTaskId ?? null,
-        JSON.stringify(results.map((result) => result.rawOutput)), Date.now(), jobId],
-    )
+    const rawOutput = JSON.stringify(results.map((result) => result.rawOutput))
+    const applied = await completeCurriculumImportAttempt({
+      ...attemptIdentity(jobId, 'ai_generating_tags', lease),
+      tagsJson: JSON.stringify(tags),
+      providerTaskId: results.at(-1)?.providerTaskId ?? null,
+      rawOutput,
+    })
+    if (!applied) return getCurriculumImportJob(jobId)
   } catch (error) {
-    await failCurriculumAttempt(jobId, attemptId, 'ai_generating_tags', error)
+    await failCurriculumAttempt(jobId, 'ai_generating_tags', lease, error)
     return getCurriculumImportJob(jobId)
   }
   return runAuditStage(jobId)
 }
 
-async function runAuditStage(jobId: string): Promise<CurriculumImportJob | null> {
+async function runAuditStage(
+  jobId: string,
+  restartActiveAttempt = false,
+): Promise<CurriculumImportJob | null> {
   const job = await assertImportJobActive(jobId)
   const tags = job.tags as CurriculumTagAnalysis | null
   const subject = job.recognition?.subject.value?.trim()
   if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
-  const attemptId = await startAttempt(jobId, 'ai_auditing')
+  const lease = await createCurriculumImportAttempt({
+    jobId,
+    stage: 'ai_auditing',
+    promptVersion: CURRICULUM_AUDIT_PROMPT_VERSION,
+    schemaVersion: CURRICULUM_AUDIT_SCHEMA_VERSION,
+    restartActiveAttempt,
+  })
+  if (!lease.created) return getCurriculumImportJob(jobId)
   try {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_auditing', resume_stage = 'ai_auditing',
-       error_message = NULL, prompt_version = $1, schema_version = $2,
-       updated_at = $3 WHERE id = $4`,
-      [CURRICULUM_AUDIT_PROMPT_VERSION, CURRICULUM_AUDIT_SCHEMA_VERSION, Date.now(), jobId],
-    )
     const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
     const result = await provider.analyzeCurriculumStage({
       prompt: buildCurriculumAuditPrompt({
@@ -548,44 +555,17 @@ async function runAuditStage(jobId: string): Promise<CurriculumImportJob | null>
       jsonSchema: curriculumAuditJSONSchema,
     })
     const audit = parseCurriculumAudit(result.rawOutput)
-    const currentAttempt = await select<Array<{ status: string }>>(
-      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
-    )
-    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
-    await execute(
-      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
-       provider_task_id = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
-      [result.rawOutput, result.providerTaskId, Date.now(), attemptId],
-    )
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
-       resume_stage = 'waiting_for_review', audit_json = $1, provider_task_id = $2,
-       raw_output = $3, error_message = NULL, updated_at = $4
-       WHERE id = $5 AND status = 'ai_auditing'`,
-      [JSON.stringify(audit), result.providerTaskId, result.rawOutput, Date.now(), jobId],
-    )
+    const applied = await completeCurriculumImportAttempt({
+      ...attemptIdentity(jobId, 'ai_auditing', lease),
+      auditJson: JSON.stringify(audit),
+      providerTaskId: result.providerTaskId,
+      rawOutput: result.rawOutput,
+    })
+    if (!applied) return getCurriculumImportJob(jobId)
   } catch (error) {
-    await failCurriculumAttempt(jobId, attemptId, 'ai_auditing', error)
+    await failCurriculumAttempt(jobId, 'ai_auditing', lease, error)
   }
   return getCurriculumImportJob(jobId)
-}
-
-async function failCurriculumAttempt(
-  jobId: string,
-  attemptId: string,
-  resumeStage: Exclude<CurriculumImportJob['stage'], 'waiting_for_review'>,
-  error: unknown,
-) {
-  await execute(
-    `UPDATE curriculum_import_attempts SET status = 'failed', error_message = $1,
-     finished_at = $2 WHERE id = $3 AND status = 'running'`,
-    [String(error), Date.now(), attemptId],
-  )
-  await execute(
-    `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-     resume_stage = $1, error_message = $2, updated_at = $3 WHERE id = $4`,
-    [resumeStage, String(error), Date.now(), jobId],
-  )
 }
 
 export async function createCurriculumImportJob(
@@ -634,10 +614,13 @@ export async function createCurriculumImportJob(
     await removeTextbookSource(imported.sourcePath).catch(() => {})
     throw error
   }
-  return runStructureStage(jobId, inFlightRequest)
+  return runStructureStage(jobId, { inFlightRequest })
 }
 
-export async function runCurriculumImportJob(jobId: string) {
+export async function runCurriculumImportJob(
+  jobId: string,
+  { restartActiveAttempt = false }: { restartActiveAttempt?: boolean } = {},
+) {
   const job = await assertImportJobActive(jobId)
   try {
     await verifyTextbookSource(job.originalSourcePath, job.contentHash ?? '')
@@ -662,13 +645,13 @@ export async function runCurriculumImportJob(jobId: string) {
   }
   // Providers without a server-side resumable task restart only the current
   // safe stage. A new attempt prevents a late response from replacing it.
-  if (job.stage === 'ai_generating_tags') return runTagStage(jobId)
-  if (job.stage === 'ai_auditing') return runAuditStage(jobId)
-  return runStructureStage(jobId)
+  if (job.stage === 'ai_generating_tags') return runTagStage(jobId, restartActiveAttempt)
+  if (job.stage === 'ai_auditing') return runAuditStage(jobId, restartActiveAttempt)
+  return runStructureStage(jobId, { restartActiveAttempt })
 }
 
 export async function retryCurriculumImportJob(jobId: string) {
-  return runCurriculumImportJob(jobId)
+  return runCurriculumImportJob(jobId, { restartActiveAttempt: true })
 }
 
 export interface TextbookImportConfirmation {

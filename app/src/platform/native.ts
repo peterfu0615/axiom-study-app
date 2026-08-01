@@ -364,3 +364,52 @@ export async function onDownloadProgress(
     callback(event.payload),
   )
 }
+export type CurriculumAIStage =
+  | 'ai_analyzing_structure'
+  | 'ai_generating_tags'
+  | 'ai_auditing'
+
+export interface CurriculumImportAttemptLease {
+  attemptId: string
+  attemptNumber: number
+  runToken: string
+  runGeneration: number
+  /** `false` means an already-running stage owns the lease. */
+  created: boolean
+}
+
+export interface CurriculumImportAttemptIdentity {
+  jobId: string
+  stage: CurriculumAIStage
+  attemptId: string
+  attemptNumber: number
+  runToken: string
+  runGeneration: number
+}
+
+export async function createCurriculumImportAttempt(request: {
+  jobId: string
+  stage: CurriculumAIStage
+  promptVersion: string
+  schemaVersion: string
+  restartActiveAttempt?: boolean
+}) {
+  return invoke<CurriculumImportAttemptLease>('create_curriculum_import_attempt', { request })
+}
+
+export async function completeCurriculumImportAttempt(request: CurriculumImportAttemptIdentity & {
+  rawOutput: string
+  providerTaskId?: string | null
+  metadataJson?: string | null
+  structureJson?: string | null
+  tagsJson?: string | null
+  auditJson?: string | null
+}) {
+  return invoke<boolean>('complete_curriculum_import_attempt', { request })
+}
+
+export async function failCurriculumImportAttempt(request: CurriculumImportAttemptIdentity & {
+  errorMessage: string
+}) {
+  return invoke<boolean>('fail_curriculum_import_attempt', { request })
+}

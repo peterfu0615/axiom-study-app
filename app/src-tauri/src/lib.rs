@@ -142,6 +142,12 @@ pub fn run() {
             sql: include_str!("../migrations/0019_curriculum_tag_origins.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "curriculum_attempt_serialization",
+            sql: include_str!("../migrations/0020_curriculum_attempt_serialization.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
@@ -210,6 +216,9 @@ pub fn run() {
             keystore::delete_api_key,
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,
+            horizon::create_curriculum_import_attempt,
+            horizon::complete_curriculum_import_attempt,
+            horizon::fail_curriculum_import_attempt,
             updater::get_app_version,
             updater::check_for_updates,
             updater::download_and_install_update,

@@ -101,7 +101,7 @@ export function CurriculumImportFlow({
         } else {
           setPhase('processing')
         }
-        void startCurriculumImport(next.id).then((resumed) => {
+        void startCurriculumImport(next.id, true).then((resumed) => {
           if (!resumed) return
           setJob(resumed)
           setPhase(resumed.status === 'waiting_for_review' ? 'confirm' : 'processing')
