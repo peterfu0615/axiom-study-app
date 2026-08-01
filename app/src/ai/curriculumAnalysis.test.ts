@@ -46,6 +46,26 @@ describe('curriculum tag inference', () => {
     expect(result[0]).toMatchObject({ canonicalName: '倍长中线', origin: 'existing_library', existingTagId: 'existing' })
   })
 
+  it('merges cross-chunk candidates whose aliases would otherwise collide', () => {
+    const result = reconcileCurriculumTagCandidates([
+      {
+        tagType: 'method', canonicalName: '待定系数法', aliases: ['设系数法'],
+        description: null, origin: 'ai_inferred', knowledgeNames: ['一次函数'],
+        pageNumbers: [], evidenceText: null, confidence: .7, existingTagId: null,
+      },
+      {
+        tagType: 'method', canonicalName: '系数待定法', aliases: ['待定系数法'],
+        description: '根据条件列方程确定参数', origin: 'ai_inferred', knowledgeNames: ['反比例函数'],
+        pageNumbers: [66], evidenceText: null, confidence: .85, existingTagId: null,
+      },
+    ], [])
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ canonicalName: '待定系数法', confidence: .85 })
+    expect(result[0].knowledgeNames).toEqual(['一次函数', '反比例函数'])
+    expect(result[0].pageNumbers).toEqual([66])
+    expect(result[0].aliases).not.toContain('待定系数法')
+  })
+
   it('rejects a response for another subject', () => {
     expect(() => parseCurriculumTags(JSON.stringify({ subject: '物理', tags: [], warnings: [] }), '数学'))
       .toThrow('科目不匹配')
@@ -60,5 +80,23 @@ describe('curriculum tag inference', () => {
     ], 10_000)
     expect(chunks).toHaveLength(2)
     expect(chunks.flat().map((page) => page.pageNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('does not create tiny AI chunks for chapter entries inside a table of contents', () => {
+    const pages = [
+      { pageNumber: 1, evidenceText: '目录\n第 1 章 代数 1' },
+      { pageNumber: 2, evidenceText: '第 2 章 几何 20' },
+      { pageNumber: 3, evidenceText: '第 1 章 代数 正文' },
+      { pageNumber: 4, evidenceText: '代数正文' },
+      { pageNumber: 5, evidenceText: '第 2 章 几何 正文' },
+      { pageNumber: 6, evidenceText: '几何正文' },
+    ]
+    const chunks = chunkTextbookPages(pages, [
+      { level: 1, pageNumber: 1 }, { level: 1, pageNumber: 2 },
+      { level: 1, pageNumber: 3 }, { level: 1, pageNumber: 5 },
+    ], 10_000)
+    expect(chunks.map((chunk) => chunk.map((page) => page.pageNumber))).toEqual([
+      [1, 2], [3, 4], [5, 6],
+    ])
   })
 })

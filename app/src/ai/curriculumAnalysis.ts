@@ -42,7 +42,29 @@ export function chunkTextbookPages(
   safeCharacterBudget = 120_000,
 ) {
   if (!pages.length) return [[]]
-  const chapterStarts = new Set(outline.filter((item) => item.level === 1).map((item) => item.pageNumber))
+  const tocPages = new Set<number>()
+  const tocStart = pages.findIndex((page) => /目录/u.test(page.evidenceText))
+  if (tocStart >= 0) {
+    for (let index = tocStart; index < pages.length; index += 1) {
+      const text = pages[index].evidenceText
+      const chapterHeadingCount = (text.match(/第\s*[一二三四五六七八九十百0-9]+\s*(?:章|单元|篇)/gu) ?? []).length
+      const looksLikeToc = index === tocStart || chapterHeadingCount >= 2 ||
+        /第\s*[一二三四五六七八九十百0-9]+\s*(?:章|单元|篇)[^\n]*\d+\s*$/mu.test(text)
+      if (!looksLikeToc) break
+      tocPages.add(pages[index].pageNumber)
+    }
+  }
+  const contentChapterPages = outline
+    .filter((item) => item.level === 1 && !tocPages.has(item.pageNumber))
+    .map((item) => item.pageNumber)
+  // A table of contents often spans several physical pages.  Its chapter
+  // entries are navigation evidence, not useful AI chunk boundaries; keep the
+  // first real chapter page as the start of the content sequence.
+  const firstContentChapter = contentChapterPages.length
+    ? Math.min(...contentChapterPages)
+    : null
+  const chapterStarts = new Set(contentChapterPages.filter((pageNumber) =>
+    firstContentChapter == null || pageNumber >= firstContentChapter))
   const chunks: typeof pages[] = []
   let current: typeof pages = []
   let size = 0
@@ -175,11 +197,43 @@ export function reconcileCurriculumTagCandidates(
   candidates: CurriculumTagCandidate[],
   existing: Array<{ id: string; tagType: string; canonicalName: string; aliases: string[] }>,
 ) {
-  return candidates.map((candidate) => {
+  const reconciled: CurriculumTagCandidate[] = []
+  for (const candidate of candidates) {
     const names = [candidate.canonicalName, ...candidate.aliases].map(normalizeTagName)
-    const match = existing.find((tag) => tag.tagType === candidate.tagType &&
+    const libraryMatch = existing.find((tag) => tag.tagType === candidate.tagType &&
       [tag.canonicalName, ...tag.aliases].some((name) => names.includes(normalizeTagName(name))))
-    return match ? { ...candidate, canonicalName: match.canonicalName, origin: 'existing_library' as const, existingTagId: match.id } : candidate
-  }).filter((candidate, index, all) => all.findIndex((other) =>
-    other.tagType === candidate.tagType && normalizeTagName(other.canonicalName) === normalizeTagName(candidate.canonicalName)) === index)
+    const normalizedCandidate = libraryMatch
+      ? {
+          ...candidate,
+          canonicalName: libraryMatch.canonicalName,
+          origin: 'existing_library' as const,
+          existingTagId: libraryMatch.id,
+        }
+      : candidate
+    const normalizedNames = [normalizedCandidate.canonicalName, ...normalizedCandidate.aliases]
+      .map(normalizeTagName)
+    const duplicateIndex = reconciled.findIndex((other) => other.tagType === normalizedCandidate.tagType &&
+      [other.canonicalName, ...other.aliases].map(normalizeTagName)
+        .some((name) => normalizedNames.includes(name)))
+    if (duplicateIndex < 0) {
+      reconciled.push(normalizedCandidate)
+      continue
+    }
+    const duplicate = reconciled[duplicateIndex]
+    const aliases = [...new Set([...duplicate.aliases, ...normalizedCandidate.aliases]
+      .filter((alias) => normalizeTagName(alias) !== normalizeTagName(duplicate.canonicalName)))]
+    reconciled[duplicateIndex] = {
+      ...duplicate,
+      aliases,
+      description: duplicate.description ?? normalizedCandidate.description,
+      knowledgeNames: [...new Set([...duplicate.knowledgeNames, ...normalizedCandidate.knowledgeNames])],
+      pageNumbers: [...new Set([...duplicate.pageNumbers, ...normalizedCandidate.pageNumbers])].sort((a, b) => a - b),
+      evidenceText: duplicate.evidenceText ?? normalizedCandidate.evidenceText,
+      confidence: Math.max(duplicate.confidence, normalizedCandidate.confidence),
+      origin: duplicate.origin === 'existing_library' || normalizedCandidate.origin === 'existing_library'
+        ? 'existing_library' : duplicate.origin,
+      existingTagId: duplicate.existingTagId ?? normalizedCandidate.existingTagId,
+    }
+  }
+  return reconciled
 }

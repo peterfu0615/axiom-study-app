@@ -34,6 +34,7 @@ import {
   TEXTBOOK_RECOGNITION_PROMPT_VERSION,
   TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
 } from '../ai/textbookRecognitionContract'
+import { inferMissingTextbookRecognition } from '../ai/textbookRecognitionInference'
 import {
   completeCurriculumImportAttempt,
   createCurriculumImportAttempt,
@@ -455,9 +456,13 @@ async function runStructureStage(
     }
     const provider = getTextbookRecognitionProvider()
     const result = await (options.inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
+    const recognition = inferMissingTextbookRecognition(result.recognition, recognitionInput)
+    if (!recognition.subject.value) {
+      throw new Error('AI 未能识别教材科目，请在重试前检查 PDF 文字提取结果。')
+    }
     const applied = await completeCurriculumImportAttempt({
       ...attemptIdentity(jobId, 'ai_analyzing_structure', lease),
-      metadataJson: JSON.stringify(result.recognition),
+      metadataJson: JSON.stringify(recognition),
       structureJson: JSON.stringify(initial.extraction?.outline ?? []),
       rawOutput: result.rawOutput,
     })
@@ -475,10 +480,6 @@ async function runTagStage(
   restartActiveAttempt = false,
 ): Promise<CurriculumImportJob | null> {
   const job = await assertImportJobActive(jobId)
-  if (!job.recognition || !job.extraction) throw new Error('知识结构阶段结果不完整')
-  const subject = job.recognition.subject.value?.trim()
-  if (!subject) throw new Error('请先识别并确认教材科目')
-  const existing = await listTagDefinitions(subject)
   const lease = await createCurriculumImportAttempt({
     jobId,
     stage: 'ai_generating_tags',
@@ -488,6 +489,10 @@ async function runTagStage(
   })
   if (!lease.created) return getCurriculumImportJob(jobId)
   try {
+    if (!job.recognition || !job.extraction) throw new Error('知识结构阶段结果不完整')
+    const subject = job.recognition.subject.value?.trim()
+    if (!subject) throw new Error('请先识别并确认教材科目')
+    const existing = await listTagDefinitions(subject)
     const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
     const existingTags = existing.map((tag) => ({
       id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
@@ -534,9 +539,6 @@ async function runAuditStage(
   restartActiveAttempt = false,
 ): Promise<CurriculumImportJob | null> {
   const job = await assertImportJobActive(jobId)
-  const tags = job.tags as CurriculumTagAnalysis | null
-  const subject = job.recognition?.subject.value?.trim()
-  if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
   const lease = await createCurriculumImportAttempt({
     jobId,
     stage: 'ai_auditing',
@@ -546,6 +548,9 @@ async function runAuditStage(
   })
   if (!lease.created) return getCurriculumImportJob(jobId)
   try {
+    const tags = job.tags as CurriculumTagAnalysis | null
+    const subject = job.recognition?.subject.value?.trim()
+    if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
     const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
     const result = await provider.analyzeCurriculumStage({
       prompt: buildCurriculumAuditPrompt({
@@ -614,7 +619,19 @@ export async function createCurriculumImportJob(
     await removeTextbookSource(imported.sourcePath).catch(() => {})
     throw error
   }
-  return runStructureStage(jobId, { inFlightRequest })
+  // Do not hold the import screen until every chapter has been analyzed.  The
+  // durable row is already present and the stage runner owns all attempt and
+  // late-result checks, so the UI can poll the single slot while this pipeline
+  // advances through structure, tags, and audit in the background.
+  void runStructureStage(jobId, { inFlightRequest }).catch(async (error) => {
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
+       resume_stage = 'waiting_for_review', error_message = $1, updated_at = $2
+       WHERE id = $3`,
+      [readableAttemptError(error), Date.now(), jobId],
+    ).catch(() => {})
+  })
+  return getCurriculumImportJob(jobId)
 }
 
 export async function runCurriculumImportJob(
@@ -840,7 +857,16 @@ export async function confirmCurriculumImportJob(
   }
   await execute('UPDATE curriculum_import_jobs SET source_path = $1, updated_at = $2 WHERE id = $3',
     [imported.sourcePath, Date.now(), jobId])
-  const tagAnalysis = job.tags as CurriculumTagAnalysis | null
+  const rawTagAnalysis = job.tags as CurriculumTagAnalysis | null
+  const tagAnalysis = rawTagAnalysis
+    ? {
+        ...rawTagAnalysis,
+        candidates: reconcileCurriculumTagCandidates(rawTagAnalysis.candidates,
+          (await listTagDefinitions(confirmation.subject.trim())).map((tag) => ({
+            id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
+          }))),
+      }
+    : null
   const rejectedTagNames = job.audit && typeof job.audit === 'object' &&
     Array.isArray((job.audit as { rejectedNames?: unknown }).rejectedNames)
     ? (job.audit as { rejectedNames: string[] }).rejectedNames : []

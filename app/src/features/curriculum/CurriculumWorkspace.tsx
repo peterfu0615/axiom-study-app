@@ -303,8 +303,22 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
         setContinueImportId(null)
         void (async () => {
           const newBook = (await listTextbooks()).find((item) => item.id === newTextbookId)
+          const nextSubject = newBook?.subject ?? subject
+          // The subject effect may have already loaded an empty list while the
+          // confirmation transaction was still running.  Refresh the new
+          // textbook explicitly so the just-saved course is visible without a
+          // manual navigation or app restart.
+          const nextTextbooks = await listTextbooks(nextSubject)
+          setTextbooks(nextTextbooks)
           if (newBook) setSubject(newBook.subject)
           setTextbookId(newTextbookId)
+          const [nextNodes, nextEdges] = await Promise.all([
+            listKnowledgeNodes(newTextbookId), listKnowledgeEdges(newTextbookId),
+          ])
+          setNodes(nextNodes)
+          setEdgeCount(nextEdges.length)
+          setSelectedNodeId(nextNodes[0]?.id ?? null)
+          setExpanded(new Set(nextNodes.filter((node) => node.parentId === null).map((node) => node.id)))
           await refreshSubjects(); await refreshImportJobs()
         })()
       }}

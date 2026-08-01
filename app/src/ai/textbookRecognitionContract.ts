@@ -11,12 +11,42 @@ export const textbookRecognitionAntigravityJSONSchema = {
     'overall_confidence', 'warnings',
   ],
   properties: {
-    title: { type: 'object' },
-    subject: { type: 'object' },
-    grade: { type: 'object' },
-    volume: { type: 'object' },
-    publisher: { type: 'object' },
-    edition: { type: 'object' },
+    // Keep the nested field contract explicit.  The previous schema only said
+    // `type: object`, which let compatible providers legally return six empty
+    // objects.  That response parsed as success and left the tag stage without
+    // a subject.  Repeating the small field schema here is intentional: some
+    // OpenAI-compatible gateways do not resolve `$ref` or `$defs` in a
+    // response_format schema.
+    title: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
+    subject: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
+    grade: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
+    volume: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
+    publisher: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
+    edition: {
+      type: 'object', required: ['value', 'confidence', 'evidence'], properties: {
+        value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
+      },
+    },
     overall_confidence: { type: 'number' },
     warnings: { type: 'array', items: { type: 'string' } },
   },

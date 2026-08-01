@@ -157,11 +157,15 @@ private func recognizeText(in image: CGImage) throws -> (text: String, confidenc
 
 private func outlineCandidates(from pages: [TextbookExtractedPage]) -> [TextbookOutlineCandidate] {
     let patterns: [(String, Int)] = [
-        (#"^(第[一二三四五六七八九十百0-9]+[章单元篇]).{0,28}$"#, 1),
-        (#"^(第[一二三四五六七八九十百0-9]+节).{0,32}$"#, 2),
-        (#"^([0-9]+)\s*[\.、]\s*[^。！？]{2,36}$"#, 1),
-        (#"^([0-9]+\.[0-9]+)\s+.{1,36}$"#, 2),
-        (#"^([0-9]+\.[0-9]+\.[0-9]+)\s+.{1,36}$"#, 3),
+        // More specific numeric headings must precede the generic `15.1`
+        // pattern; otherwise the latter is mistaken for a top-level `15.`
+        // heading.  Matching a whitespace-free copy also handles TOCs that
+        // render `第 15 章` and `15 . 1` with font spacing.
+        (#"^第[一二三四五六七八九十百0-9]+(章|单元|篇).{0,32}$"#, 1),
+        (#"^第[一二三四五六七八九十百0-9]+节.{0,32}$"#, 2),
+        (#"^[0-9]+\.[0-9]+\.[0-9]+.{1,36}$"#, 3),
+        (#"^[0-9]+\.[0-9]+.{1,36}$"#, 2),
+        (#"^[0-9]+[、\.].{2,36}$"#, 3),
     ]
     var seen = Set<String>()
     var output: [TextbookOutlineCandidate] = []
@@ -169,9 +173,12 @@ private func outlineCandidates(from pages: [TextbookExtractedPage]) -> [Textbook
         for rawLine in page.evidenceText.components(separatedBy: .newlines) {
             let title = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard title.count >= 2, title.count <= 48 else { continue }
+            let compactTitle = title.replacingOccurrences(
+                of: #"\s+"#, with: "", options: .regularExpression
+            )
             var matchedLevel: Int?
             for (pattern, level) in patterns {
-                if title.range(of: pattern, options: .regularExpression) != nil {
+                if compactTitle.range(of: pattern, options: .regularExpression) != nil {
                     matchedLevel = level
                     break
                 }
