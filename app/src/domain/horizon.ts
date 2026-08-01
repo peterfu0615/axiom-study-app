@@ -54,25 +54,21 @@ export interface TextbookRecognition {
 }
 
 export type CurriculumImportStatus =
-  | 'pending'
-  | 'extracting'
-  | 'recognizing'
-  | 'needs_review'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
+  | 'ai_analyzing_structure'
+  | 'ai_generating_tags'
+  | 'ai_auditing'
+  | 'waiting_for_review'
+  | 'ai_failed_recoverable'
 
 export type CurriculumImportStage =
-  | 'select_file'
-  | 'preview'
-  | 'extracting'
-  | 'recognizing'
-  | 'confirm_info'
-  | 'review_structure'
-  | 'completed'
+  | 'ai_analyzing_structure'
+  | 'ai_generating_tags'
+  | 'ai_auditing'
+  | 'waiting_for_review'
 
 export interface CurriculumImportJob {
   id: string
+  originalSourcePath: string
   sourcePath: string
   sourceName: string
   sourceType: Textbook['sourceType'] | null
@@ -107,11 +103,12 @@ export interface CurriculumImportJob {
   inputHash: string | null
   rawOutput: string | null
   errorMessage: string | null
-  textbookId: string | null
-  cancelledAt: number | null
+  providerTaskId: string | null
+  structure: unknown | null
+  tags: unknown | null
+  audit: unknown | null
   createdAt: number
   updatedAt: number
-  completedAt: number | null
 }
 
 export interface KnowledgeNode {

@@ -17,6 +17,7 @@ import type { KnowledgeNode, Textbook } from '../../domain/horizon'
 import {
   addKnowledgeEdge,
   archiveKnowledgeNode,
+  cancelCurriculumImportJob,
   confirmKnowledgeNode,
   createManualTextbook,
   listCurriculumImportJobs,
@@ -101,7 +102,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [error, setError] = useState<string | null>(null)
   const [importMode, setImportMode] = useState(false)
   const [continueImportId, setContinueImportId] = useState<string | null>(null)
-  const [openImportCount, setOpenImportCount] = useState(0)
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null)
+  const [replaceImportOpen, setReplaceImportOpen] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
   const [manualSubject, setManualSubject] = useState('')
   const [manualTitle, setManualTitle] = useState('')
@@ -126,7 +128,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
   const refreshImportJobs = useCallback(async () => {
     const jobs = await listCurriculumImportJobs()
-    setOpenImportCount(jobs.length)
+    setResumeJobId(jobs[0]?.id ?? null)
     if (!continueImportId) setContinueImportId(jobs[0]?.id ?? null)
   }, [continueImportId])
 
@@ -267,6 +269,31 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const knowledgeCount = nodes.filter((node) => ['knowledge', 'definition', 'formula', 'theorem', 'property'].includes(node.nodeType)).length
   const reviewCount = nodes.filter((node) => node.verificationStatus === 'needs_review').length
 
+  const beginNewImport = () => {
+    if (resumeJobId) {
+      setReplaceImportOpen(true)
+      return
+    }
+    setContinueImportId(null)
+    setImportMode(true)
+  }
+
+  const abandonAndBegin = async () => {
+    if (!resumeJobId) return
+    setBusy(true)
+    try {
+      await cancelCurriculumImportJob(resumeJobId)
+      setResumeJobId(null)
+      setContinueImportId(null)
+      setReplaceImportOpen(false)
+      setImportMode(true)
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (importMode) {
     return <CurriculumImportFlow
       initialJobId={continueImportId}
@@ -289,7 +316,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     <main className="workspace curriculum-workspace">
       <header className="workspace-header curriculum-page-header">
         <div><p className="eyebrow">学习资料</p><h1>课程</h1><p className="subtitle">管理教材、知识结构与当前科目的标签概况。</p></div>
-        <Button onClick={() => { setContinueImportId(null); setImportMode(true) }} variant="primary">导入教材</Button>
+        <Button onClick={beginNewImport} variant="primary">导入教材</Button>
       </header>
 
       <div className="curriculum-filters">
@@ -301,7 +328,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
           {!textbooks.length && <option value="">暂无教材</option>}
           {textbooks.map((book) => <option key={book.id} value={book.id}>{book.title}{book.isCurrent ? ' · 当前使用' : ''}</option>)}
         </SelectField>
-        {openImportCount > 0 && <button className="curriculum-task-link" onClick={() => { setImportMode(true) }} type="button">有 {openImportCount} 个教材导入任务待继续</button>}
+        {resumeJobId && <div className="curriculum-task-link"><span>上次教材分析尚未完成</span><Button onClick={() => { setContinueImportId(resumeJobId); setImportMode(true) }}>继续分析</Button><Button onClick={() => void cancelCurriculumImportJob(resumeJobId).then(refreshImportJobs)} variant="ghost">放弃</Button></div>}
       </div>
 
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }]} value={view} />
@@ -313,7 +340,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
           <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
           {!selectedTextbook ? (
             <EmptyState
-              action={<Button onClick={() => { setContinueImportId(null); setImportMode(true) }} variant="primary">导入教材</Button>}
+              action={<Button onClick={beginNewImport} variant="primary">导入教材</Button>}
               description="导入正在使用的教材，Axiom 会自动识别科目、版本、章节目录和候选知识点。"
               icon={<Icon name="curriculum" size={23} />}
               secondaryAction={<Button onClick={() => { setManualSubject(subject); setManualOpen(true) }} variant="secondary">手动创建</Button>}
@@ -349,6 +376,10 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
         <div className="curriculum-dialog-form"><label>科目<input onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /></label><label>教材或课程名称<input onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setReplaceImportOpen(false)} open={replaceImportOpen} title="开始新教材">
+        <div className="curriculum-dialog-form"><p>上次教材分析尚未完成。开始新教材将放弃上次结果。</p><div className="curriculum-dialog-actions"><Button onClick={() => { setReplaceImportOpen(false); setContinueImportId(resumeJobId); setImportMode(true) }} variant="primary">继续上次分析</Button><Button loading={busy} onClick={() => void abandonAndBegin()} variant="secondary">放弃上次并导入新教材</Button><Button onClick={() => setReplaceImportOpen(false)} variant="ghost">取消</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>

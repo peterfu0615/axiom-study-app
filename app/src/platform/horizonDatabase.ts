@@ -107,12 +107,13 @@ function rowToTextbook(row: Record<string, unknown>): Textbook {
 function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImportJob {
   return {
     id: String(row.id),
+    originalSourcePath: String(row.original_source_path),
     sourcePath: String(row.source_path),
     sourceName: String(row.source_name),
     sourceType: nullableString(row.source_type) as CurriculumImportJob['sourceType'],
     contentHash: nullableString(row.content_hash),
     status: String(row.status) as CurriculumImportJob['status'],
-    stage: String(row.stage) as CurriculumImportJob['stage'],
+    stage: String(row.resume_stage) as CurriculumImportJob['stage'],
     pageCount: nullableNumber(row.page_count),
     extractionMethod: nullableString(row.extraction_method) as CurriculumImportJob['extractionMethod'],
     extraction: parseJSON<CurriculumImportJob['extraction']>(row.extraction_json, null),
@@ -124,11 +125,12 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
     inputHash: nullableString(row.input_hash),
     rawOutput: nullableString(row.raw_output),
     errorMessage: nullableString(row.error_message),
-    textbookId: nullableString(row.textbook_id),
-    cancelledAt: nullableNumber(row.cancelled_at),
+    providerTaskId: nullableString(row.provider_task_id),
+    structure: parseJSON<unknown | null>(row.structure_json, null),
+    tags: parseJSON<unknown | null>(row.tags_json, null),
+    audit: parseJSON<unknown | null>(row.audit_json, null),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
-    completedAt: nullableNumber(row.completed_at),
   }
 }
 
@@ -305,23 +307,11 @@ export async function importTextbook(
   return textbookId
 }
 
-export async function createCurriculumImportJob(sourcePath: string) {
-  const now = Date.now()
-  const job: CurriculumImportJob = {
-    id: id(), sourcePath, sourceName: sourceNameFromPath(sourcePath), sourceType: null,
-    contentHash: null, status: 'pending', stage: 'preview', pageCount: null,
-    extractionMethod: null, extraction: null, recognition: null, provider: null,
-    model: null, promptVersion: null, schemaVersion: null, inputHash: null,
-    rawOutput: null, errorMessage: null, textbookId: null, cancelledAt: null,
-    createdAt: now, updatedAt: now, completedAt: null,
-  }
-  await execute(
-    `INSERT INTO curriculum_import_jobs (
-      id, source_path, source_name, status, stage, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
-    [job.id, job.sourcePath, job.sourceName, job.status, job.stage, now],
-  )
-  return job
+export async function prepareCurriculumImport(sourcePath: string) {
+  // File selection, copying, PDF text extraction, Vision OCR and input assembly
+  // deliberately happen without a curriculum_import_jobs row. A restart simply
+  // clears the native temporary directory instead of exposing a false resume.
+  return importTextbookSource(sourcePath)
 }
 
 export async function getCurriculumImportJob(jobId: string): Promise<CurriculumImportJob | null> {
@@ -333,94 +323,167 @@ export async function getCurriculumImportJob(jobId: string): Promise<CurriculumI
 
 export async function listCurriculumImportJobs(): Promise<CurriculumImportJob[]> {
   const rows = await select<Record<string, unknown>[]>(
-    `SELECT * FROM curriculum_import_jobs
-     WHERE status IN ('pending', 'extracting', 'recognizing', 'needs_review', 'failed')
-     ORDER BY updated_at DESC`,
+    `SELECT * FROM curriculum_import_jobs ORDER BY updated_at DESC LIMIT 1`,
   )
   return rows.map(rowToCurriculumImportJob)
+}
+
+export async function getCurriculumImportResumeSlot() {
+  return (await listCurriculumImportJobs())[0] ?? null
+}
+
+export async function reconcileCurriculumImportResumeSlot() {
+  // Migration 0018 performs the legacy multi-row reconciliation. This startup
+  // guard removes malformed rows if a database was edited outside Axiom.
+  const rows = await select<Array<{ id: string; source_path: string }>>(
+    `SELECT id, source_path FROM curriculum_import_jobs
+     WHERE content_hash = '' OR extraction_json = '' OR provider = '' OR model = ''
+     ORDER BY updated_at DESC`,
+  )
+  for (const row of rows) {
+    await execute('DELETE FROM curriculum_import_jobs WHERE id = $1', [row.id])
+    await removeTextbookSource(row.source_path).catch(() => {})
+  }
+  return getCurriculumImportResumeSlot()
 }
 
 async function assertImportJobActive(jobId: string) {
   const job = await getCurriculumImportJob(jobId)
   if (!job) throw new Error('找不到教材导入任务')
-  if (job.status === 'cancelled') throw new Error('教材导入已取消')
   return job
 }
 
 export async function cancelCurriculumImportJob(jobId: string) {
-  const now = Date.now()
-  await execute(
-    `UPDATE curriculum_import_jobs SET status = 'cancelled', cancelled_at = $1,
-       updated_at = $1 WHERE id = $2 AND status NOT IN ('completed', 'cancelled')`,
-    [now, jobId],
-  )
+  const job = await getCurriculumImportJob(jobId)
+  if (!job) return
+  await execute('DELETE FROM curriculum_import_jobs WHERE id = $1', [jobId])
+  await removeTextbookSource(job.sourcePath).catch(() => {})
 }
 
-export async function runCurriculumImportJob(jobId: string): Promise<CurriculumImportJob | null> {
+async function startAttempt(jobId: string, stage: CurriculumImportJob['stage']) {
+  const rows = await select<Array<{ count: number }>>(
+    'SELECT count(*) AS count FROM curriculum_import_attempts WHERE job_id = $1 AND stage = $2',
+    [jobId, stage],
+  )
+  const attemptNumber = Number(rows[0]?.count ?? 0) + 1
+  const attemptId = id()
+  await transaction(async () => {
+    await execute(
+      `UPDATE curriculum_import_attempts SET status = 'superseded', finished_at = $1
+       WHERE job_id = $2 AND stage = $3 AND status = 'running'`,
+      [Date.now(), jobId, stage],
+    )
+    await execute(
+      `INSERT INTO curriculum_import_attempts (
+        id, job_id, stage, attempt_number, status, started_at
+      ) VALUES ($1, $2, $3, $4, 'running', $5)`,
+      [attemptId, jobId, stage, attemptNumber, Date.now()],
+    )
+  })
+  return attemptId
+}
+
+async function runStructureStage(
+  jobId: string,
+  inFlightRequest?: ReturnType<ReturnType<typeof getTextbookRecognitionProvider>['recognizeTextbook']>,
+): Promise<CurriculumImportJob | null> {
   const initial = await assertImportJobActive(jobId)
-  const now = Date.now()
+  const attemptId = await startAttempt(jobId, 'ai_analyzing_structure')
   try {
     await execute(
-      `UPDATE curriculum_import_jobs SET status = 'extracting', stage = 'extracting',
-       error_message = NULL, updated_at = $1 WHERE id = $2 AND status != 'cancelled'`,
-      [now, jobId],
+      `UPDATE curriculum_import_jobs SET status = 'ai_analyzing_structure',
+       resume_stage = 'ai_analyzing_structure', error_message = NULL, updated_at = $1
+       WHERE id = $2`, [Date.now(), jobId],
     )
-    const imported = await importTextbookSource(initial.sourcePath)
-    const afterExtraction = await getCurriculumImportJob(jobId)
-    if (!afterExtraction || afterExtraction.status === 'cancelled') return afterExtraction
-
     const recognitionInput = {
       sourceName: initial.sourceName,
-      pageCount: imported.extraction.pageCount,
-      outline: imported.extraction.outline,
-      pages: imported.extraction.pages,
+      pageCount: initial.extraction?.pageCount ?? 0,
+      outline: initial.extraction?.outline ?? [],
+      pages: initial.extraction?.pages ?? [],
     }
-    const hash = await inputHash(recognitionInput)
-    await execute(
-      `UPDATE curriculum_import_jobs SET source_path = $1, source_type = $2,
-       content_hash = $3, page_count = $4, extraction_method = $5, extraction_json = $6,
-       input_hash = $7, status = 'recognizing', stage = 'recognizing', updated_at = $8
-       WHERE id = $9 AND status != 'cancelled'`,
-      [
-        imported.sourcePath, imported.sourceType, imported.contentHash,
-        imported.extraction.pageCount, imported.extraction.extractionMethod,
-        JSON.stringify(imported.extraction), hash, Date.now(), jobId,
-      ],
-    )
     const provider = getTextbookRecognitionProvider()
-    const result = await provider.recognizeTextbook(recognitionInput)
-    const afterRecognition = await getCurriculumImportJob(jobId)
-    if (!afterRecognition || afterRecognition.status === 'cancelled') return afterRecognition
+    const result = await (inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
+    const currentAttempt = await select<Array<{ status: string }>>(
+      'SELECT status FROM curriculum_import_attempts WHERE id = $1', [attemptId],
+    )
+    if (currentAttempt[0]?.status !== 'running') return getCurriculumImportJob(jobId)
     await execute(
-      `UPDATE curriculum_import_jobs SET status = 'needs_review', stage = 'confirm_info',
-       metadata_json = $1, provider = $2, model = $3, prompt_version = $4,
-       schema_version = $5, raw_output = $6, error_message = NULL, updated_at = $7
-       WHERE id = $8 AND status != 'cancelled'`,
-      [
-        JSON.stringify(result.recognition), provider.id, provider.model,
-        TEXTBOOK_RECOGNITION_PROMPT_VERSION, TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
-        result.rawOutput, Date.now(), jobId,
-      ],
+      `UPDATE curriculum_import_attempts SET status = 'succeeded', raw_output = $1,
+       finished_at = $2 WHERE id = $3 AND status = 'running'`,
+      [result.rawOutput, Date.now(), attemptId],
+    )
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
+       resume_stage = 'waiting_for_review', metadata_json = $1, structure_json = $2,
+       raw_output = $3, error_message = NULL, updated_at = $4
+       WHERE id = $5 AND status = 'ai_analyzing_structure'`,
+      [JSON.stringify(result.recognition), JSON.stringify(initial.extraction?.outline ?? []),
+        result.rawOutput, Date.now(), jobId],
     )
   } catch (error) {
-    const current = await getCurriculumImportJob(jobId)
-    if (!current || current.status === 'cancelled') return current
     await execute(
-      `UPDATE curriculum_import_jobs SET status = 'failed', error_message = $1,
-       updated_at = $2 WHERE id = $3`,
-      [String(error), Date.now(), jobId],
+      `UPDATE curriculum_import_attempts SET status = 'failed', error_message = $1,
+       finished_at = $2 WHERE id = $3 AND status = 'running'`,
+      [String(error), Date.now(), attemptId],
+    )
+    await execute(
+      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
+       resume_stage = 'ai_analyzing_structure', error_message = $1, updated_at = $2
+       WHERE id = $3`, [String(error), Date.now(), jobId],
     )
   }
   return getCurriculumImportJob(jobId)
 }
 
+export async function createCurriculumImportJob(
+  originalSourcePath: string,
+  imported: ImportedTextbookSource,
+) {
+  const existing = await getCurriculumImportResumeSlot()
+  if (existing) throw new Error('上次教材分析尚未完成。开始新教材前请先继续或放弃上次结果。')
+  const provider = getTextbookRecognitionProvider()
+  const recognitionInput = {
+    sourceName: sourceNameFromPath(originalSourcePath),
+    pageCount: imported.extraction.pageCount,
+    outline: imported.extraction.outline,
+    pages: imported.extraction.pages,
+  }
+  const now = Date.now()
+  const jobId = id()
+  // Calling the provider creates the native/network request before the durable
+  // slot is inserted. Thus a crash during extraction never leaves a checkpoint.
+  const inFlightRequest = provider.recognizeTextbook(recognitionInput)
+  try {
+    await execute(
+      `INSERT INTO curriculum_import_jobs (
+        id, original_source_path, source_path, source_name, source_type, content_hash,
+        status, resume_stage, page_count, extraction_method, extraction_json,
+        provider, model, prompt_version, schema_version, input_hash, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'ai_analyzing_structure',
+        'ai_analyzing_structure', $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
+      [jobId, originalSourcePath, imported.sourcePath, sourceNameFromPath(originalSourcePath),
+        imported.sourceType, imported.contentHash, imported.extraction.pageCount,
+        imported.extraction.extractionMethod, JSON.stringify(imported.extraction), provider.id,
+        provider.model, TEXTBOOK_RECOGNITION_PROMPT_VERSION,
+        TEXTBOOK_RECOGNITION_SCHEMA_VERSION, await inputHash(recognitionInput), now],
+    )
+  } catch (error) {
+    void inFlightRequest.catch(() => {})
+    await removeTextbookSource(imported.sourcePath).catch(() => {})
+    throw error
+  }
+  return runStructureStage(jobId, inFlightRequest)
+}
+
+export async function runCurriculumImportJob(jobId: string) {
+  const job = await assertImportJobActive(jobId)
+  if (job.stage === 'waiting_for_review') return job
+  // Providers without a server-side resumable task restart only the current
+  // safe stage. A new attempt prevents a late response from replacing it.
+  return runStructureStage(jobId)
+}
+
 export async function retryCurriculumImportJob(jobId: string) {
-  await execute(
-    `UPDATE curriculum_import_jobs SET status = 'pending', stage = 'preview',
-     cancelled_at = NULL, error_message = NULL, updated_at = $1
-     WHERE id = $2 AND status IN ('failed', 'cancelled', 'pending')`,
-    [Date.now(), jobId],
-  )
   return runCurriculumImportJob(jobId)
 }
 
@@ -442,8 +505,8 @@ export async function saveCurriculumImportOutline(
   if (!job.extraction) throw new Error('目录提取尚未完成')
   const extraction = { ...job.extraction, outline }
   await execute(
-    `UPDATE curriculum_import_jobs SET extraction_json = $1, stage = 'review_structure',
-     updated_at = $2 WHERE id = $3 AND status = 'needs_review'`,
+    `UPDATE curriculum_import_jobs SET extraction_json = $1,
+     updated_at = $2 WHERE id = $3 AND status = 'waiting_for_review'`,
     [JSON.stringify(extraction), Date.now(), jobId],
   )
   return getCurriculumImportJob(jobId)
@@ -527,12 +590,7 @@ export async function confirmCurriculumImportJob(
     extraction: job.extraction,
   }
   const textbookId = await persistImportedTextbook(imported, confirmation)
-  const now = Date.now()
-  await execute(
-    `UPDATE curriculum_import_jobs SET status = 'completed', stage = 'completed',
-     textbook_id = $1, completed_at = $2, updated_at = $2 WHERE id = $3`,
-    [textbookId, now, jobId],
-  )
+  await execute('DELETE FROM curriculum_import_jobs WHERE id = $1', [jobId])
   return textbookId
 }
 

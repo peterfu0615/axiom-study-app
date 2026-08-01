@@ -16,6 +16,7 @@ import {
   confirmCurriculumImportJob,
   createCurriculumImportJob,
   getCurriculumImportJob,
+  prepareCurriculumImport,
   retryCurriculumImportJob,
   saveCurriculumImportOutline,
 } from '../../platform/horizonDatabase'
@@ -60,10 +61,11 @@ function sourceKind(sourcePath: string) {
 }
 
 function stageLabel(job: CurriculumImportJob) {
-  if (job.status === 'extracting') return '正在读取教材文本与目录'
-  if (job.status === 'recognizing') return '正在识别教材信息'
-  if (job.status === 'failed') return '识别暂时失败'
-  return '正在准备教材'
+  if (job.status === 'ai_analyzing_structure') return '正在分析教材知识结构'
+  if (job.status === 'ai_generating_tags') return '正在生成四维标签'
+  if (job.status === 'ai_auditing') return '正在执行质量审计'
+  if (job.status === 'ai_failed_recoverable') return '分析暂时失败'
+  return '正在准备确认结果'
 }
 
 export function CurriculumImportFlow({
@@ -91,20 +93,19 @@ export function CurriculumImportFlow({
     void getCurriculumImportJob(initialJobId).then((next) => {
       if (next) {
         setJob(next)
-        setSourcePath(next.sourcePath)
-        if (['pending', 'extracting', 'recognizing', 'failed'].includes(next.status)) {
-          setPhase('processing')
-        } else if (next.stage === 'review_structure') {
-          setPhase('structure')
-        } else if (next.status === 'needs_review') {
+        setSourcePath(next.originalSourcePath)
+        if (next.status === 'waiting_for_review') {
           setPhase('confirm')
+        } else {
+          setPhase('processing')
+          void startCurriculumImport(next.id).then((resumed) => resumed && setJob(resumed))
         }
       }
     })
   }, [initialJobId])
 
   useEffect(() => {
-    if (!job || !['extracting', 'recognizing', 'pending'].includes(job.status)) return undefined
+    if (!job || !['ai_analyzing_structure', 'ai_generating_tags', 'ai_auditing'].includes(job.status)) return undefined
     const timer = window.setInterval(() => {
       void getCurriculumImportJob(job.id).then((next) => next && setJob(next))
     }, 900)
@@ -112,11 +113,11 @@ export function CurriculumImportFlow({
   }, [job])
 
   useEffect(() => {
-    if (!job || job.status !== 'needs_review' || hydratedJob.current === job.id || !job.recognition) return
+    if (!job || job.status !== 'waiting_for_review' || hydratedJob.current === job.id || !job.recognition) return
     hydratedJob.current = job.id
     setForm(formFromRecognition(job.recognition, job.sourcePath))
     setOutline(job.extraction?.outline ?? [])
-    setPhase(job.stage === 'review_structure' ? 'structure' : 'confirm')
+    setPhase('confirm')
   }, [job])
 
   const selectSource = (path: string) => {
@@ -140,10 +141,9 @@ export function CurriculumImportFlow({
     setSubmitting(true)
     setError(null)
     try {
-      const created = await createCurriculumImportJob(sourcePath)
-      setJob(created)
       setPhase('processing')
-      const finished = await startCurriculumImport(created.id)
+      const imported = await prepareCurriculumImport(sourcePath)
+      const finished = await createCurriculumImportJob(sourcePath, imported)
       if (finished) setJob(finished)
     } catch (reason) {
       setError(String(reason))
@@ -207,7 +207,7 @@ export function CurriculumImportFlow({
         <div>
           <p className="eyebrow">课程</p>
           <h1>导入教材</h1>
-          <p className="subtitle">导入后，Axiom 会先识别教材信息与目录，再由你确认课程结构。</p>
+          <p className="subtitle">先在本地识别带页码全文，再由 AI 分析结构与候选标签。</p>
         </div>
         <Button onClick={onBack} variant="ghost">返回课程</Button>
       </header>
@@ -262,21 +262,31 @@ export function CurriculumImportFlow({
         </section>
       )}
 
-      {phase === 'processing' && job && ['pending', 'extracting', 'recognizing'].includes(job.status) && (
+      {phase === 'processing' && !job && (
+        <section className="curriculum-import-card curriculum-import-processing">
+          <span className="ax-spinner" />
+          <h2>正在本地提取教材全文</h2>
+          <p>此阶段不建立跨重启任务；退出 App 后临时结果会被清理。</p>
+          <Progress detail="正在读取 PDF 文字并按需执行 Vision OCR" label="本地全文识别" value={18} />
+          <div className="curriculum-import-card__actions"><Button onClick={onBack}>取消</Button></div>
+        </section>
+      )}
+
+      {phase === 'processing' && job && ['ai_analyzing_structure', 'ai_generating_tags', 'ai_auditing'].includes(job.status) && (
         <section className="curriculum-import-card curriculum-import-processing">
           <span className="ax-spinner" />
           <h2>{stageLabel(job)}</h2>
-          <p>任务会在后台继续。你现在可以返回课程，稍后从教材导入入口继续查看。</p>
+          <p>AI 请求已经开始。你可以返回课程，稍后从唯一恢复入口继续。</p>
           <Progress
-            detail={job.status === 'extracting' ? '正在提取内容' : '正在整理教材信息'}
-            label={job.status === 'extracting' ? '读取教材' : '识别教材信息'}
-            value={job.status === 'extracting' ? 42 : 76}
+            detail={stageLabel(job)}
+            label="教材 AI 分析"
+            value={job.status === 'ai_analyzing_structure' ? 52 : job.status === 'ai_generating_tags' ? 72 : 88}
           />
           <div className="curriculum-import-card__actions"><Button onClick={onBack}>后台继续</Button><Button onClick={() => void cancel()} variant="ghost">取消导入</Button></div>
         </section>
       )}
 
-      {job?.status === 'failed' && (
+      {job?.status === 'ai_failed_recoverable' && (
         <section className="curriculum-import-card curriculum-import-processing curriculum-import-processing--error">
           <h2>这次识别没有完成</h2>
           <p>{job.errorMessage || '请检查文件后重试。'}</p>

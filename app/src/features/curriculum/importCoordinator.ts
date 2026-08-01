@@ -1,6 +1,6 @@
 import {
   getCurriculumImportJob,
-  listCurriculumImportJobs,
+  reconcileCurriculumImportResumeSlot,
   runCurriculumImportJob,
 } from '../../platform/horizonDatabase'
 
@@ -17,10 +17,5 @@ export async function startCurriculumImport(jobId: string) {
 }
 
 export async function resumeCurriculumImports() {
-  const jobs = await listCurriculumImportJobs()
-  await Promise.all(
-    jobs
-      .filter((job) => ['pending', 'extracting', 'recognizing'].includes(job.status))
-      .map((job) => startCurriculumImport(job.id)),
-  )
+  return reconcileCurriculumImportResumeSlot()
 }

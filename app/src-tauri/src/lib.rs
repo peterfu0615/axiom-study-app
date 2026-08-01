@@ -130,6 +130,12 @@ pub fn run() {
             sql: include_str!("../migrations/0017_curriculum_import_jobs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 18,
+            description: "curriculum_single_resume_slot",
+            sql: include_str!("../migrations/0018_curriculum_single_resume_slot.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
