@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   isCompleteCurriculumCheckpoint,
+  clearsCurriculumCheckpoint,
+  newCurriculumImportAction,
   nextSafeCurriculumStage,
   selectSingleCurriculumCheckpoint,
+  shouldPersistCurriculumCheckpoint,
   type CurriculumCheckpointCandidate,
 } from './curriculumImportPolicy'
 
@@ -43,5 +46,28 @@ describe('single curriculum resume slot', () => {
     expect(nextSafeCurriculumStage('ai_generating_tags')).toBe('ai_generating_tags')
     expect(nextSafeCurriculumStage('ai_auditing')).toBe('ai_auditing')
     expect(nextSafeCurriculumStage('waiting_for_review')).toBe('waiting_for_review')
+  })
+
+  it('does not recover when the app closes during OCR', () => {
+    expect(shouldPersistCurriculumCheckpoint('vision_ocr', false)).toBe(false)
+  })
+
+  it('does not recover after extraction but before AI dispatch', () => {
+    expect(shouldPersistCurriculumCheckpoint('assembling_text', false)).toBe(false)
+  })
+
+  it('shows one resume entry after an AI request is dispatched', () => {
+    expect(shouldPersistCurriculumCheckpoint('ai_analyzing_structure', true)).toBe(true)
+  })
+
+  it('requires confirmation before a new import replaces the slot', () => {
+    expect(newCurriculumImportAction(true)).toBe('confirm_abandon')
+    expect(newCurriculumImportAction(false)).toBe('start')
+  })
+
+  it('retains retryable AI failure but clears abandoned and saved checkpoints', () => {
+    expect(clearsCurriculumCheckpoint('retryable_failure')).toBe(false)
+    expect(clearsCurriculumCheckpoint('abandoned')).toBe(true)
+    expect(clearsCurriculumCheckpoint('saved')).toBe(true)
   })
 })

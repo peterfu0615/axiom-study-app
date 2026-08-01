@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildCurriculumTagPrompt,
+  chunkTextbookPages,
   parseCurriculumTags,
   reconcileCurriculumTagCandidates,
 } from './curriculumAnalysis'
@@ -48,5 +49,16 @@ describe('curriculum tag inference', () => {
   it('rejects a response for another subject', () => {
     expect(() => parseCurriculumTags(JSON.stringify({ subject: '物理', tags: [], warnings: [] }), '数学'))
       .toThrow('科目不匹配')
+  })
+
+  it('splits oversized textbooks at chapter boundaries without dropping later pages', () => {
+    const pages = Array.from({ length: 8 }, (_, index) => ({
+      pageNumber: index + 1, evidenceText: `page-${index + 1}-` + '字'.repeat(20),
+    }))
+    const chunks = chunkTextbookPages(pages, [
+      { level: 1, pageNumber: 1 }, { level: 1, pageNumber: 5 },
+    ], 10_000)
+    expect(chunks).toHaveLength(2)
+    expect(chunks.flat().map((page) => page.pageNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
   })
 })

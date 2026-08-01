@@ -117,6 +117,26 @@ private struct TextbookExtractionResult: Codable {
     let warnings: [String]
 }
 
+private func emitTextbookProgress(
+    currentPage: Int,
+    totalPages: Int,
+    pdfTextPages: Int,
+    ocrPages: Int,
+    phase: String
+) {
+    let payload: [String: Any] = [
+        "currentPage": currentPage,
+        "totalPages": totalPages,
+        "pdfTextPages": pdfTextPages,
+        "ocrPages": ocrPages,
+        "phase": phase,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8),
+          let line = "AXIOM_PROGRESS \(json)\n".data(using: .utf8) else { return }
+    FileHandle.standardError.write(line)
+}
+
 private func recognizeText(in image: CGImage) throws -> (text: String, confidence: Double) {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
@@ -168,7 +188,7 @@ private func outlineCandidates(from pages: [TextbookExtractedPage]) -> [Textbook
             ))
         }
     }
-    return Array(output.prefix(500))
+    return output
 }
 
 private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionResult {
@@ -179,11 +199,8 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
     var warnings: [String] = []
     var textPageCount = 0
     var ocrPageCount = 0
-    let maximumOCRPages = 80
-    let maximumPages = min(document.pageCount, 500)
-    if document.pageCount > maximumPages {
-        warnings.append("教材超过 500 页，仅提取前 500 页")
-    }
+    let maximumPages = document.pageCount
+    emitTextbookProgress(currentPage: 0, totalPages: maximumPages, pdfTextPages: 0, ocrPages: 0, phase: "reading")
     for index in 0..<maximumPages {
         guard let page = document.page(at: index) else { continue }
         let embedded = (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -191,16 +208,11 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
             textPageCount += 1
             pages.append(TextbookExtractedPage(
                 pageNumber: index + 1,
-                evidenceText: String(embedded.prefix(80_000)),
+                evidenceText: embedded,
                 extractionMethod: "pdf_text",
                 confidence: 0.99
             ))
-            continue
-        }
-        if ocrPageCount >= maximumOCRPages {
-            if !warnings.contains("扫描版教材 OCR 首次导入最多处理 80 页") {
-                warnings.append("扫描版教材 OCR 首次导入最多处理 80 页")
-            }
+            emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, phase: "pdf_text")
             continue
         }
         let bounds = page.bounds(for: .mediaBox)
@@ -217,10 +229,11 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
         ocrPageCount += 1
         pages.append(TextbookExtractedPage(
             pageNumber: index + 1,
-            evidenceText: String(recognized.text.prefix(80_000)),
+            evidenceText: recognized.text,
             extractionMethod: "vision_ocr",
             confidence: recognized.confidence
         ))
+        emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, phase: "vision_ocr")
     }
     let extractionMethod: String
     if textPageCount > 0 && ocrPageCount > 0 {
@@ -240,6 +253,7 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
 }
 
 private func extractTextbookImage(inputPath: String) throws -> TextbookExtractionResult {
+    emitTextbookProgress(currentPage: 0, totalPages: 1, pdfTextPages: 0, ocrPages: 0, phase: "vision_ocr")
     guard
         let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: inputPath) as CFURL, nil),
         let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -249,10 +263,11 @@ private func extractTextbookImage(inputPath: String) throws -> TextbookExtractio
     let recognized = try recognizeText(in: image)
     let page = TextbookExtractedPage(
         pageNumber: 1,
-        evidenceText: String(recognized.text.prefix(80_000)),
+        evidenceText: recognized.text,
         extractionMethod: "vision_ocr",
         confidence: recognized.confidence
     )
+    emitTextbookProgress(currentPage: 1, totalPages: 1, pdfTextPages: 0, ocrPages: 1, phase: "vision_ocr")
     return TextbookExtractionResult(
         pageCount: 1,
         extractionMethod: "vision_ocr",

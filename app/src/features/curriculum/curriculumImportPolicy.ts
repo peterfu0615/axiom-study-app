@@ -42,3 +42,18 @@ export function nextSafeCurriculumStage(stage: CurriculumImportStage) {
   if (stage === 'ai_auditing') return 'ai_auditing'
   return 'waiting_for_review'
 }
+
+export function shouldPersistCurriculumCheckpoint(
+  stage: string,
+  aiRequestSubmitted: boolean,
+) {
+  return aiRequestSubmitted && recoverableCurriculumStatuses.includes(stage as CurriculumImportStatus)
+}
+
+export function newCurriculumImportAction(hasResumeSlot: boolean) {
+  return hasResumeSlot ? 'confirm_abandon' : 'start' as const
+}
+
+export function clearsCurriculumCheckpoint(event: 'abandoned' | 'saved' | 'retryable_failure') {
+  return event !== 'retryable_failure'
+}

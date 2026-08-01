@@ -47,6 +47,14 @@ export interface ImportedTextbookSource {
   }
 }
 
+export interface TextbookExtractionProgress {
+  currentPage: number
+  totalPages: number
+  pdfTextPages: number
+  ocrPages: number
+  phase: 'reading' | 'pdf_text' | 'vision_ocr'
+}
+
 export function isDesktopRuntime() {
   return (
     isTauri() ||
@@ -70,8 +78,33 @@ export async function importImage(sourcePath: string): Promise<PersistedMedia> {
 
 export async function importTextbookSource(
   sourcePath: string,
+  requestId: string = crypto.randomUUID(),
+  onProgress?: (progress: TextbookExtractionProgress) => void,
 ): Promise<ImportedTextbookSource> {
-  return invoke<ImportedTextbookSource>('import_textbook_source', { sourcePath })
+  const unlisten = onProgress
+    ? await listen<TextbookExtractionProgress>('curriculum-extraction-progress', (event) => onProgress(event.payload))
+    : null
+  try {
+    return await invoke<ImportedTextbookSource>('import_textbook_source', { sourcePath, requestId })
+  } finally {
+    unlisten?.()
+  }
+}
+
+export async function cancelTextbookImport(requestId: string) {
+  return invoke<void>('cancel_textbook_import', { requestId })
+}
+
+export async function verifyTextbookSource(sourcePath: string, expectedHash: string) {
+  return invoke<void>('verify_textbook_source', { sourcePath, expectedHash })
+}
+
+export async function cleanupTextbookImportTemp(preservePaths: string[] = []) {
+  return invoke<void>('cleanup_textbook_import_temp', { preservePaths })
+}
+
+export async function promoteTextbookSource(sourcePath: string) {
+  return invoke<string>('promote_textbook_source', { path: sourcePath })
 }
 
 export async function removeTextbookSource(sourcePath: string) {

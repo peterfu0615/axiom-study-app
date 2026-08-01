@@ -36,6 +36,28 @@ export interface CurriculumAuditResult {
   warnings: string[]
 }
 
+export function chunkTextbookPages(
+  pages: Array<{ pageNumber: number; evidenceText: string }>,
+  outline: Array<{ level: number; pageNumber: number }> = [],
+  safeCharacterBudget = 120_000,
+) {
+  if (!pages.length) return [[]]
+  const chapterStarts = new Set(outline.filter((item) => item.level === 1).map((item) => item.pageNumber))
+  const chunks: typeof pages[] = []
+  let current: typeof pages = []
+  let size = 0
+  for (const page of pages) {
+    const pageSize = page.evidenceText.length + 32
+    const chapterBoundary = chapterStarts.has(page.pageNumber) && current.length > 0
+    if (current.length > 0 && (size + pageSize > safeCharacterBudget || chapterBoundary)) {
+      chunks.push(current); current = []; size = 0
+    }
+    current.push(page); size += pageSize
+  }
+  if (current.length) chunks.push(current)
+  return chunks
+}
+
 export const curriculumTagsJSONSchema = {
   type: 'object', required: ['subject', 'tags', 'warnings'],
   properties: {

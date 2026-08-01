@@ -9,8 +9,8 @@ import {
   Progress,
   StatusBadge,
 } from '../../components/ui'
-import { mediaAssetUrl } from '../../platform/native'
-import type { TextbookOutlineCandidate } from '../../platform/native'
+import { cancelTextbookImport, mediaAssetUrl } from '../../platform/native'
+import type { TextbookExtractionProgress, TextbookOutlineCandidate } from '../../platform/native'
 import {
   cancelCurriculumImportJob,
   confirmCurriculumImportJob,
@@ -86,7 +86,9 @@ export function CurriculumImportFlow({
   const [outline, setOutline] = useState<TextbookOutlineCandidate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [extractionProgress, setExtractionProgress] = useState<TextbookExtractionProgress | null>(null)
   const hydratedJob = useRef<string | null>(null)
+  const extractionRequestId = useRef<string | null>(null)
 
   useEffect(() => {
     if (!initialJobId) return
@@ -98,8 +100,12 @@ export function CurriculumImportFlow({
           setPhase('confirm')
         } else {
           setPhase('processing')
-          void startCurriculumImport(next.id).then((resumed) => resumed && setJob(resumed))
         }
+        void startCurriculumImport(next.id).then((resumed) => {
+          if (!resumed) return
+          setJob(resumed)
+          setPhase(resumed.status === 'waiting_for_review' ? 'confirm' : 'processing')
+        })
       }
     })
   }, [initialJobId])
@@ -142,7 +148,10 @@ export function CurriculumImportFlow({
     setError(null)
     try {
       setPhase('processing')
-      const imported = await prepareCurriculumImport(sourcePath)
+      const requestId = crypto.randomUUID()
+      extractionRequestId.current = requestId
+      const imported = await prepareCurriculumImport(sourcePath, requestId, setExtractionProgress)
+      extractionRequestId.current = null
       const finished = await createCurriculumImportJob(sourcePath, imported)
       if (finished) setJob(finished)
     } catch (reason) {
@@ -171,6 +180,10 @@ export function CurriculumImportFlow({
   }
 
   const cancel = async () => {
+    if (extractionRequestId.current) {
+      await cancelTextbookImport(extractionRequestId.current)
+      extractionRequestId.current = null
+    }
     if (job) await cancelCurriculumImportJob(job.id)
     onBack()
   }
@@ -209,7 +222,7 @@ export function CurriculumImportFlow({
           <h1>导入教材</h1>
           <p className="subtitle">先在本地识别带页码全文，再由 AI 分析结构与候选标签。</p>
         </div>
-        <Button onClick={onBack} variant="ghost">返回课程</Button>
+        <Button onClick={() => void cancel()} variant="ghost">返回课程</Button>
       </header>
 
       <ol className="curriculum-import-steps" aria-label="教材导入步骤">
@@ -267,8 +280,16 @@ export function CurriculumImportFlow({
           <span className="ax-spinner" />
           <h2>正在本地提取教材全文</h2>
           <p>此阶段不建立跨重启任务；退出 App 后临时结果会被清理。</p>
-          <Progress detail="正在读取 PDF 文字并按需执行 Vision OCR" label="本地全文识别" value={18} />
-          <div className="curriculum-import-card__actions"><Button onClick={onBack}>取消</Button></div>
+          <Progress
+            detail={extractionProgress
+              ? `第 ${extractionProgress.currentPage}/${extractionProgress.totalPages} 页 · PDF 文字 ${extractionProgress.pdfTextPages} 页 · OCR ${extractionProgress.ocrPages} 页`
+              : '正在流式复制、校验文件并启动提取器'}
+            label="本地全文识别"
+            value={extractionProgress?.totalPages
+              ? Math.max(2, Math.round(extractionProgress.currentPage / extractionProgress.totalPages * 46))
+              : 2}
+          />
+          <div className="curriculum-import-card__actions"><Button onClick={() => void cancel()}>取消</Button></div>
         </section>
       )}
 

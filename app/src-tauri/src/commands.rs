@@ -1,8 +1,10 @@
 use std::{
+    collections::HashSet,
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
     time::Instant,
@@ -11,7 +13,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
@@ -24,6 +26,11 @@ use crate::models::{
 const MAX_IMAGE_BYTES: usize = 30 * 1024 * 1024;
 const MAX_TEXTBOOK_BYTES: u64 = 300 * 1024 * 1024;
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+static CANCELLED_TEXTBOOK_IMPORTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn cancelled_textbook_imports() -> &'static Mutex<HashSet<String>> {
+    CANCELLED_TEXTBOOK_IMPORTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
 fn now_millis() -> Result<i64, String> {
     let duration = SystemTime::now()
@@ -86,11 +93,92 @@ fn textbook_source_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+fn textbook_import_temp_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("无法定位应用缓存目录：{error}"))?
+        .join("curriculum-import");
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建教材临时目录：{error}"))?;
+    Ok(directory)
+}
+
+fn textbook_import_cancelled(request_id: &str) -> bool {
+    cancelled_textbook_imports()
+        .lock()
+        .map(|requests| requests.contains(request_id))
+        .unwrap_or(false)
+}
+
+fn copy_and_hash_textbook(
+    source: &Path,
+    target: &Path,
+    request_id: &str,
+) -> Result<String, String> {
+    let mut reader = BufReader::new(
+        fs::File::open(source).map_err(|error| format!("无法读取教材文件：{error}"))?,
+    );
+    let mut writer =
+        fs::File::create(target).map_err(|error| format!("保存教材文件失败：{error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        if textbook_import_cancelled(request_id) {
+            return Err("教材导入已取消".to_string());
+        }
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("读取教材文件失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        writer
+            .write_all(&buffer[..read])
+            .map_err(|error| format!("保存教材文件失败：{error}"))?;
+    }
+    writer
+        .flush()
+        .map_err(|error| format!("保存教材文件失败：{error}"))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_textbook_file(path: &Path) -> Result<String, String> {
+    let mut reader =
+        BufReader::new(fs::File::open(path).map_err(|error| format!("无法读取教材文件：{error}"))?);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("读取教材文件失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn import_textbook_source(
+pub async fn import_textbook_source(
     app: AppHandle,
     source_path: String,
+    request_id: String,
+) -> Result<ImportedTextbookSource, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        import_textbook_source_blocking(app, source_path, request_id)
+    })
+    .await
+    .map_err(|error| format!("教材后台提取任务异常结束：{error}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn import_textbook_source_blocking(
+    app: AppHandle,
+    source_path: String,
+    request_id: String,
 ) -> Result<ImportedTextbookSource, String> {
     let source = Path::new(&source_path)
         .canonicalize()
@@ -107,11 +195,11 @@ pub fn import_textbook_source(
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_TEXTBOOK_BYTES {
         return Err("教材文件为空或超过 300 MB".to_string());
     }
-    let bytes = fs::read(&source).map_err(|error| format!("无法读取教材文件：{error}"))?;
-    let content_hash = format!("{:x}", Sha256::digest(&bytes));
     let id = Uuid::new_v4().to_string();
-    let target = textbook_source_directory(&app)?.join(format!("{id}.{extension}"));
-    fs::write(&target, &bytes).map_err(|error| format!("保存教材文件失败：{error}"))?;
+    let target = textbook_import_temp_directory(&app)?.join(format!("{id}.{extension}"));
+    let content_hash = copy_and_hash_textbook(&source, &target, &request_id).inspect_err(|_| {
+        let _ = fs::remove_file(&target);
+    })?;
 
     let helper = vision_helper_path(&app)?;
     if !helper.is_file() {
@@ -123,24 +211,72 @@ pub fn import_textbook_source(
     } else {
         "extract-textbook-image"
     };
-    let output = Command::new(helper)
+    let mut child = Command::new(helper)
         .arg(command)
         .arg("--input")
         .arg(&target)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             let _ = fs::remove_file(&target);
             format!("无法启动教材提取器：{error}")
         })?;
-    if !output.status.success() {
+    let mut stdout = child.stdout.take().ok_or("无法读取教材提取结果")?;
+    let stderr = child.stderr.take().ok_or("无法读取教材提取日志")?;
+    let stdout_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let app_for_progress = app.clone();
+    let progress_thread = thread::spawn(move || {
+        let mut diagnostic = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(payload) = line.strip_prefix("AXIOM_PROGRESS ") {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) {
+                    let _ = app_for_progress.emit("curriculum-extraction-progress", value);
+                }
+            } else {
+                diagnostic.push_str(&line);
+                diagnostic.push('\n');
+            }
+        }
+        diagnostic
+    });
+    let status = loop {
+        if textbook_import_cancelled(&request_id) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&target);
+            cancelled_textbook_imports()
+                .lock()
+                .ok()
+                .map(|mut set| set.remove(&request_id));
+            return Err("教材导入已取消".to_string());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("等待教材提取失败：{error}"))?
+        {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(80));
+    };
+    let output = stdout_thread
+        .join()
+        .map_err(|_| "教材提取输出线程异常".to_string())?
+        .map_err(|error| format!("读取教材提取结果失败：{error}"))?;
+    let diagnostic = progress_thread.join().unwrap_or_default();
+    cancelled_textbook_imports()
+        .lock()
+        .ok()
+        .map(|mut set| set.remove(&request_id));
+    if !status.success() {
         let _ = fs::remove_file(&target);
-        return Err(format!(
-            "教材内容提取失败：{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(format!("教材内容提取失败：{diagnostic}"));
     }
     let extraction: TextbookExtractionResult =
-        serde_json::from_slice(&output.stdout).map_err(|error| {
+        serde_json::from_slice(&output).map_err(|error| {
             let _ = fs::remove_file(&target);
             format!("无法解析教材提取结果：{error}")
         })?;
@@ -159,10 +295,90 @@ pub fn import_textbook_source(
 }
 
 #[tauri::command]
-pub fn remove_textbook_source(app: AppHandle, path: String) -> Result<(), String> {
-    let directory = textbook_source_directory(&app)?
+pub fn cancel_textbook_import(request_id: String) {
+    if let Ok(mut requests) = cancelled_textbook_imports().lock() {
+        requests.insert(request_id);
+    }
+}
+
+#[tauri::command]
+pub async fn verify_textbook_source(
+    source_path: String,
+    expected_hash: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = Path::new(&source_path)
+            .canonicalize()
+            .map_err(|error| format!("原教材文件已不可访问：{error}"))?;
+        let actual = hash_textbook_file(&source)?;
+        if actual != expected_hash {
+            return Err("原教材文件内容已变化，无法安全恢复上次分析".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("教材哈希校验任务异常结束：{error}"))?
+}
+
+#[tauri::command]
+pub fn cleanup_textbook_import_temp(
+    app: AppHandle,
+    preserve_paths: Vec<String>,
+) -> Result<(), String> {
+    let directory = textbook_import_temp_directory(&app)?;
+    let preserved = preserve_paths
+        .into_iter()
+        .filter_map(|path| Path::new(&path).canonicalize().ok())
+        .collect::<HashSet<_>>();
+    for entry in
+        fs::read_dir(directory).map_err(|error| format!("无法扫描教材临时目录：{error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("无法读取教材临时文件：{error}"))?
+            .path();
+        if path.is_file()
+            && !path
+                .canonicalize()
+                .ok()
+                .is_some_and(|canonical| preserved.contains(&canonical))
+        {
+            fs::remove_file(path).map_err(|error| format!("清理教材临时文件失败：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn promote_textbook_source(app: AppHandle, path: String) -> Result<String, String> {
+    let source = Path::new(&path)
         .canonicalize()
-        .map_err(|error| format!("无法读取教材目录：{error}"))?;
+        .map_err(|error| format!("教材临时文件不可用：{error}"))?;
+    let temp = textbook_import_temp_directory(&app)?
+        .canonicalize()
+        .map_err(|error| format!("无法读取教材临时目录：{error}"))?;
+    if source.parent() != Some(temp.as_path()) {
+        return Ok(source.to_string_lossy().to_string());
+    }
+    let file_name = source.file_name().ok_or("教材临时文件名无效")?;
+    let target = textbook_source_directory(&app)?.join(file_name);
+    fs::rename(&source, &target)
+        .or_else(|_| {
+            fs::copy(&source, &target)?;
+            fs::remove_file(&source)
+        })
+        .map_err(|error| format!("保存正式教材文件失败：{error}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn remove_textbook_source(app: AppHandle, path: String) -> Result<(), String> {
+    let directories = [
+        textbook_source_directory(&app)?,
+        textbook_import_temp_directory(&app)?,
+    ]
+    .into_iter()
+    .filter_map(|directory| directory.canonicalize().ok())
+    .collect::<Vec<_>>();
     let candidate = Path::new(&path);
     if !candidate.exists() {
         return Ok(());
@@ -170,7 +386,10 @@ pub fn remove_textbook_source(app: AppHandle, path: String) -> Result<(), String
     let canonical = candidate
         .canonicalize()
         .map_err(|error| format!("无法验证教材路径：{error}"))?;
-    if canonical.parent() != Some(directory.as_path()) {
+    if !directories
+        .iter()
+        .any(|directory| canonical.parent() == Some(directory.as_path()))
+    {
         return Err("只能清理 Axiom 管理的教材源文件".to_string());
     }
     fs::remove_file(canonical).map_err(|error| format!("清理教材源文件失败：{error}"))
@@ -181,6 +400,7 @@ pub fn remove_textbook_source(app: AppHandle, path: String) -> Result<(), String
 pub fn import_textbook_source(
     _app: AppHandle,
     _source_path: String,
+    _request_id: String,
 ) -> Result<ImportedTextbookSource, String> {
     Err("教材自动提取目前仅支持 macOS".to_string())
 }
@@ -861,10 +1081,12 @@ pub fn delete_media_file(app: AppHandle, path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_normalized_rect, versioned_diagram_image_name, versioned_problem_image_name,
-        ALLOWED_MEDIA_SUBDIRS,
+        copy_and_hash_textbook, hash_textbook_file, validate_normalized_rect,
+        versioned_diagram_image_name, versioned_problem_image_name, ALLOWED_MEDIA_SUBDIRS,
     };
     use crate::models::NormalizedRect;
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn accepts_valid_normalized_crop() {
@@ -921,5 +1143,27 @@ mod tests {
             ALLOWED_MEDIA_SUBDIRS,
             &["original", "corrected", "problems", "diagrams"]
         );
+    }
+
+    #[test]
+    fn streams_an_eighty_megabyte_textbook_copy_and_hash() {
+        let directory = std::env::temp_dir().join(format!("axiom-stream-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("source.pdf");
+        let target = directory.join("target.pdf");
+        fs::File::create(&source)
+            .and_then(|file| file.set_len(80 * 1024 * 1024))
+            .expect("create sparse 80 MB fixture");
+        let copied_hash =
+            copy_and_hash_textbook(&source, &target, "stream-test").expect("stream copy and hash");
+        assert_eq!(
+            fs::metadata(&target).expect("target metadata").len(),
+            80 * 1024 * 1024
+        );
+        assert_eq!(
+            copied_hash,
+            hash_textbook_file(&target).expect("hash target")
+        );
+        fs::remove_dir_all(directory).expect("clean test directory");
     }
 }
