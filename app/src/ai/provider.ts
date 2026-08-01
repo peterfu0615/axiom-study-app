@@ -178,6 +178,11 @@ export class MockAIProvider implements AIProvider {
         bbox: null,
       },
       knowledge_points: ['等待真实 VLM 识别'],
+      knowledge_tags: [],
+      method_tags: [],
+      model_tags: [],
+      difficulty: null,
+      error_categories: [],
       confidence: 0.5,
       warnings: ['当前结果由 Mock Provider 生成，不代表真实题目内容。'],
     })

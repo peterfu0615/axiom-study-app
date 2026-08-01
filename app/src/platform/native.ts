@@ -18,6 +18,35 @@ export interface NativeAIResponse {
   errorMessage: string | null
 }
 
+export interface TextbookExtractedPage {
+  pageNumber: number
+  evidenceText: string
+  extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual'
+  confidence: number
+}
+
+export interface TextbookOutlineCandidate {
+  title: string
+  level: number
+  pageNumber: number
+  evidenceText: string
+  confidence: number
+}
+
+export interface ImportedTextbookSource {
+  sourcePath: string
+  contentHash: string
+  byteLength: number
+  sourceType: 'pdf' | 'directory_image'
+  extraction: {
+    pageCount: number
+    extractionMethod: 'pdf_text' | 'vision_ocr' | 'mixed'
+    pages: TextbookExtractedPage[]
+    outline: TextbookOutlineCandidate[]
+    warnings: string[]
+  }
+}
+
 export function isDesktopRuntime() {
   return (
     isTauri() ||
@@ -37,6 +66,16 @@ export async function getCameraOrientation(deviceLabel: string) {
 
 export async function importImage(sourcePath: string): Promise<PersistedMedia> {
   return invoke<PersistedMedia>('import_image', { sourcePath })
+}
+
+export async function importTextbookSource(
+  sourcePath: string,
+): Promise<ImportedTextbookSource> {
+  return invoke<ImportedTextbookSource>('import_textbook_source', { sourcePath })
+}
+
+export async function removeTextbookSource(sourcePath: string) {
+  return invoke<void>('remove_textbook_source', { path: sourcePath })
 }
 
 export async function persistCameraFrame(dataUrl: string): Promise<PersistedMedia> {
@@ -136,7 +175,7 @@ export async function getDatabasePath(): Promise<string> {
 export async function analyzeProblemWithOpenAICompatible(request: {
   baseUrl: string
   model: string
-  /** Provider id，Rust 内部按 id 从数据库读取 api_key（不再使用 Keychain）。 */
+  /** Keychain reference. Rust reads the key internally. */
   credentialRef: string
   /** 主图（可选，与 imagePaths 合并） */
   cropImagePath?: string
@@ -168,6 +207,38 @@ export async function analyzeProblemWithOpenAICompatible(request: {
       stream: request.onChunk ? true : false,
     },
   )
+}
+
+export async function storeApiKey(providerId: string, apiKey: string) {
+  return invoke<string>('store_api_key', { providerId, apiKey })
+}
+
+export async function deleteApiKey(credentialRef: string) {
+  return invoke<void>('delete_api_key', { credentialRef })
+}
+
+export async function mergeTagDefinitions(
+  subject: string,
+  sourceTagId: string,
+  targetTagId: string,
+) {
+  return invoke<void>('merge_tag_definitions', {
+    subject,
+    sourceTagId,
+    targetTagId,
+  })
+}
+
+export async function mergeKnowledgeNodes(
+  subject: string,
+  sourceNodeId: string,
+  targetNodeId: string,
+) {
+  return invoke<void>('merge_knowledge_nodes', {
+    subject,
+    sourceNodeId,
+    targetNodeId,
+  })
 }
 
 export async function analyzeProblemWithAntigravityCLI(request: {

@@ -1,7 +1,9 @@
 import AVFoundation
+import AppKit
 import CoreImage
 import Foundation
 import ImageIO
+import PDFKit
 import Vision
 
 private struct NormalizedRect: Codable {
@@ -90,6 +92,174 @@ private struct CameraOrientationResult: Codable {
     let isContinuityCamera: Bool
     let previewRotationAngle: Double
     let captureRotationAngle: Double
+}
+
+private struct TextbookExtractedPage: Codable {
+    let pageNumber: Int
+    let evidenceText: String
+    let extractionMethod: String
+    let confidence: Double
+}
+
+private struct TextbookOutlineCandidate: Codable {
+    let title: String
+    let level: Int
+    let pageNumber: Int
+    let evidenceText: String
+    let confidence: Double
+}
+
+private struct TextbookExtractionResult: Codable {
+    let pageCount: Int
+    let extractionMethod: String
+    let pages: [TextbookExtractedPage]
+    let outline: [TextbookOutlineCandidate]
+    let warnings: [String]
+}
+
+private func recognizeText(in image: CGImage) throws -> (text: String, confidence: Double) {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = true
+    request.recognitionLanguages = ["zh-Hans", "en-US"]
+    try VNImageRequestHandler(cgImage: image).perform([request])
+    let observations = request.results ?? []
+    let candidates = observations.compactMap { observation -> (String, Float)? in
+        guard let candidate = observation.topCandidates(1).first else { return nil }
+        return (candidate.string, candidate.confidence)
+    }
+    let text = candidates.map { $0.0 }.joined(separator: "\n")
+    let confidence = candidates.isEmpty
+        ? 0
+        : candidates.map { Double($0.1) }.reduce(0, +) / Double(candidates.count)
+    return (text, confidence)
+}
+
+private func outlineCandidates(from pages: [TextbookExtractedPage]) -> [TextbookOutlineCandidate] {
+    let patterns: [(String, Int)] = [
+        (#"^(第[一二三四五六七八九十百0-9]+[章单元篇]).{0,28}$"#, 1),
+        (#"^(第[一二三四五六七八九十百0-9]+节).{0,32}$"#, 2),
+        (#"^([0-9]+)\s*[\.、]\s*[^。！？]{2,36}$"#, 1),
+        (#"^([0-9]+\.[0-9]+)\s+.{1,36}$"#, 2),
+        (#"^([0-9]+\.[0-9]+\.[0-9]+)\s+.{1,36}$"#, 3),
+    ]
+    var seen = Set<String>()
+    var output: [TextbookOutlineCandidate] = []
+    for page in pages {
+        for rawLine in page.evidenceText.components(separatedBy: .newlines) {
+            let title = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard title.count >= 2, title.count <= 48 else { continue }
+            var matchedLevel: Int?
+            for (pattern, level) in patterns {
+                if title.range(of: pattern, options: .regularExpression) != nil {
+                    matchedLevel = level
+                    break
+                }
+            }
+            guard let level = matchedLevel else { continue }
+            let key = title.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            output.append(TextbookOutlineCandidate(
+                title: title,
+                level: level,
+                pageNumber: page.pageNumber,
+                evidenceText: rawLine,
+                confidence: min(page.confidence, 0.92)
+            ))
+        }
+    }
+    return Array(output.prefix(500))
+}
+
+private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionResult {
+    guard let document = PDFDocument(url: URL(fileURLWithPath: inputPath)) else {
+        throw ProcessorError.unreadableImage
+    }
+    var pages: [TextbookExtractedPage] = []
+    var warnings: [String] = []
+    var textPageCount = 0
+    var ocrPageCount = 0
+    let maximumOCRPages = 80
+    let maximumPages = min(document.pageCount, 500)
+    if document.pageCount > maximumPages {
+        warnings.append("教材超过 500 页，仅提取前 500 页")
+    }
+    for index in 0..<maximumPages {
+        guard let page = document.page(at: index) else { continue }
+        let embedded = (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if embedded.count >= 20 {
+            textPageCount += 1
+            pages.append(TextbookExtractedPage(
+                pageNumber: index + 1,
+                evidenceText: String(embedded.prefix(80_000)),
+                extractionMethod: "pdf_text",
+                confidence: 0.99
+            ))
+            continue
+        }
+        if ocrPageCount >= maximumOCRPages {
+            if !warnings.contains("扫描版教材 OCR 首次导入最多处理 80 页") {
+                warnings.append("扫描版教材 OCR 首次导入最多处理 80 页")
+            }
+            continue
+        }
+        let bounds = page.bounds(for: .mediaBox)
+        let thumbnail = page.thumbnail(
+            of: NSSize(width: min(2400, bounds.width * 2), height: min(3200, bounds.height * 2)),
+            for: .mediaBox
+        )
+        var proposed = NSRect(origin: .zero, size: thumbnail.size)
+        guard let image = thumbnail.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
+            warnings.append("第 \(index + 1) 页无法渲染，已跳过 OCR")
+            continue
+        }
+        let recognized = try recognizeText(in: image)
+        ocrPageCount += 1
+        pages.append(TextbookExtractedPage(
+            pageNumber: index + 1,
+            evidenceText: String(recognized.text.prefix(80_000)),
+            extractionMethod: "vision_ocr",
+            confidence: recognized.confidence
+        ))
+    }
+    let extractionMethod: String
+    if textPageCount > 0 && ocrPageCount > 0 {
+        extractionMethod = "mixed"
+    } else if ocrPageCount > 0 {
+        extractionMethod = "vision_ocr"
+    } else {
+        extractionMethod = "pdf_text"
+    }
+    return TextbookExtractionResult(
+        pageCount: document.pageCount,
+        extractionMethod: extractionMethod,
+        pages: pages,
+        outline: outlineCandidates(from: pages),
+        warnings: warnings
+    )
+}
+
+private func extractTextbookImage(inputPath: String) throws -> TextbookExtractionResult {
+    guard
+        let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: inputPath) as CFURL, nil),
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else {
+        throw ProcessorError.unreadableImage
+    }
+    let recognized = try recognizeText(in: image)
+    let page = TextbookExtractedPage(
+        pageNumber: 1,
+        evidenceText: String(recognized.text.prefix(80_000)),
+        extractionMethod: "vision_ocr",
+        confidence: recognized.confidence
+    )
+    return TextbookExtractionResult(
+        pageCount: 1,
+        extractionMethod: "vision_ocr",
+        pages: [page],
+        outline: outlineCandidates(from: [page]),
+        warnings: []
+    )
 }
 
 private enum ProcessorError: LocalizedError {
@@ -950,6 +1120,20 @@ private enum AxiomVisionCLI {
 
             let resultData: Data
             switch arguments[1] {
+            case "extract-textbook":
+                guard let input = value(after: "--input") else {
+                    throw ProcessorError.invalidArguments
+                }
+                resultData = try JSONEncoder().encode(
+                    extractTextbookPDF(inputPath: input)
+                )
+            case "extract-textbook-image":
+                guard let input = value(after: "--input") else {
+                    throw ProcessorError.invalidArguments
+                }
+                resultData = try JSONEncoder().encode(
+                    extractTextbookImage(inputPath: input)
+                )
             case "process":
                 guard
                     let input = value(after: "--input"),

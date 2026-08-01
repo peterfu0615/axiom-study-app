@@ -93,6 +93,25 @@ export interface AISubQuestion {
   content: string
 }
 
+export type HorizonTagType = 'knowledge' | 'method' | 'model' | 'error'
+export type HorizonTagRole = 'primary' | 'secondary'
+export type DifficultyLevel = 'basic' | 'intermediate' | 'advanced'
+
+export interface AITagCandidate {
+  name: string
+  role: HorizonTagRole
+  confidence: number
+  evidence: string
+  source: 'problem' | 'solution' | 'student_attempt' | 'textbook_hint'
+}
+
+export interface AIDifficulty {
+  level: DifficultyLevel
+  score: number | null
+  confidence: number
+  reason: string
+}
+
 export type AIDiagramKind =
   | 'geometry'
   | 'function'
@@ -112,6 +131,11 @@ export interface AIProblemAnalysis {
   diagramKind: AIDiagramKind
   diagramBBox: NormalizedRect
   knowledgePoints: string[]
+  knowledgeTags?: AITagCandidate[]
+  methodTags?: AITagCandidate[]
+  modelTags?: AITagCandidate[]
+  difficulty?: AIDifficulty | null
+  errorCategories?: AITagCandidate[]
   confidence: number
   warnings: string[]
 }
@@ -312,6 +336,7 @@ export type ModelRunStatus =
   | 'processing'
   | 'completed'
   | 'failed'
+  | 'cancelled'
 
 export interface ModelRun {
   id: string

@@ -1,8 +1,10 @@
 import type {
   AIDiagramKind,
   AIChoice,
+  AIDifficulty,
   AIProblemAnalysis,
   AISubQuestion,
+  AITagCandidate,
   NormalizedRect,
 } from './models'
 
@@ -31,6 +33,42 @@ function asString(value: unknown) {
 function clampUnit(value: unknown) {
   const number = Number(value)
   return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : 0
+}
+
+function normalizeTagCandidates(value: unknown): AITagCandidate[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const candidate = item as Record<string, unknown>
+    const name = asString(candidate.name)
+    if (!name) return []
+    const source = asString(candidate.source)
+    return [{
+      name,
+      role: candidate.role === 'primary' ? 'primary' : 'secondary',
+      confidence: clampUnit(candidate.confidence),
+      evidence: asString(candidate.evidence),
+      source: ['solution', 'student_attempt', 'textbook_hint'].includes(source)
+        ? source as AITagCandidate['source']
+        : 'problem',
+    }]
+  })
+}
+
+function normalizeDifficulty(value: unknown): AIDifficulty | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Record<string, unknown>
+  const level = asString(candidate.level)
+  if (!['basic', 'intermediate', 'advanced'].includes(level)) return null
+  const rawScore = candidate.score
+  return {
+    level: level as AIDifficulty['level'],
+    score: typeof rawScore === 'number' && Number.isFinite(rawScore)
+      ? clampUnit(rawScore)
+      : null,
+    confidence: clampUnit(candidate.confidence),
+    reason: asString(candidate.reason),
+  }
 }
 
 function normalizeBBox(value: unknown, addSafetyMargin = false): NormalizedRect {
@@ -205,6 +243,19 @@ export function normalizeAIProblemAnalysis(
       hasDiagram,
     ),
     knowledgePoints: normalizedKnowledgePoints,
+    knowledgeTags: normalizeTagCandidates(
+      candidate.knowledgeTags ?? candidate.knowledge_tags,
+    ),
+    methodTags: normalizeTagCandidates(
+      candidate.methodTags ?? candidate.method_tags,
+    ),
+    modelTags: normalizeTagCandidates(
+      candidate.modelTags ?? candidate.model_tags,
+    ),
+    difficulty: normalizeDifficulty(candidate.difficulty),
+    errorCategories: normalizeTagCandidates(
+      candidate.errorCategories ?? candidate.error_categories,
+    ),
     confidence: clampUnit(candidate.confidence),
     warnings: Array.isArray(candidate.warnings)
       ? candidate.warnings.map(asString).filter(Boolean)

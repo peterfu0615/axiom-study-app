@@ -1,6 +1,7 @@
 mod ai;
 mod commands;
 mod db;
+mod horizon;
 mod keystore;
 mod models;
 mod updater;
@@ -117,6 +118,12 @@ pub fn run() {
             sql: include_str!("../migrations/0015_api_key_credential_ref.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "add_horizon_tag_foundation",
+            sql: include_str!("../migrations/0016_horizon_tag_foundation.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
@@ -158,6 +165,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::platform_capabilities,
             commands::import_image,
+            commands::import_textbook_source,
+            commands::remove_textbook_source,
             commands::persist_camera_frame,
             commands::camera_orientation,
             commands::process_document,
@@ -174,6 +183,10 @@ pub fn run() {
             db::get_database_path,
             db::canonicalize_path,
             db::migrate_database,
+            keystore::store_api_key,
+            keystore::delete_api_key,
+            horizon::merge_tag_definitions,
+            horizon::merge_knowledge_nodes,
             updater::get_app_version,
             updater::check_for_updates,
             updater::download_and_install_update,
@@ -186,10 +199,8 @@ pub fn run() {
                 if let Err(e) = db::init_db(&handle).await {
                     log::error!("初始化数据库连接失败：{e}");
                 }
-                // 反向迁移：把 Keychain 中的 API Key 迁回数据库明文存储
-                // （v0.1.1 使用 Keychain，现改为数据库明文，单机自用）
-                if let Err(e) = keystore::migrate_keychain_to_db(&handle).await {
-                    log::warn!("Keychain → 数据库迁移失败（不阻塞启动）：{e}");
+                if let Err(e) = keystore::migrate_api_keys_to_keychain(&handle).await {
+                    log::warn!("数据库明文 API Key → Keychain 迁移失败（不阻塞启动）：{e}");
                 }
             });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制

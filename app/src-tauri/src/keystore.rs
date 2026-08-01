@@ -1,30 +1,53 @@
-//! API Key 存储迁移模块。
+//! macOS Keychain storage for AI provider credentials.
 //!
-//! 历史上 Axiom 曾使用 macOS Keychain 存储 API Key（v0.1.1）。
-//! 现改为数据库明文存储（单机自用场景，简化使用）。
-//!
-//! 启动时执行反向迁移：扫描数据库中所有 credential_ref 非空但 api_key 为空的 provider，
-//! 尝试从 Keychain 读取并写回数据库 api_key 列。
+//! The database stores only `credential_ref`. Actual API keys are read by Rust
+//! immediately before a provider request and never cross the frontend IPC bridge.
 
 use keyring::Entry;
 use sqlx::Row;
 use tauri::{AppHandle, Manager};
 
-/// Keychain 服务名，与 bundle identifier 一致。
 const SERVICE: &str = "com.axiom.study";
 
-/// 构造 Keychain 条目名：`ai-provider:{provider_id}`。
 fn entry_name(provider_id: &str) -> String {
     format!("ai-provider:{provider_id}")
 }
 
-/// 反向迁移：把 Keychain 中的 API Key 迁回数据库明文存储。
-///
-/// 扫描所有 credential_ref 非空但 api_key 为空的 provider，
-/// 从 Keychain 读取 key 写回数据库，并清理 Keychain 条目。
-///
-/// 失败不阻塞启动（调用方 catch 并 log::warn）。
-pub async fn migrate_keychain_to_db(app: &AppHandle) -> Result<(), String> {
+#[tauri::command(rename_all = "camelCase")]
+pub fn store_api_key(provider_id: String, api_key: String) -> Result<String, String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() || api_key.trim().is_empty() {
+        return Err("Provider ID 和 API Key 不能为空".to_string());
+    }
+    Entry::new(SERVICE, &entry_name(provider_id))
+        .map_err(|error| format!("Keychain 创建失败：{error}"))?
+        .set_password(api_key.trim())
+        .map_err(|error| format!("Keychain 写入失败：{error}"))?;
+    Ok(provider_id.to_string())
+}
+
+pub fn load_api_key_internal(credential_ref: &str) -> Result<String, String> {
+    Entry::new(SERVICE, &entry_name(credential_ref.trim()))
+        .map_err(|error| format!("Keychain 读取失败：{error}"))?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => "Keychain 中未找到 API Key，请重新保存".to_string(),
+            other => format!("Keychain 读取失败：{other}"),
+        })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn delete_api_key(credential_ref: String) -> Result<(), String> {
+    let entry = Entry::new(SERVICE, &entry_name(credential_ref.trim()))
+        .map_err(|error| format!("Keychain 删除失败：{error}"))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("Keychain 删除失败：{error}")),
+    }
+}
+
+/// One-way migration from historical plaintext rows into Keychain.
+pub async fn migrate_api_keys_to_keychain(app: &AppHandle) -> Result<(), String> {
     let db_state = app
         .try_state::<crate::db::DbState>()
         .ok_or_else(|| "数据库状态未初始化".to_string())?;
@@ -32,68 +55,34 @@ pub async fn migrate_keychain_to_db(app: &AppHandle) -> Result<(), String> {
     let conn = guard
         .as_mut()
         .ok_or_else(|| "数据库连接尚未初始化".to_string())?;
-
-    // 查询所有 credential_ref 非空但 api_key 为空的 provider（旧版数据）
-    let rows = sqlx::query(
-        "SELECT id, credential_ref FROM ai_provider_profiles \
-         WHERE credential_ref != '' AND (api_key IS NULL OR api_key = '')",
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|e| format!("查询待迁移 Provider 失败：{e}"))?;
-
-    if rows.is_empty() {
-        return Ok(());
-    }
-
+    let rows = sqlx::query("SELECT id, api_key FROM ai_provider_profiles WHERE api_key != ''")
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|error| format!("查询待迁移 API Key 失败：{error}"))?;
     for row in rows {
         let id: String = row
             .try_get("id")
-            .map_err(|e| format!("读取 provider id 失败：{e}"))?;
-        let credential_ref: String = row
-            .try_get("credential_ref")
-            .map_err(|e| format!("读取 credential_ref 失败：{e}"))?;
-
-        // 从 Keychain 读取
-        let entry = Entry::new(SERVICE, &entry_name(&credential_ref));
-        let api_key = match entry {
-            Ok(entry) => match entry.get_password() {
-                Ok(key) => key,
-                Err(keyring::Error::NoEntry) => {
-                    log::info!("Keychain 中未找到 provider {id} 的 key，跳过");
-                    continue;
-                }
-                Err(e) => {
-                    log::warn!("读取 Keychain 失败（provider {id}）：{e}");
-                    continue;
-                }
-            },
-            Err(e) => {
-                log::warn!("创建 Keychain entry 失败（provider {id}）：{e}");
-                continue;
-            }
-        };
-
+            .map_err(|error| format!("读取 Provider ID 失败：{error}"))?;
+        let api_key: String = row
+            .try_get("api_key")
+            .map_err(|error| format!("读取 API Key 失败：{error}"))?;
         if api_key.is_empty() {
             continue;
         }
-
-        // 写回数据库
-        sqlx::query("UPDATE ai_provider_profiles SET api_key = $1 WHERE id = $2")
-            .bind(&api_key)
-            .bind(&id)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| format!("更新 api_key 失败（provider {id}）：{e}"))?;
-
-        // 清理 Keychain 条目（迁移完成后删除）
-        if let Ok(entry) = Entry::new(SERVICE, &entry_name(&credential_ref)) {
-            let _ = entry.delete_credential();
-        }
-
-        log::info!("API Key 已从 Keychain 迁回数据库：provider {id}");
+        Entry::new(SERVICE, &entry_name(&id))
+            .map_err(|error| format!("Keychain 创建失败（Provider {id}）：{error}"))?
+            .set_password(&api_key)
+            .map_err(|error| format!("Keychain 写入失败（Provider {id}）：{error}"))?;
+        sqlx::query(
+            "UPDATE ai_provider_profiles \
+             SET credential_ref = $1, api_key = '' WHERE id = $1",
+        )
+        .bind(&id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("清除数据库明文 API Key 失败（Provider {id}）：{error}"))?;
+        log::info!("API Key 已安全迁移到 Keychain：Provider {id}");
     }
-
     Ok(())
 }
 

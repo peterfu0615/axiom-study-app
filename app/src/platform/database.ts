@@ -65,8 +65,11 @@ import {
   isDesktopRuntime,
   listMediaDirectory,
   removeProblemImage,
+  storeApiKey,
+  deleteApiKey,
   type PersistedProblemImage,
 } from './native'
+import { applyControlledProblemAnalysis } from './horizonDatabase'
 
 const browserDocuments: SourceDocument[] = []
 const browserProblemRegions = new Map<string, ProblemRegion[]>()
@@ -1508,6 +1511,11 @@ function analysisOutputJSON(analysis: AIProblemAnalysis) {
       bbox: analysis.diagramBBox,
     },
     knowledge_points: analysis.knowledgePoints,
+    knowledge_tags: analysis.knowledgeTags ?? [],
+    method_tags: analysis.methodTags ?? [],
+    model_tags: analysis.modelTags ?? [],
+    difficulty: analysis.difficulty ?? null,
+    error_categories: analysis.errorCategories ?? [],
     confidence: analysis.confidence,
     warnings: analysis.warnings,
   })
@@ -2709,6 +2717,14 @@ export async function completeProblemAIModelRun(
       throw error
     }
   })
+  try {
+    await applyControlledProblemAnalysis(run.problemId, run.id, analysis)
+  } catch (error) {
+    // The structured result and ModelRun are already durable. Keep them for
+    // traceability and let the user rerun/confirm tags instead of rolling back
+    // the entire problem analysis after a taxonomy-only failure.
+    console.error('受控标签映射失败', error)
+  }
   return previousDiagramImagePath
 }
 
@@ -3119,8 +3135,8 @@ function rowToAIProviderProfile(
           ? 'antigravity_cli'
         : 'mock',
     baseUrl: String(row.base_url || ''),
-    // API Key 直接存数据库明文（应用为单机自用，不再使用 Keychain）
-    apiKey: String(row.api_key || ''),
+    // Secrets never leave Keychain; presence is represented by credentialRef.
+    apiKey: '',
     credentialRef: String(row.credential_ref || ''),
     commandPath: String(row.command_path || ''),
     model: String(row.model || ''),
@@ -3162,7 +3178,7 @@ export async function saveAIProviderProfiles(
       profile.enabled &&
       (!profile.baseUrl.trim() ||
         !profile.model.trim() ||
-        !profile.apiKey.trim())
+        (!profile.apiKey.trim() && !profile.credentialRef.trim()))
     ) {
       throw new Error(`“${profile.name}”启用前请填写 Base URL、Model 和 API Key`)
     }
@@ -3174,7 +3190,6 @@ export async function saveAIProviderProfiles(
       throw new Error(`“${profile.name}”启用前请填写 CLI 路径和 Model`)
     }
   }
-  // API Key 直接以明文存入数据库 api_key 列（单机自用，不再使用 Keychain）
   const now = Date.now()
   const normalized = profiles.map((profile, sortOrder) => ({
     ...profile,
@@ -3192,7 +3207,13 @@ export async function saveAIProviderProfiles(
     updatedAt: now,
   }))
   const db = await database()
+  const existingRows = await db.select<Array<{ id: string; credential_ref: string }>>(
+    'SELECT id, credential_ref FROM ai_provider_profiles',
+  )
   for (const profile of normalized) {
+    if (profile.provider === 'openai_compatible' && profile.apiKey) {
+      await storeApiKey(profile.id, profile.apiKey)
+    }
     await db.execute(
       `INSERT INTO ai_provider_profiles (
          id, name, provider, base_url, api_key, credential_ref, command_path, model,
@@ -3217,7 +3238,7 @@ export async function saveAIProviderProfiles(
         profile.name,
         profile.provider,
         profile.baseUrl,
-        profile.apiKey,
+        '',
         profile.credentialRef,
         profile.commandPath,
         profile.model,
@@ -3237,7 +3258,16 @@ export async function saveAIProviderProfiles(
     `DELETE FROM ai_provider_profiles WHERE id NOT IN (${placeholders})`,
     normalized.map((profile) => profile.id),
   )
-  return normalized
+  const retainedIds = new Set(normalized.map((profile) => profile.id))
+  await Promise.all(
+    existingRows
+      .filter((row) => !retainedIds.has(String(row.id)) && row.credential_ref)
+      .map((row) => deleteApiKey(String(row.credential_ref))),
+  )
+  return normalized.map((profile) => ({
+    ...profile,
+    apiKey: '',
+  }))
 }
 
 /**

@@ -105,3 +105,42 @@ pub struct MediaEntry {
     /// 创建时间（Unix 毫秒），失败时为 null
     pub created_at: Option<i64>,
 }
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextbookExtractedPage {
+    pub page_number: i64,
+    pub evidence_text: String,
+    pub extraction_method: String,
+    pub confidence: f64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextbookOutlineCandidate {
+    pub title: String,
+    pub level: i64,
+    pub page_number: i64,
+    pub evidence_text: String,
+    pub confidence: f64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextbookExtractionResult {
+    pub page_count: i64,
+    pub extraction_method: String,
+    pub pages: Vec<TextbookExtractedPage>,
+    pub outline: Vec<TextbookOutlineCandidate>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedTextbookSource {
+    pub source_path: String,
+    pub content_hash: String,
+    pub byte_length: u64,
+    pub source_type: String,
+    pub extraction: TextbookExtractionResult,
+}

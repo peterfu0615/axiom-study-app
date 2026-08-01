@@ -13,6 +13,22 @@ const valid = {
   sub_questions: [],
   diagram: { exists: false, kind: null, bbox: null },
   knowledge_points: ['分式'],
+  knowledge_tags: [{
+    name: '分式',
+    role: 'primary',
+    confidence: 0.93,
+    evidence: '题干要求化简分式',
+    source: 'problem',
+  }],
+  method_tags: [],
+  model_tags: [],
+  difficulty: {
+    level: 'basic',
+    score: 0.2,
+    confidence: 0.8,
+    reason: '直接应用分式化简规则',
+  },
+  error_categories: [],
   confidence: 0.9,
   warnings: [],
 }

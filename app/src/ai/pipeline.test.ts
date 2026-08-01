@@ -10,6 +10,8 @@ const {
   failProblemAIModelRun,
   markProblemSolutionFailed,
   queueProblemSolution,
+  queueStudentAttempt,
+  getProblemRegions,
   recordProcessingModelRunOutput,
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
@@ -21,6 +23,8 @@ const {
   failProblemAIModelRun: vi.fn(),
   markProblemSolutionFailed: vi.fn(),
   queueProblemSolution: vi.fn(),
+  queueStudentAttempt: vi.fn(),
+  getProblemRegions: vi.fn(),
   recordProcessingModelRunOutput: vi.fn(),
   recoverProblemAITasks: vi.fn(),
   updateProcessingModelRunProvider: vi.fn(),
@@ -34,6 +38,8 @@ vi.mock('../platform/database', () => ({
   failProblemAIModelRun,
   markProblemSolutionFailed,
   queueProblemSolution,
+  queueStudentAttempt,
+  getProblemRegions,
   recordProcessingModelRunOutput,
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
@@ -83,6 +89,11 @@ const analysis: AIProblemAnalysis = {
   diagramKind: 'unknown',
   diagramBBox: { x: 0, y: 0, width: 0, height: 0 },
   knowledgePoints: [],
+  knowledgeTags: [],
+  methodTags: [],
+  modelTags: [],
+  difficulty: null,
+  errorCategories: [],
   confidence: 0.8,
   warnings: [],
 }
@@ -92,6 +103,8 @@ describe('problem AI worker', () => {
     vi.clearAllMocks()
     completeProblemAIModelRun.mockResolvedValue(null)
     queueProblemSolution.mockResolvedValue(undefined)
+    queueStudentAttempt.mockResolvedValue(undefined)
+    getProblemRegions.mockResolvedValue([])
     cropProblemDiagram.mockResolvedValue({
       path: '/tmp/diagram.jpg',
       created: true,

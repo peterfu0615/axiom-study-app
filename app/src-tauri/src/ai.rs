@@ -16,7 +16,6 @@ use futures_util::StreamExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::Row;
 use tauri::{ipc::Channel, AppHandle, Manager};
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
@@ -38,7 +37,7 @@ pub struct StreamChunk {
 pub struct OpenAICompatibleAnalysisRequest {
     base_url: String,
     model: String,
-    /// Provider id，用于从数据库查询 api_key（不再使用 Keychain）。
+    /// Keychain credential reference. The actual key never crosses IPC.
     credential_ref: String,
     /// 主图（与 image_paths 合并使用，兼容旧调用）
     #[serde(default)]
@@ -54,32 +53,6 @@ pub struct OpenAICompatibleAnalysisRequest {
     /// JSON Schema 字符串（可选；部分 Provider 支持 response_format json_schema）
     #[serde(default)]
     json_schema: Option<String>,
-}
-
-/// 从数据库读取 provider 的 api_key。
-/// 失败时返回 Err，调用方应提示用户重新保存 API Key。
-async fn load_api_key_from_db(app: &AppHandle, provider_id: &str) -> Result<String, String> {
-    let db_state = app
-        .try_state::<crate::db::DbState>()
-        .ok_or_else(|| "数据库状态未初始化".to_string())?;
-    let mut guard = db_state.connection.lock().await;
-    let conn = guard
-        .as_mut()
-        .ok_or_else(|| "数据库连接尚未初始化".to_string())?;
-    let row = sqlx::query("SELECT api_key FROM ai_provider_profiles WHERE id = $1")
-        .bind(provider_id)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| format!("查询 API Key 失败：{e}"))?;
-    let api_key = row
-        .map(|r| r.try_get::<String, _>("api_key").unwrap_or_default())
-        .unwrap_or_default();
-    if api_key.trim().is_empty() {
-        return Err(format!(
-            "Provider {provider_id} 的 API Key 为空，请在设置中填写"
-        ));
-    }
-    Ok(api_key)
 }
 
 #[derive(Deserialize)]
@@ -309,10 +282,10 @@ pub async fn analyze_problem_with_openai_compatible(
     if credential_ref.is_empty() {
         return Err("凭据引用不能为空（请先在设置中保存 API Key）".to_string());
     }
-    // 从数据库读取 API Key（不再使用 Keychain，单机自用场景明文存储）
-    let api_key = load_api_key_from_db(&app, credential_ref).await?;
+    // Rust reads the secret directly; it is never returned to the frontend.
+    let api_key = crate::keystore::load_api_key_internal(credential_ref)?;
     if api_key.is_empty() {
-        return Err("数据库中未找到 API Key，请重新保存".to_string());
+        return Err("Keychain 中未找到 API Key，请重新保存".to_string());
     }
     let prompt = request.prompt.trim();
     if prompt.is_empty() {

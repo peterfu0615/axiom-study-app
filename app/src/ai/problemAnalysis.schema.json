@@ -10,6 +10,11 @@
     "sub_questions",
     "diagram",
     "knowledge_points",
+    "knowledge_tags",
+    "method_tags",
+    "model_tags",
+    "difficulty",
+    "error_categories",
     "confidence",
     "warnings"
   ],
@@ -69,6 +74,24 @@
       "type": ["array", "null"],
       "items": { "type": "string", "minLength": 1 }
     },
+    "knowledge_tags": { "$ref": "#/$defs/tag_candidates" },
+    "method_tags": { "$ref": "#/$defs/tag_candidates" },
+    "model_tags": { "$ref": "#/$defs/tag_candidates" },
+    "error_categories": { "$ref": "#/$defs/tag_candidates" },
+    "difficulty": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["level", "score", "confidence", "reason"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["basic", "intermediate", "advanced"]
+        },
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reason": { "type": "string" }
+      }
+    },
     "confidence": {
       "type": ["number", "null"],
       "minimum": 0,
@@ -77,6 +100,26 @@
     "warnings": {
       "type": ["array", "null"],
       "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "tag_candidates": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "role", "confidence", "evidence", "source"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "enum": ["primary", "secondary"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidence": { "type": "string" },
+          "source": {
+            "type": "string",
+            "enum": ["problem", "solution", "student_attempt", "textbook_hint"]
+          }
+        }
+      }
     }
   }
 }

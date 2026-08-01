@@ -1,9 +1,27 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
 
-export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v2'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v2'
+export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v3-horizon'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v3-horizon'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
+
+const antigravityTagCandidates = {
+  type: 'array',
+  items: {
+    type: 'object',
+    required: ['name', 'role', 'confidence', 'evidence', 'source'],
+    properties: {
+      name: { type: 'string' },
+      role: { type: 'string', enum: ['primary', 'secondary'] },
+      confidence: { type: 'number' },
+      evidence: { type: 'string' },
+      source: {
+        type: 'string',
+        enum: ['problem', 'solution', 'student_attempt', 'textbook_hint'],
+      },
+    },
+  },
+} as const
 
 // Antigravity CLI 当前不接受 `type: ['string', 'null']` 这类 nullable
 // union。此兼容 Schema 只约束容器和关键枚举；完整约束仍由上面的 Ajv
@@ -19,6 +37,11 @@ export const problemAnalysisAntigravityJSONSchema = {
     'sub_questions',
     'diagram',
     'knowledge_points',
+    'knowledge_tags',
+    'method_tags',
+    'model_tags',
+    'difficulty',
+    'error_categories',
     'confidence',
     'warnings',
   ],
@@ -64,6 +87,11 @@ export const problemAnalysisAntigravityJSONSchema = {
       type: 'array',
       items: { type: 'string' },
     },
+    knowledge_tags: antigravityTagCandidates,
+    method_tags: antigravityTagCandidates,
+    model_tags: antigravityTagCandidates,
+    error_categories: antigravityTagCandidates,
+    difficulty: {},
     confidence: {},
     warnings: {
       type: 'array',
@@ -92,6 +120,12 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
    不要把公式、普通文字或选项框误判为图形。没有图形时 diagram 为 {"exists":false,"kind":null,"bbox":null}。
 10. 可选的附加答案/图形图片只用于补充识别，Problem Analysis 不得评价学生正误。
 11. confidence 是 0 到 1 的整体识别置信度。发现裁图残缺、模糊或信息矛盾时写入 warnings。
+12. 采用开放识别返回 knowledge_tags、method_tags、model_tags：此阶段只提出候选名称，不得虚构标签 ID，
+    也不得宣称已写入正式标签库。每项必须给出 primary/secondary、题面依据、来源和置信度。
+13. model_tags 必须描述稳定的问题结构或条件组合，禁止使用“选择题”“填空题”“解答题”等答题形式。
+14. 方法候选中的 primary 表示完成解答不可缺少的核心方法，secondary 表示可选辅助方法。
+15. difficulty.level 只能是 basic、intermediate、advanced，并给出相对当前学段的理由和置信度。
+16. error_categories 仅在附加的学生答案提供明确证据时识别；没有证据返回 []，不得根据错题身份猜测错因。
 
 必须返回以下字段，无法识别的标量或对象返回 null：
 {
@@ -103,6 +137,11 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "sub_questions": [],
   "diagram": null,
   "knowledge_points": [],
+  "knowledge_tags": [],
+  "method_tags": [],
+  "model_tags": [],
+  "difficulty": null,
+  "error_categories": [],
   "confidence": null,
   "warnings": []
 }

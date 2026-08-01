@@ -42,6 +42,8 @@ fn build_vision_helper() {
             "ImageIO",
             "-framework",
             "AVFoundation",
+            "-framework",
+            "PDFKit",
         ])
         .status()
         .expect("failed to invoke swiftc for the Vision helper");

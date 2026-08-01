@@ -16,11 +16,13 @@ use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 use crate::models::{
-    CameraOrientationInfo, DocumentProcessingResult, MediaEntry, NativeCapabilities,
-    NormalizedRect, PersistedMedia, PersistedProblemImage,
+    CameraOrientationInfo, DocumentProcessingResult, ImportedTextbookSource, MediaEntry,
+    NativeCapabilities, NormalizedRect, PersistedMedia, PersistedProblemImage,
+    TextbookExtractionResult,
 };
 
 const MAX_IMAGE_BYTES: usize = 30 * 1024 * 1024;
+const MAX_TEXTBOOK_BYTES: u64 = 300 * 1024 * 1024;
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 fn now_millis() -> Result<i64, String> {
@@ -72,6 +74,115 @@ fn diagram_media_directory(app: &AppHandle) -> Result<PathBuf, String> {
         .join("diagrams");
     fs::create_dir_all(&directory).map_err(|error| format!("无法创建图形图片目录：{error}"))?;
     Ok(directory)
+}
+
+fn textbook_source_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?
+        .join("textbooks");
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建教材目录：{error}"))?;
+    Ok(directory)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn import_textbook_source(
+    app: AppHandle,
+    source_path: String,
+) -> Result<ImportedTextbookSource, String> {
+    let source = Path::new(&source_path)
+        .canonicalize()
+        .map_err(|error| format!("无法读取教材文件：{error}"))?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "pdf" | "jpg" | "jpeg" | "png" | "webp") {
+        return Err("仅支持 PDF、JPG、PNG 和 WebP 教材或目录文件".to_string());
+    }
+    let metadata = fs::metadata(&source).map_err(|error| format!("无法读取教材文件：{error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_TEXTBOOK_BYTES {
+        return Err("教材文件为空或超过 300 MB".to_string());
+    }
+    let bytes = fs::read(&source).map_err(|error| format!("无法读取教材文件：{error}"))?;
+    let content_hash = format!("{:x}", Sha256::digest(&bytes));
+    let id = Uuid::new_v4().to_string();
+    let target = textbook_source_directory(&app)?.join(format!("{id}.{extension}"));
+    fs::write(&target, &bytes).map_err(|error| format!("保存教材文件失败：{error}"))?;
+
+    let helper = vision_helper_path(&app)?;
+    if !helper.is_file() {
+        let _ = fs::remove_file(&target);
+        return Err("本地教材提取器尚未构建".to_string());
+    }
+    let command = if extension == "pdf" {
+        "extract-textbook"
+    } else {
+        "extract-textbook-image"
+    };
+    let output = Command::new(helper)
+        .arg(command)
+        .arg("--input")
+        .arg(&target)
+        .output()
+        .map_err(|error| {
+            let _ = fs::remove_file(&target);
+            format!("无法启动教材提取器：{error}")
+        })?;
+    if !output.status.success() {
+        let _ = fs::remove_file(&target);
+        return Err(format!(
+            "教材内容提取失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let extraction: TextbookExtractionResult =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            let _ = fs::remove_file(&target);
+            format!("无法解析教材提取结果：{error}")
+        })?;
+    Ok(ImportedTextbookSource {
+        source_path: target.to_string_lossy().to_string(),
+        content_hash,
+        byte_length: metadata.len(),
+        source_type: if extension == "pdf" {
+            "pdf"
+        } else {
+            "directory_image"
+        }
+        .to_string(),
+        extraction,
+    })
+}
+
+#[tauri::command]
+pub fn remove_textbook_source(app: AppHandle, path: String) -> Result<(), String> {
+    let directory = textbook_source_directory(&app)?
+        .canonicalize()
+        .map_err(|error| format!("无法读取教材目录：{error}"))?;
+    let candidate = Path::new(&path);
+    if !candidate.exists() {
+        return Ok(());
+    }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("无法验证教材路径：{error}"))?;
+    if canonical.parent() != Some(directory.as_path()) {
+        return Err("只能清理 Axiom 管理的教材源文件".to_string());
+    }
+    fs::remove_file(canonical).map_err(|error| format!("清理教材源文件失败：{error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn import_textbook_source(
+    _app: AppHandle,
+    _source_path: String,
+) -> Result<ImportedTextbookSource, String> {
+    Err("教材自动提取目前仅支持 macOS".to_string())
 }
 
 fn versioned_problem_image_name(problem_id: &str) -> String {

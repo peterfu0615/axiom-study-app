@@ -121,6 +121,10 @@ function canonicalizeAnalysis(value: unknown) {
     stem_markdown: ['stemMarkdown'],
     sub_questions: ['subQuestions'],
     knowledge_points: ['knowledgePoints'],
+    knowledge_tags: ['knowledgeTags'],
+    method_tags: ['methodTags'],
+    model_tags: ['modelTags'],
+    error_categories: ['errorCategories'],
   }
   for (const [canonical, candidates] of Object.entries(aliases)) {
     if (source[canonical] !== undefined) continue
@@ -139,6 +143,11 @@ function canonicalizeAnalysis(value: unknown) {
     sub_questions: [],
     diagram: null,
     knowledge_points: [],
+    knowledge_tags: [],
+    method_tags: [],
+    model_tags: [],
+    difficulty: null,
+    error_categories: [],
     confidence: null,
     warnings: [],
   }
