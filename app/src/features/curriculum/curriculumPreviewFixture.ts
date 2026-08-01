@@ -89,7 +89,7 @@ export function installCurriculumPreviewFixture(state: string) {
       const sql = String(args.sql || '')
       const params = Array.isArray(args.params) ? args.params : []
       if (sql.includes('SELECT subject FROM textbooks')) return hasTextbook ? [{ subject: '数学' }] : []
-      if (sql.includes('FROM textbooks') && sql.includes('archived_at IS NULL')) return hasTextbook ? [{ id: 'math-book', subject: '数学', title: '义务教育教科书 数学 七年级上册', grade: '七年级', volume: '上册', publisher: '人民教育出版社', edition: '2024 年版', source_type: 'pdf', source_path: '/preview/math.pdf', content_hash: 'preview', extraction_status: 'needs_review', extraction_method: 'pdf_text', is_current: 1, archived_at: null, created_at: now, updated_at: now }] : []
+      if (sql.includes('FROM textbooks') && sql.includes('archived_at IS NULL')) return hasTextbook ? [{ id: 'math-book', subject: '数学', title: '义务教育教科书 数学 七年级上册', grade: '七年级', volume: '上册', publisher: '人民教育出版社', edition: '2024 年版', source_type: 'pdf', source_path: '/preview/math.pdf', content_hash: 'preview', extraction_status: 'needs_review', extraction_method: 'pdf_text', is_current: 0, archived_at: null, created_at: now, updated_at: now }] : []
       if (sql.includes('FROM knowledge_nodes') && sql.includes('ORDER BY path')) return hasTextbook ? nodes : []
       if (sql.includes('FROM knowledge_edges')) return [{ id: 'edge-1', subject: '数学', from_node_id: 'knowledge-1', to_node_id: 'section-2', relation_type: 'prerequisite_of', confidence: .8, source: 'textbook', verification_status: 'needs_review' }]
       if (sql.includes('curriculum_import_jobs')) {

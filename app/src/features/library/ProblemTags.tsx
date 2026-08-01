@@ -8,9 +8,12 @@ import {
   confirmProblemDifficulty,
   confirmProblemTag,
   getProblemDifficulty,
+  getProblemTextbookMatch,
   listProblemTags,
   listTagDefinitions,
   removeProblemTag,
+  setProblemTextbookMatch,
+  type ProblemTextbookMatchView,
   type ProblemDifficultyView,
 } from '../../platform/horizonDatabase'
 
@@ -35,20 +38,33 @@ function difficultyStatus(difficulty: ProblemDifficultyView) {
     : { label: '待确认', tone: 'warning' as const }
 }
 
+const textbookMatchSourceLabels: Record<ProblemTextbookMatchView['source'], string> = {
+  single_subject_textbook: '单一科目教材自动匹配',
+  metadata_match: '教材元数据匹配',
+  ai_hint: 'AI 教材线索',
+  user: '用户已确认',
+  legacy_current_fallback: '兼容旧版本选择',
+  unresolved: '未找到对应教材',
+}
+
 export function ProblemTags({ problemId, subject }: { problemId: string; subject: string | null }) {
   const [tags, setTags] = useState<ProblemTag[]>([])
   const [definitions, setDefinitions] = useState<TagDefinition[]>([])
   const [difficulty, setDifficulty] = useState<ProblemDifficultyView | null>(null)
+  const [textbookMatch, setTextbookMatch] = useState<ProblemTextbookMatchView | null>(null)
+  const [selectedTextbookId, setSelectedTextbookId] = useState('')
+  const [textbookBusy, setTextbookBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ tag: ProblemTag | null; type: HorizonTagType } | null>(null)
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
 
   const refresh = useCallback(async () => {
-    if (!subject) { setTags([]); setDefinitions([]); setDifficulty(null); return }
-    const [nextTags, nextDefinitions, nextDifficulty] = await Promise.all([
-      listProblemTags(problemId), listTagDefinitions(subject), getProblemDifficulty(problemId),
+    if (!subject) { setTags([]); setDefinitions([]); setDifficulty(null); setTextbookMatch(null); return }
+    const [nextTags, nextDefinitions, nextDifficulty, nextTextbookMatch] = await Promise.all([
+      listProblemTags(problemId), listTagDefinitions(subject), getProblemDifficulty(problemId), getProblemTextbookMatch(problemId),
     ])
-    setTags(nextTags); setDefinitions(nextDefinitions); setDifficulty(nextDifficulty)
+    setTags(nextTags); setDefinitions(nextDefinitions); setDifficulty(nextDifficulty); setTextbookMatch(nextTextbookMatch)
+    setSelectedTextbookId(nextTextbookMatch?.textbook?.id ?? '')
   }, [problemId, subject])
 
   useEffect(() => { void refresh().catch((error) => setMessage(String(error))) }, [refresh])
@@ -80,13 +96,46 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
     await refresh()
   }
 
+  const updateTextbookMatch = async (textbookId: string | null, lock: boolean) => {
+    setTextbookBusy(true)
+    setMessage(null)
+    try {
+      await setProblemTextbookMatch(problemId, textbookId, lock)
+      await refresh()
+    } catch (error) {
+      setMessage(String(error))
+    } finally {
+      setTextbookBusy(false)
+    }
+  }
+
   const pickerOptions = picker
-    ? definitions.filter((item) => item.tagType === picker.type && item.lifecycleStatus === 'active')
+    ? definitions.filter((item) => item.tagType === picker.type && item.lifecycleStatus === 'active' &&
+      (picker.type !== 'knowledge' || item.textbookId === textbookMatch?.textbook?.id))
     : []
 
   return <section className="problem-tags">
     <header><div><p className="eyebrow">题目标签</p><h3>知识点、方法、题型与错误类型</h3></div><StatusBadge>{subject || '请先确认科目'}</StatusBadge></header>
     {message && <p className="problem-tag-error">{message}</p>}
+    {textbookMatch && <section className="problem-textbook-match" aria-label="题目教材匹配">
+      <div className="problem-textbook-match__header">
+        <div><strong>对应教材</strong><small>{textbookMatch.textbook?.title || '未找到对应教材'}</small></div>
+        <StatusBadge tone={textbookMatch.locked ? 'success' : textbookMatch.textbook ? 'warning' : 'neutral'}>
+          {textbookMatch.locked ? '用户已确认' : textbookMatch.textbook ? '待确认' : '未匹配'}
+        </StatusBadge>
+      </div>
+      <p className="problem-textbook-match__reason">识别依据：{textbookMatch.reason || textbookMatchSourceLabels[textbookMatch.source]} · 置信度：{Math.round(textbookMatch.confidence * 100)}%</p>
+      <div className="problem-textbook-match__actions">
+        <label>选择本题教材<select disabled={textbookBusy} onChange={(event) => setSelectedTextbookId(event.target.value)} value={selectedTextbookId}>
+          <option value="">未匹配</option>
+          {textbookMatch.candidates.map((book) => <option key={book.id} value={book.id}>{book.title}{book.grade || book.volume ? `（${[book.grade, book.volume].filter(Boolean).join(' · ')}）` : ''}</option>)}
+        </select></label>
+        <div>
+          <Button disabled={textbookBusy || !selectedTextbookId || (textbookMatch.locked && selectedTextbookId === textbookMatch.textbook?.id)} onClick={() => void updateTextbookMatch(selectedTextbookId, true)} variant="secondary">{textbookMatch.locked ? '更换教材' : '确认教材'}</Button>
+          {textbookMatch.textbook && <Button disabled={textbookBusy} onClick={() => void updateTextbookMatch(null, false)} variant="ghost">清除匹配</Button>}
+        </div>
+      </div>
+    </section>}
     <div className="problem-tag-dimensions">
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
         <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><Button disabled={!subject} onClick={() => openPicker(type, null)} variant="ghost">添加</Button></div>
@@ -109,7 +158,7 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
       <div className="problem-tag-picker">
         <p>{picker?.tag ? `“${picker.tag.canonicalName}”需要对应到当前科目中的一个标签。` : `选择一个已确认的${picker ? labels[picker.type] : '标签'}。`}</p>
         <label>选择标签<select onChange={(event) => setSelectedDefinitionId(event.target.value)} value={selectedDefinitionId}><option value="">请选择</option>{pickerOptions.map((item) => <option key={item.id} value={item.id}>{item.canonicalName}</option>)}</select></label>
-        {!pickerOptions.length && <p className="problem-tag-picker__empty">当前科目还没有可选标签，请先在课程中创建或确认标签。</p>}
+        {!pickerOptions.length && <p className="problem-tag-picker__empty">{picker?.type === 'knowledge' && !textbookMatch?.textbook ? '本题尚未匹配教材，知识点候选会保留为待确认。' : '当前科目还没有可选标签，请先在课程中创建或确认标签。'}</p>}
         <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button><Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button></div>
       </div>
     </Dialog>

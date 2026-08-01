@@ -94,6 +94,7 @@ const analysis: AIProblemAnalysis = {
   modelTags: [],
   difficulty: null,
   errorCategories: [],
+  textbookHint: null,
   confidence: 0.8,
   warnings: [],
 }

@@ -61,7 +61,7 @@ describe('subject-scoped controlled tag mapping', () => {
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 
-  it('does not map knowledge from a non-current textbook', () => {
+  it('does not map knowledge from a different matched textbook', () => {
     const result = mapCandidatesToControlledTags(
       '数学',
       'knowledge',
@@ -69,6 +69,18 @@ describe('subject-scoped controlled tag mapping', () => {
       [definition()],
       'other-book',
     )
+    expect(result[0].mappingStatus).toBe('unmapped')
+  })
+
+  it('does not map knowledge when the problem has no matched textbook', () => {
+    const result = mapCandidatesToControlledTags(
+      '数学',
+      'knowledge',
+      [candidate],
+      [definition({ textbookId: null })],
+      null,
+    )
+    expect(result[0].definition).toBeNull()
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 

@@ -210,14 +210,16 @@ export function mapCandidatesToControlledTags(
   tagType: HorizonTagType,
   candidates: AITagCandidate[],
   definitions: TagDefinition[],
-  currentTextbookId: string | null,
+  matchedTextbookId: string | null,
   confidenceThreshold = 0.72,
 ): ControlledTagMapping[] {
   const scoped = definitions.filter((definition) =>
     definition.subject === subject &&
     definition.tagType === tagType &&
     definition.lifecycleStatus === 'active' &&
-    (tagType !== 'knowledge' || definition.textbookId === currentTextbookId)
+    (tagType !== 'knowledge' || (
+      matchedTextbookId !== null && definition.textbookId === matchedTextbookId
+    ))
   )
   return candidates.map((candidate) => {
     const normalized = normalizeTagName(candidate.name)

@@ -415,6 +415,12 @@ function rowToProblem(row: Record<string, unknown>): Problem {
     updatedAt: Number(row.updated_at),
     archivedAt: nullableNumber(row.archived_at),
     deletedAt: nullableNumber(row.deleted_at),
+    matchedTextbookId: nullableString(row.matched_textbook_id),
+    textbookMatchConfidence: Number(row.textbook_match_confidence ?? 0),
+    textbookMatchReason: nullableString(row.textbook_match_reason),
+    textbookMatchSource: String(row.textbook_match_source || 'unresolved') as Problem['textbookMatchSource'],
+    textbookMatchLocked: Number(row.textbook_match_locked ?? 0) === 1,
+    textbookMatchUpdatedAt: nullableNumber(row.textbook_match_updated_at),
   }
 }
 
@@ -1521,6 +1527,7 @@ function analysisOutputJSON(analysis: AIProblemAnalysis) {
     model_tags: analysis.modelTags ?? [],
     difficulty: analysis.difficulty ?? null,
     error_categories: analysis.errorCategories ?? [],
+    textbook_hint: analysis.textbookHint ?? null,
     confidence: analysis.confidence,
     warnings: analysis.warnings,
   })

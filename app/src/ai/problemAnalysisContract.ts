@@ -1,7 +1,7 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
 
-export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v3-horizon'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v3-horizon'
+export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v4-textbook-hint'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v4-textbook-hint'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -91,6 +91,7 @@ export const problemAnalysisAntigravityJSONSchema = {
     method_tags: antigravityTagCandidates,
     model_tags: antigravityTagCandidates,
     error_categories: antigravityTagCandidates,
+    textbook_hint: {},
     difficulty: {},
     confidence: {},
     warnings: {
@@ -126,6 +127,8 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
 14. 方法候选中的 primary 表示完成解答不可缺少的核心方法，secondary 表示可选辅助方法。
 15. difficulty.level 只能是 basic、intermediate、advanced，并给出相对当前学段的理由和置信度。
 16. error_categories 仅在附加的学生答案提供明确证据时识别；没有证据返回 []，不得根据错题身份猜测错因。
+17. textbook_hint 只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
+    无法确认时返回 null；对象中的字段均可为 null，confidence 必须为 0 到 1，evidence 只写简短可审计依据。
 
 必须返回以下字段，无法识别的标量或对象返回 null：
 {
@@ -142,6 +145,7 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "model_tags": [],
   "difficulty": null,
   "error_categories": [],
+  "textbook_hint": null,
   "confidence": null,
   "warnings": []
 }

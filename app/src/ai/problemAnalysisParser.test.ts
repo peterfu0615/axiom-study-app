@@ -29,6 +29,7 @@ const valid = {
     reason: '直接应用分式化简规则',
   },
   error_categories: [],
+  textbook_hint: null,
   confidence: 0.9,
   warnings: [],
 }
@@ -38,6 +39,43 @@ describe('parseProblemAnalysis', () => {
     const parsed = parseProblemAnalysis(JSON.stringify(valid))
     expect(parsed.analysis.title).toBe(valid.title)
     expect(parsed.repairStrategy).toBeNull()
+  })
+
+  it('normalizes an optional textbook hint without requiring a second AI call', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      textbook_hint: {
+        title: '数学八年级下册',
+        grade: '八年级',
+        volume: '下册',
+        publisher: '人民教育出版社',
+        edition: '2022年版',
+        confidence: 0.82,
+        evidence: '题面页眉明确写出教材册别',
+      },
+    }))
+    expect(parsed.analysis.textbookHint?.volume).toBe('下册')
+    expect(parsed.analysis.textbookHint?.confidence).toBeCloseTo(0.82)
+  })
+
+  it('keeps compatibility with older output that has no textbook hint', () => {
+    const legacy = { ...valid }
+    delete (legacy as { textbook_hint?: unknown }).textbook_hint
+    const parsed = parseProblemAnalysis(JSON.stringify(legacy))
+    expect(parsed.analysis.textbookHint).toBeNull()
+  })
+
+  it('fills nullable textbook hint fields when a provider returns a partial object', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      textbook_hint: { grade: '八年级' },
+    }))
+    expect(parsed.analysis.textbookHint).toEqual(expect.objectContaining({
+      title: null,
+      grade: '八年级',
+      confidence: 0,
+      evidence: '',
+    }))
   })
 
   it('extracts fenced JSON and removes trailing commas', () => {

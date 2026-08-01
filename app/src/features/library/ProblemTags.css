@@ -16,6 +16,17 @@
 .problem-tags h3, .problem-tags p { margin: 0; }
 .problem-tags h3 { color: var(--ink); font-size: 15px; }
 .problem-tag-error { margin-bottom: 8px !important; color: var(--danger); font-size: 12px; }
+.problem-textbook-match { display: grid; gap: 8px; margin-bottom: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
+.problem-textbook-match__header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.problem-textbook-match__header > div { display: grid; gap: 3px; min-width: 0; }
+.problem-textbook-match__header strong { color: var(--ink); font-size: 12px; }
+.problem-textbook-match__header small, .problem-textbook-match__reason { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.problem-textbook-match__header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-textbook-match__reason { margin: 0; }
+.problem-textbook-match__actions { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
+.problem-textbook-match__actions label { display: grid; flex: 1 1 240px; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.problem-textbook-match__actions select { min-width: 0; min-height: var(--control-height); padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
+.problem-textbook-match__actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .problem-tag-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .problem-tag-dimension { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
 .problem-tag-dimension-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }

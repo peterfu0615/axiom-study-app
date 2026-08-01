@@ -53,6 +53,10 @@ import {
   type CurriculumImportAttemptLease,
   type TextbookExtractionProgress,
 } from './native'
+import {
+  resolveProblemTextbook,
+  type ProblemTextbookMatch,
+} from '../domain/problemTextbook'
 
 interface ExecuteResult {
   rowsAffected: number
@@ -233,13 +237,106 @@ export async function listTextbooks(subject?: string): Promise<Textbook[]> {
   const rows = await select<Record<string, unknown>[]>(
     `SELECT * FROM textbooks
      WHERE archived_at IS NULL AND ($1 = '' OR subject = $1)
-     ORDER BY subject, is_current DESC, updated_at DESC`,
+     ORDER BY subject, updated_at DESC`,
     [subject?.trim() ?? ''],
   )
   return rows.map(rowToTextbook)
 }
 
+export interface ProblemTextbookMatchView extends ProblemTextbookMatch {
+  problemId: string
+  subject: string
+  locked: boolean
+  candidates: Textbook[]
+}
+
+export async function getProblemTextbookMatch(problemId: string): Promise<ProblemTextbookMatchView | null> {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT p.id, trim(COALESCE(NULLIF(p.user_subject, ''), NULLIF(p.ai_subject, ''), NULLIF(p.subject, ''))) AS effective_subject,
+       p.matched_textbook_id, p.textbook_match_confidence, p.textbook_match_reason,
+       p.textbook_match_source, p.textbook_match_locked, p.textbook_match_updated_at,
+       t.id AS textbook_id, t.subject AS textbook_subject, t.title AS textbook_title,
+       t.grade AS textbook_grade, t.volume AS textbook_volume, t.publisher AS textbook_publisher,
+       t.edition AS textbook_edition, t.source_type AS textbook_source_type,
+       t.source_path AS textbook_source_path, t.content_hash AS textbook_content_hash,
+       t.extraction_status AS textbook_extraction_status, t.extraction_method AS textbook_extraction_method,
+       t.is_current AS textbook_is_current, t.archived_at AS textbook_archived_at,
+       t.created_at AS textbook_created_at, t.updated_at AS textbook_updated_at
+     FROM problems p
+     LEFT JOIN textbooks t ON t.id = p.matched_textbook_id
+     WHERE p.id = $1 LIMIT 1`,
+    [problemId],
+  )
+  const row = rows[0]
+  if (!row) return null
+  const subject = String(row.effective_subject || '')
+  const candidateRows = subject
+    ? await select<Record<string, unknown>[]>(
+      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL ORDER BY updated_at DESC`,
+      [subject],
+    )
+    : []
+  const textbook = row.textbook_id ? rowToTextbook({
+    id: row.textbook_id, subject: row.textbook_subject, title: row.textbook_title,
+    grade: row.textbook_grade, volume: row.textbook_volume, publisher: row.textbook_publisher,
+    edition: row.textbook_edition, source_type: row.textbook_source_type,
+    source_path: row.textbook_source_path, content_hash: row.textbook_content_hash,
+    extraction_status: row.textbook_extraction_status, extraction_method: row.textbook_extraction_method,
+    is_current: row.textbook_is_current, archived_at: row.textbook_archived_at,
+    created_at: row.textbook_created_at, updated_at: row.textbook_updated_at,
+  }) : null
+  return {
+    textbook,
+    confidence: Number(row.textbook_match_confidence ?? 0),
+    reason: nullableString(row.textbook_match_reason),
+    source: String(row.textbook_match_source || 'unresolved') as ProblemTextbookMatch['source'],
+    problemId,
+    subject,
+    locked: bool(row.textbook_match_locked),
+    candidates: candidateRows.map(rowToTextbook),
+  }
+}
+
+export async function setProblemTextbookMatch(
+  problemId: string,
+  textbookId: string | null,
+  lock = true,
+) {
+  const now = Date.now()
+  return transaction(async () => {
+    const problems = await select<Array<{ subject: string }>>(
+      `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS subject
+       FROM problems WHERE id = $1 LIMIT 1`, [problemId],
+    )
+    const subject = String(problems[0]?.subject || '')
+    if (!subject) throw new Error('题目尚未确认科目')
+    if (textbookId) {
+      const textbooks = await select<Array<Record<string, unknown>>>(
+        `SELECT * FROM textbooks WHERE id = $1 AND subject = $2 AND archived_at IS NULL LIMIT 1`,
+        [textbookId, subject],
+      )
+      if (!textbooks[0]) throw new Error('只能选择当前科目的未归档教材')
+      await execute(
+        `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = 1,
+         textbook_match_reason = '用户手动选择', textbook_match_source = 'user',
+         textbook_match_locked = $2, textbook_match_updated_at = $3, updated_at = $3
+         WHERE id = $4`, [textbookId, lock ? 1 : 0, now, problemId],
+      )
+    } else {
+      await execute(
+        `UPDATE problems SET matched_textbook_id = NULL, textbook_match_confidence = 0,
+         textbook_match_reason = '用户清除教材匹配', textbook_match_source = 'unresolved',
+         textbook_match_locked = 0, textbook_match_updated_at = $1, updated_at = $1
+         WHERE id = $2`, [now, problemId],
+      )
+    }
+    return getProblemTextbookMatch(problemId)
+  })
+}
+
 export async function setCurrentTextbook(textbook: Pick<Textbook, 'id' | 'subject'>) {
+  // Kept only for legacy integrations. New flows never call this function and
+  // no problem routing depends on the compatibility is_current column.
   await transaction(async () => {
     await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [textbook.subject])
     await execute(
@@ -255,12 +352,11 @@ export async function createManualTextbook(subject: string, title: string) {
   const textbookId = id()
   await ensureTaxonomyVersion(subject)
   await transaction(async () => {
-    await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [subject.trim()])
     await execute(
       `INSERT INTO textbooks (
         id, subject, title, source_type, extraction_status, extraction_method,
         is_current, created_at, updated_at
-      ) VALUES ($1, $2, $3, 'manual', 'needs_review', 'manual', 1, $4, $4)`,
+      ) VALUES ($1, $2, $3, 'manual', 'needs_review', 'manual', 0, $4, $4)`,
       [textbookId, subject.trim(), title.trim(), now],
     )
   })
@@ -278,12 +374,11 @@ export async function importTextbook(
   await ensureTaxonomyVersion(subject)
   try {
     await transaction(async () => {
-    await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [subject.trim()])
     await execute(
       `INSERT INTO textbooks (
         id, subject, title, source_type, source_path, content_hash,
         extraction_status, extraction_method, is_current, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'needs_review', $7, 1, $8, $8)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'needs_review', $7, 0, $8, $8)`,
       [
         textbookId,
         subject.trim(),
@@ -754,12 +849,11 @@ async function persistImportedTextbook(
   const outline = confirmation.outline ?? imported.extraction.outline
   await ensureTaxonomyVersion(subject)
   await transaction(async () => {
-    await execute('UPDATE textbooks SET is_current = 0 WHERE subject = $1', [subject])
     await execute(
       `INSERT INTO textbooks (
         id, subject, title, grade, volume, publisher, edition, source_type, source_path,
         content_hash, extraction_status, extraction_method, is_current, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'needs_review', $11, 1, $12, $12)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'needs_review', $11, 0, $12, $12)`,
       [
         textbookId, subject, title, confirmation.grade?.trim() || null,
         confirmation.volume?.trim() || null, confirmation.publisher?.trim() || null,
@@ -1378,6 +1472,32 @@ export async function listProblemTags(problemId: string): Promise<ProblemTag[]> 
 export async function confirmProblemTag(problemTagId: string, tagId?: string) {
   const now = Date.now()
   if (tagId) {
+    const rows = await select<Array<{
+      problem_subject: string
+      problem_textbook_id: string | null
+      tag_subject: string
+      tag_type: HorizonTagType
+      tag_textbook_id: string | null
+      tag_lifecycle_status: TagDefinition['lifecycleStatus']
+      tag_archived_at: number | null
+    }>>(
+      `SELECT pt.subject AS problem_subject, p.matched_textbook_id AS problem_textbook_id,
+          td.subject AS tag_subject, td.tag_type, tag_node.textbook_id AS tag_textbook_id,
+          td.lifecycle_status AS tag_lifecycle_status, td.archived_at AS tag_archived_at
+       FROM problem_tags pt
+       JOIN problems p ON p.id = pt.problem_id
+       JOIN tag_definitions td ON td.id = $1
+       LEFT JOIN knowledge_nodes tag_node ON tag_node.id = td.knowledge_node_id
+       WHERE pt.id = $2 AND pt.superseded_at IS NULL LIMIT 1`,
+      [tagId, problemTagId],
+    )
+    const target = rows[0]
+    if (!target || target.problem_subject !== target.tag_subject ||
+      target.tag_lifecycle_status !== 'active' || target.tag_archived_at !== null ||
+      (target.tag_type === 'knowledge' &&
+        (!target.problem_textbook_id || target.problem_textbook_id !== target.tag_textbook_id))) {
+      throw new Error('标签不属于本题的科目或匹配教材，无法确认')
+    }
     await execute(
       `UPDATE problem_tags SET tag_id = $1, candidate_name = NULL,
        mapping_status = 'mapped', source = 'user', verification_status = 'user_verified',
@@ -1407,6 +1527,15 @@ export async function addProblemTag(
   role: 'primary' | 'secondary' = 'secondary',
 ) {
   if (tag.subject !== subject) throw new Error('不能把其他科目的标签添加到本题')
+  if (tag.tagType === 'knowledge') {
+    const rows = await select<Array<{ matched_textbook_id: string | null }>>(
+      `SELECT matched_textbook_id FROM problems WHERE id = $1 AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $2`,
+      [problemId, subject],
+    )
+    if (!rows[0]?.matched_textbook_id || tag.textbookId !== rows[0].matched_textbook_id) {
+      throw new Error('题目尚未匹配教材，知识点不能跨教材添加')
+    }
+  }
   const now = Date.now()
   await execute(
     `INSERT INTO problem_tags (
@@ -1461,8 +1590,13 @@ export async function applyControlledProblemAnalysis(
   modelRunId: string,
   analysis: AIProblemAnalysis,
 ) {
-  const problems = await select<Array<{ effective_subject: string }>>(
-    `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject
+  const problems = await select<Array<{
+    effective_subject: string
+    matched_textbook_id: string | null
+    textbook_match_locked: number
+  }>>(
+    `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
+       matched_textbook_id, textbook_match_locked
      FROM problems WHERE id = $1`,
     [problemId],
   )
@@ -1471,8 +1605,19 @@ export async function applyControlledProblemAnalysis(
   if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
     return
   }
-  const textbooks = await listTextbooks(subject)
-  const currentTextbookId = textbooks.find((book) => book.isCurrent)?.id ?? null
+  const textbooks = (await select<Record<string, unknown>[]>(
+    `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
+  )).map(rowToTextbook)
+  const legacyCurrentTextbookId = textbooks.find((book) => book.isCurrent && book.archivedAt === null)?.id ?? null
+  const textbookMatch = resolveProblemTextbook({
+    subject,
+    lockedTextbookId: Number(problems[0]?.textbook_match_locked ?? 0) === 1
+      ? nullableString(problems[0]?.matched_textbook_id)
+      : null,
+    hint: analysis.textbookHint ?? null,
+    textbooks,
+    legacyCurrentTextbookId,
+  })
   const definitions = await listTagDefinitions(subject)
   const taxonomyVersion = await ensureTaxonomyVersion(subject)
   const candidateGroups: Array<[HorizonTagType, typeof analysis.knowledgeTags]> = [
@@ -1483,6 +1628,15 @@ export async function applyControlledProblemAnalysis(
   ]
   const now = Date.now()
   await transaction(async () => {
+    if (Number(problems[0]?.textbook_match_locked ?? 0) !== 1) {
+      await execute(
+        `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
+         textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
+         textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
+        [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
+          textbookMatch.source, now, problemId],
+      )
+    }
     await execute(
       `UPDATE problem_tags SET superseded_at = $1, updated_at = $1
        WHERE problem_id = $2 AND superseded_at IS NULL AND source = 'model'
@@ -1491,7 +1645,7 @@ export async function applyControlledProblemAnalysis(
     )
     for (const [tagType, candidates = []] of candidateGroups) {
       const mappings = mapCandidatesToControlledTags(
-        subject, tagType, candidates, definitions, currentTextbookId,
+        subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
       )
       for (const mapping of mappings) {
         if (!mapping.definition) {

@@ -125,6 +125,7 @@ function canonicalizeAnalysis(value: unknown) {
     method_tags: ['methodTags'],
     model_tags: ['modelTags'],
     error_categories: ['errorCategories'],
+    textbook_hint: ['textbookHint'],
   }
   for (const [canonical, candidates] of Object.entries(aliases)) {
     if (source[canonical] !== undefined) continue
@@ -148,6 +149,7 @@ function canonicalizeAnalysis(value: unknown) {
     model_tags: [],
     difficulty: null,
     error_categories: [],
+    textbook_hint: null,
     confidence: null,
     warnings: [],
   }
@@ -166,6 +168,15 @@ function canonicalizeAnalysis(value: unknown) {
     const diagram = { ...(source.diagram as Record<string, unknown>) }
     if (diagram.kind === undefined) diagram.kind = null
     source.diagram = diagram
+  }
+  if (source.textbook_hint && typeof source.textbook_hint === 'object' && !Array.isArray(source.textbook_hint)) {
+    const hint = { ...(source.textbook_hint as Record<string, unknown>) }
+    for (const key of ['title', 'grade', 'volume', 'publisher', 'edition']) {
+      if (hint[key] === undefined) hint[key] = null
+    }
+    if (hint.confidence === undefined) hint.confidence = 0
+    if (hint.evidence === undefined) hint.evidence = ''
+    source.textbook_hint = hint
   }
   return source
 }

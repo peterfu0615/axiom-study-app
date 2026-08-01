@@ -112,6 +112,16 @@ export interface AIDifficulty {
   reason: string
 }
 
+export interface AITextbookHint {
+  title: string | null
+  grade: string | null
+  volume: string | null
+  publisher: string | null
+  edition: string | null
+  confidence: number
+  evidence: string
+}
+
 export type AIDiagramKind =
   | 'geometry'
   | 'function'
@@ -136,6 +146,7 @@ export interface AIProblemAnalysis {
   modelTags?: AITagCandidate[]
   difficulty?: AIDifficulty | null
   errorCategories?: AITagCandidate[]
+  textbookHint?: AITextbookHint | null
   confidence: number
   warnings: string[]
 }
@@ -459,6 +470,12 @@ export interface Problem {
   updatedAt: number
   archivedAt: number | null
   deletedAt: number | null
+  matchedTextbookId: string | null
+  textbookMatchConfidence: number
+  textbookMatchReason: string | null
+  textbookMatchSource: import('./problemTextbook').ProblemTextbookMatchSource
+  textbookMatchLocked: boolean
+  textbookMatchUpdatedAt: number | null
 }
 
 export interface SavedProblem extends Problem {

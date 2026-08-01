@@ -78,6 +78,20 @@
     "method_tags": { "$ref": "#/$defs/tag_candidates" },
     "model_tags": { "$ref": "#/$defs/tag_candidates" },
     "error_categories": { "$ref": "#/$defs/tag_candidates" },
+    "textbook_hint": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["title", "grade", "volume", "publisher", "edition", "confidence", "evidence"],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "grade": { "type": ["string", "null"] },
+        "volume": { "type": ["string", "null"] },
+        "publisher": { "type": ["string", "null"] },
+        "edition": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": { "type": "string" }
+      }
+    },
     "difficulty": {
       "type": ["object", "null"],
       "additionalProperties": false,

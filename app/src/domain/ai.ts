@@ -3,6 +3,7 @@ import type {
   AIChoice,
   AIDifficulty,
   AIProblemAnalysis,
+  AITextbookHint,
   AISubQuestion,
   AITagCandidate,
   NormalizedRect,
@@ -69,6 +70,28 @@ function normalizeDifficulty(value: unknown): AIDifficulty | null {
     confidence: clampUnit(candidate.confidence),
     reason: asString(candidate.reason),
   }
+}
+
+function normalizeTextbookHint(value: unknown): AITextbookHint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const nullable = (item: unknown) => {
+    const text = asString(item)
+    return text || null
+  }
+  const fields = {
+    title: nullable(candidate.title),
+    grade: nullable(candidate.grade),
+    volume: nullable(candidate.volume),
+    publisher: nullable(candidate.publisher),
+    edition: nullable(candidate.edition),
+    confidence: clampUnit(candidate.confidence),
+    evidence: asString(candidate.evidence),
+  }
+  if (!fields.title && !fields.grade && !fields.volume && !fields.publisher && !fields.edition) {
+    return null
+  }
+  return fields
 }
 
 function normalizeBBox(value: unknown, addSafetyMargin = false): NormalizedRect {
@@ -255,6 +278,9 @@ export function normalizeAIProblemAnalysis(
     difficulty: normalizeDifficulty(candidate.difficulty),
     errorCategories: normalizeTagCandidates(
       candidate.errorCategories ?? candidate.error_categories,
+    ),
+    textbookHint: normalizeTextbookHint(
+      candidate.textbookHint ?? candidate.textbook_hint,
     ),
     confidence: clampUnit(candidate.confidence),
     warnings: Array.isArray(candidate.warnings)
