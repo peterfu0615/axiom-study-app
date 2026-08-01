@@ -1,13 +1,16 @@
-.curriculum-analysis-status-button {
+.curriculum-analysis-status-pill {
   position: relative;
-  width: 100%;
-  min-height: 44px;
-  display: flex;
+  width: max-content;
+  max-width: min(42vw, 260px);
+  min-width: 0;
+  min-height: 32px;
+  display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   overflow: hidden;
-  padding: 7px 10px;
+  padding: 5px 10px;
   border: 1px solid color-mix(in srgb, var(--brand-pressed) 24%, var(--border));
-  border-radius: 10px;
+  border-radius: 999px;
   color: var(--ink);
   background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 8%, transparent);
@@ -17,12 +20,12 @@
   isolation: isolate;
 }
 
-.curriculum-analysis-status-button:hover {
+.curriculum-analysis-status-pill:hover {
   border-color: color-mix(in srgb, var(--brand-pressed) 46%, var(--border));
   background: color-mix(in srgb, var(--brand-wash) 78%, var(--surface));
 }
 
-.curriculum-analysis-status-button__glow {
+.curriculum-analysis-status-pill__glow {
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -39,101 +42,38 @@
   animation: curriculum-status-flow 3.4s linear infinite;
 }
 
-.curriculum-analysis-status-button__copy {
+.curriculum-analysis-status-pill__copy {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.curriculum-analysis-status-button__copy strong,
-.curriculum-analysis-status-button__copy small {
+.curriculum-analysis-status-pill__copy strong,
+.curriculum-analysis-status-pill__copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.curriculum-analysis-status-button__copy strong {
+.curriculum-analysis-status-pill__copy strong {
   font-size: 12px;
   font-weight: 680;
 }
 
-.curriculum-analysis-status-button__copy small {
+.curriculum-analysis-status-pill__copy small {
   color: var(--muted);
   font-size: 9px;
 }
 
-.curriculum-analysis-status-button.is-completed {
+.curriculum-analysis-status-pill.is-completed {
   border-color: color-mix(in srgb, var(--success) 35%, var(--border));
   background: color-mix(in srgb, var(--brand-soft) 44%, var(--surface));
 }
 
-.curriculum-analysis-status-button.is-failed {
+.curriculum-analysis-status-pill.is-failed {
   border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
   background: color-mix(in srgb, var(--danger) 5%, var(--surface));
-}
-
-.curriculum-analysis-card {
-  position: relative;
-  width: min(100%, 620px);
-  min-height: 154px;
-  display: grid;
-  align-content: center;
-  gap: 24px;
-  overflow: hidden;
-  padding: 27px 28px 20px;
-  border: 1px solid color-mix(in srgb, var(--brand-pressed) 22%, var(--border));
-  border-radius: var(--panel-radius);
-  background: color-mix(in srgb, var(--surface) 94%, var(--brand-wash));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 7%, transparent);
-  isolation: isolate;
-}
-
-.curriculum-analysis-card__glow {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(
-    110deg,
-    transparent 12%,
-    color-mix(in srgb, var(--brand) 8%, transparent) 35%,
-    color-mix(in srgb, #fff0a0 20%, transparent) 50%,
-    transparent 72%
-  );
-  background-size: 220% 100%;
-  pointer-events: none;
-  animation: curriculum-status-flow 3.8s linear infinite;
-}
-
-.curriculum-analysis-card h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 18px;
-  letter-spacing: -.025em;
-}
-
-.curriculum-analysis-progress {
-  position: relative;
-  height: 9px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-muted) 76%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--brand-pressed) 22%, var(--border));
-}
-
-.curriculum-analysis-progress__fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    var(--brand-pressed),
-    var(--brand),
-    #fff0a0,
-    var(--brand)
-  );
-  background-size: 220% 100%;
-  animation: curriculum-progress-flow 2.8s linear infinite;
-  transition: width 320ms ease;
 }
 
 .curriculum-analysis-cancel {
@@ -158,18 +98,9 @@
   to { background-position: -110% 0; }
 }
 
-@keyframes curriculum-progress-flow {
-  from { background-position: 110% 0; }
-  to { background-position: -110% 0; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .curriculum-analysis-status-button__glow,
-  .curriculum-analysis-card__glow,
-  .curriculum-analysis-progress__fill {
+  .curriculum-analysis-status-pill__glow {
     animation: none;
     background-position: 50% 0;
   }
-
-  .curriculum-analysis-progress__fill { transition: none; }
 }

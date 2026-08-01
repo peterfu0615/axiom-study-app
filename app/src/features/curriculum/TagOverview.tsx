@@ -3,9 +3,9 @@ import {
   Button,
   Dialog,
   EmptyState,
+  FlowingTaskSurface,
   Menu,
   MenuItem,
-  Progress,
   SelectField,
   StatusBadge,
   Tabs,
@@ -187,6 +187,15 @@ export function TagOverview({
   }
   const currentDimension = dimensions.find((item) => item.value === type) ?? dimensions[0]
   const done = batch ? batch.completedCount + batch.failedCount : 0
+  const relabelState = batch?.status === 'processing' || batch?.status === 'pending'
+    ? 'running'
+    : batch?.status === 'paused'
+      ? 'paused'
+      : batch?.status === 'completed'
+        ? 'completed'
+        : batch?.status === 'failed'
+          ? 'failed'
+          : 'idle' as const
 
   return (
     <section className="curriculum-tag-overview">
@@ -209,7 +218,22 @@ export function TagOverview({
 
           {reviewItems.length > 0 && <section className="curriculum-review-queue"><div><h3>需要确认的标签</h3><p>{reviewItems.length} 个识别结果尚未对应到当前科目的标签。</p></div><div>{reviewItems.slice(0, 3).map((item) => <button key={item.id} onClick={() => { setMappingItem(item); setMappingTagId('') }} type="button"><strong>{item.candidateName || '未命名候选'}</strong><span>依据：{item.evidence || '暂无'}</span><small>{confidenceLabel(item.confidence)}</small></button>)}</div></section>}
 
-          <section className="curriculum-relabel-task"><div><span>旧错题标签更新</span><h3>{batch?.status === 'completed' ? '当前科目的标签更新已完成' : `还有 ${batch ? Math.max(0, batch.totalCount - done) : scopeCount} 道当前科目的错题可以更新`}</h3><p>{batch ? `已完成 ${batch.completedCount} 道，待确认 ${batch.needsReviewCount} 项，失败 ${batch.failedCount} 道。` : '更新后，这些错题可以参与后续复习。'}</p></div>{batch && ['processing', 'paused', 'pending'].includes(batch.status) ? <div className="curriculum-relabel-task__actions"><Progress label={batch.status === 'paused' ? '任务已暂停' : '正在更新'} value={batch.totalCount ? done / batch.totalCount * 100 : 0} /><Button disabled={busy} onClick={() => void toggleBatch()}>{batch.status === 'paused' ? '继续' : '暂停'}</Button><Button onClick={() => setScopeOpen(true)} variant="ghost">查看详情</Button></div> : <div className="curriculum-relabel-task__actions"><Button onClick={() => setScopeOpen(true)} variant="secondary">查看范围</Button><Button disabled={busy || !scopeCount} onClick={() => void startBatch()} variant="primary">开始更新</Button></div>}</section>
+          <section className="curriculum-relabel-task">
+            <div><span>旧错题标签更新</span><h3>{batch?.status === 'completed' ? '当前科目的标签更新已完成' : `还有 ${batch ? Math.max(0, batch.totalCount - done) : scopeCount} 道当前科目的错题可以更新`}</h3><p>{batch ? `已完成 ${batch.completedCount} 道，待确认 ${batch.needsReviewCount} 项，失败 ${batch.failedCount} 道。` : '更新后，这些错题可以参与后续复习。'}</p></div>
+            {batch && ['processing', 'paused', 'pending'].includes(batch.status)
+              ? <FlowingTaskSurface
+                  actions={<><Button disabled={busy} onClick={() => void toggleBatch()}>{batch.status === 'paused' ? '继续' : '暂停'}</Button><Button onClick={() => setScopeOpen(true)} variant="ghost">查看详情</Button></>}
+                  compact
+                  detail={`已完成 ${batch.completedCount} 道 · 待确认 ${batch.needsReviewCount} 项 · 失败 ${batch.failedCount} 道`}
+                  progress={batch.totalCount ? done / batch.totalCount : null}
+                  progressCurrent={done}
+                  progressLabel={batch.status === 'paused' ? '任务已暂停' : '正在更新'}
+                  progressTotal={batch.totalCount}
+                  state={relabelState}
+                  title={batch.status === 'paused' ? '旧错题更新已暂停' : '正在更新旧错题标签'}
+                />
+              : <div className="curriculum-relabel-task__actions"><Button onClick={() => setScopeOpen(true)} variant="secondary">查看范围</Button><Button disabled={busy || !scopeCount} onClick={() => void startBatch()} variant="primary">开始更新</Button></div>}
+          </section>
         </div>
       </section>
 

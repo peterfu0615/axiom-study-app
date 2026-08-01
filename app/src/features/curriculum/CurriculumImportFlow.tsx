@@ -5,9 +5,9 @@ import {
   Button,
   Dialog,
   EmptyState,
+  FlowingTaskSurface,
   FileDropzone,
   IconButton,
-  Progress,
   StatusBadge,
 } from '../../components/ui'
 import { cancelTextbookImport, mediaAssetUrl } from '../../platform/native'
@@ -88,6 +88,7 @@ export function CurriculumImportFlow({
   const [outline, setOutline] = useState<TextbookOutlineCandidate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
   const [extractionProgress, setExtractionProgress] = useState<TextbookExtractionProgress | null>(null)
   const hydratedJob = useRef<string | null>(null)
@@ -200,7 +201,7 @@ export function CurriculumImportFlow({
 
   const confirmStructure = async () => {
     if (!job) return
-    setSubmitting(true)
+    setSaving(true)
     setError(null)
     try {
       await saveCurriculumImportOutline(job.id, outline)
@@ -209,14 +210,14 @@ export function CurriculumImportFlow({
     } catch (reason) {
       setError(String(reason))
     } finally {
-      setSubmitting(false)
+      setSaving(false)
     }
   }
 
   const step = phase === 'select' ? 1 : phase === 'preview' ? 2 : phase === 'processing' ? 3 : phase === 'confirm' ? 4 : 5
 
   return (
-    <main className="workspace curriculum-workspace curriculum-import-workspace">
+    <main className="workspace curriculum-workspace curriculum-import-workspace curriculum-task-page">
       <header className="workspace-header curriculum-page-header">
         <div>
           <p className="eyebrow">课程</p>
@@ -226,6 +227,7 @@ export function CurriculumImportFlow({
         <Button onClick={onBack} variant="ghost">返回课程</Button>
       </header>
 
+      <div className="curriculum-task-safe-area">
       {!(phase === 'processing' && job) && <ol className="curriculum-import-steps" aria-label="教材导入步骤">
         {['选择文件', '文件预览', 'AI 识别', '确认教材信息', '检查课程结构'].map((label, index) => (
           <li className={index + 1 === step ? 'is-active' : index + 1 < step ? 'is-complete' : ''} key={label}>
@@ -277,42 +279,33 @@ export function CurriculumImportFlow({
       )}
 
       {phase === 'processing' && !job && (
-        <section className="curriculum-import-card curriculum-import-processing">
-          <span className="ax-spinner" />
-          <h2>正在本地提取教材全文</h2>
-          <p>此阶段不建立跨重启任务；退出 App 后临时结果会被清理。</p>
-          <Progress
-            detail={extractionProgress
-              ? `第 ${extractionProgress.currentPage}/${extractionProgress.totalPages} 页 · PDF 文字 ${extractionProgress.pdfTextPages} 页 · OCR ${extractionProgress.ocrPages} 页`
-              : '正在流式复制、校验文件并启动提取器'}
-            label="本地全文识别"
-            value={extractionProgress?.totalPages
-              ? Math.max(2, Math.round(extractionProgress.currentPage / extractionProgress.totalPages * 46))
-              : 2}
-          />
-          <div className="curriculum-import-card__actions"><Button onClick={() => setCancelConfirmOpen(true)}>取消</Button></div>
-        </section>
+        <FlowingTaskSurface
+          actions={<Button onClick={() => setCancelConfirmOpen(true)} variant="ghost">取消</Button>}
+          detail={extractionProgress
+            ? `第 ${extractionProgress.currentPage}/${extractionProgress.totalPages} 页 · PDF 文字 ${extractionProgress.pdfTextPages} 页 · OCR ${extractionProgress.ocrPages} 页`
+            : '正在流式复制、校验文件并启动提取器'}
+          progress={extractionProgress?.totalPages
+            ? extractionProgress.currentPage / extractionProgress.totalPages
+            : null}
+          progressCurrent={extractionProgress?.currentPage}
+          progressLabel="本地全文识别"
+          progressTotal={extractionProgress?.totalPages}
+          state="running"
+          title="正在本地提取教材全文"
+        />
       )}
 
       {phase === 'processing' && job && isCurriculumAnalysisRunning(job) && (
-        <section className="curriculum-analysis-card" aria-live="polite">
-          <span aria-hidden="true" className="curriculum-analysis-card__glow" />
-          <h2>{curriculumAnalysisStageLabel(job)}</h2>
-          <div
-            aria-label={job.progressLabel || curriculumAnalysisStageLabel(job)}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={Math.round(curriculumAnalysisProgress(job) * 100)}
-            className="curriculum-analysis-progress"
-            role="progressbar"
-          >
-            <div
-              className="curriculum-analysis-progress__fill"
-              style={{ width: `${curriculumAnalysisProgress(job) * 100}%` }}
-            />
-          </div>
-          <button className="curriculum-analysis-cancel" onClick={() => setCancelConfirmOpen(true)} type="button">取消分析</button>
-        </section>
+        <FlowingTaskSurface
+          actions={<button className="curriculum-analysis-cancel" onClick={() => setCancelConfirmOpen(true)} type="button">取消分析</button>}
+          detail={job.progressLabel && job.progressLabel !== curriculumAnalysisStageLabel(job) ? job.progressLabel : null}
+          progress={curriculumAnalysisProgress(job)}
+          progressCurrent={job.progressCurrent}
+          progressLabel={job.progressLabel || curriculumAnalysisStageLabel(job)}
+          progressTotal={job.progressTotal}
+          state="running"
+          title={curriculumAnalysisStageLabel(job)}
+        />
       )}
 
       {job?.status === 'ai_failed_recoverable' && (
@@ -353,9 +346,12 @@ export function CurriculumImportFlow({
             ))}
             {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" title="目录需要手动建立" />}
           </div>
-          <div className="curriculum-import-card__actions"><Button loading={submitting} onClick={() => void confirmStructure()} variant="primary">使用此课程结构</Button><Button onClick={() => setPhase('confirm')}>返回教材信息</Button></div>
+          {saving
+            ? <FlowingTaskSurface compact detail="正在保存教材、知识结构和候选标签" state="running" title="正在保存课程" />
+            : <div className="curriculum-import-card__actions"><Button loading={saving} onClick={() => void confirmStructure()} variant="primary">使用此课程结构</Button><Button onClick={() => setPhase('confirm')}>返回教材信息</Button></div>}
         </section>
       )}
+      </div>
 
       <Dialog onClose={() => setCancelConfirmOpen(false)} open={cancelConfirmOpen} title="取消教材分析">
         <div className="curriculum-dialog-form">

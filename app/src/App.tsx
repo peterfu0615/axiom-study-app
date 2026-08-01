@@ -10,7 +10,6 @@ import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
 import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
-import { CurriculumAnalysisStatusButton } from './features/curriculum/CurriculumAnalysisStatusButton'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
@@ -47,7 +46,6 @@ function AppRuntimeShell({
       <Sidebar
         active={section}
         onChange={setSection}
-        statusControl={<CurriculumAnalysisStatusButton onOpen={() => setSection('curriculum')} />}
       />
       {section === 'capture' ? (
         <CaptureWorkspace />

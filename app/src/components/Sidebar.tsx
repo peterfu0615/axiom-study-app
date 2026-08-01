@@ -1,5 +1,4 @@
 import { Icon } from './Icon'
-import type { ReactNode } from 'react'
 import axiomWordmark from '../../../icons/axiom_text.png'
 
 export type AppSection =
@@ -25,11 +24,9 @@ const items: Array<{
 export function Sidebar({
   active,
   onChange,
-  statusControl,
 }: {
   active: AppSection
   onChange: (section: AppSection) => void
-  statusControl?: ReactNode
 }) {
   return (
     <aside className="sidebar">
@@ -57,7 +54,6 @@ export function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
-        {statusControl}
         <button
           className={`nav-item ${active === 'settings' ? 'active' : ''}`}
           onClick={() => onChange('settings')}

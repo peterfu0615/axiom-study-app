@@ -3,9 +3,10 @@ import { createElement } from 'react'
 // @ts-expect-error Vitest runs in Node; the application tsconfig intentionally excludes Node globals.
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { FlowingTaskSurface } from '../../components/ui'
 import type { CurriculumImportJob } from '../../domain/horizon'
 import { CurriculumAnalysisProvider } from './CurriculumAnalysisContext'
-import { CurriculumAnalysisStatusButton } from './CurriculumAnalysisStatusButton'
+import { CurriculumAnalysisStatusPill } from './CurriculumAnalysisStatusButton'
 import { curriculumPreviewImportJob } from './curriculumPreviewFixture'
 import {
   CurriculumAnalysisStatusStore,
@@ -86,21 +87,30 @@ describe('global curriculum analysis status', () => {
       createElement(
         CurriculumAnalysisProvider,
         { enabled: false, initialJob: job('global-analysis-tags') },
-        createElement(CurriculumAnalysisStatusButton, { onOpen: () => {} }),
+        createElement(CurriculumAnalysisStatusPill, { onOpen: () => {} }),
       ),
     )
-    expect(markup.match(/curriculum-analysis-status-button is-running/gu)).toHaveLength(1)
+    expect(markup.match(/curriculum-analysis-status-pill is-running/gu)).toHaveLength(1)
     expect(markup).toContain('分析教材中')
     expect(markup).not.toContain('继续分析')
     expect(markup).not.toContain('放弃')
   })
 
   it('turns off all flowing highlights when reduced motion is requested', () => {
-    const css = readFileSync(new URL('./CurriculumAnalysisStatus.css', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('../../components/ui/FlowingTaskSurface.css', import.meta.url), 'utf8')
     const reducedMotion = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
-    expect(reducedMotion).toContain('.curriculum-analysis-status-button__glow')
-    expect(reducedMotion).toContain('.curriculum-analysis-card__glow')
-    expect(reducedMotion).toContain('.curriculum-analysis-progress__fill')
+    expect(reducedMotion).toContain('.flowing-task-surface__glow')
+    expect(reducedMotion).toContain('.flowing-task-surface__progress > span')
     expect(reducedMotion).toContain('animation: none')
+  })
+
+  it('uses persisted counts and does not fabricate percentage text', () => {
+    const markup = renderToStaticMarkup(createElement(FlowingTaskSurface, {
+      state: 'running', title: '标签创建中', progress: .6,
+      progressCurrent: 3, progressTotal: 5, progressLabel: '标签创建中 · 3/5',
+    }))
+    expect(markup).toContain('3 / 5')
+    expect(markup).not.toContain('>60%<')
+    expect(markup).toContain('role="progressbar"')
   })
 })

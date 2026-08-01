@@ -74,7 +74,7 @@
 .ax-tabs--rail button { min-height: 38px; padding: 0 9px; border-radius: 8px; text-align: left; }
 .ax-tabs--rail button.is-selected { color: var(--ink); background: var(--brand-wash); }
 
-.ax-status-badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.ax-status-badge { display: inline-flex; align-items: center; justify-content: center; width: max-content; min-width: 0; min-height: 20px; flex: 0 0 auto; padding: 0 7px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap; }
 .ax-status-badge--neutral { color: var(--muted); background: var(--surface-muted); }
 .ax-status-badge--success { color: #5e4e00; background: color-mix(in srgb, var(--brand) 38%, var(--surface)); }
 .ax-status-badge--warning { color: #8a5710; background: #fff0c7; }

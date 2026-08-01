@@ -9,6 +9,8 @@ import {
   type ReactNode,
   type SelectHTMLAttributes,
 } from 'react'
+export { FlowingTaskSurface } from './FlowingTaskSurface'
+export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 

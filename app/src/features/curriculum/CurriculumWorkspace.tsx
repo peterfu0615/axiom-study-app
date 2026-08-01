@@ -25,10 +25,10 @@ import {
   listTextbooks,
   mergeKnowledgeNodes,
   saveKnowledgeNode,
-  setCurrentTextbook,
 } from '../../platform/horizonDatabase'
 import { CurriculumImportFlow } from './CurriculumImportFlow'
 import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
+import { CurriculumAnalysisStatusPill } from './CurriculumAnalysisStatusButton'
 import { buildKnowledgeTree, knowledgeNodeLabel, matchingKnowledgeNodeIds, type KnowledgeTreeItem } from './curriculumTree'
 import { TagOverview } from './TagOverview'
 import './Curriculum.css'
@@ -75,8 +75,14 @@ function KnowledgeTree({
               {hasChildren
                 ? <IconButton className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
                 : <span className="curriculum-tree-toggle-placeholder" />}
-              <button onClick={() => onSelect(item.node)} type="button"><span>{item.node.canonicalName}</span><small>{knowledgeNodeLabel(item.node)}</small></button>
-              {item.node.verificationStatus === 'needs_review' && <i aria-label="待确认" />}
+              <button
+                aria-expanded={hasChildren ? isExpanded : undefined}
+                onClick={() => {
+                  onSelect(item.node)
+                  if (hasChildren) onToggle(item.node.id)
+                }}
+                type="button"
+              ><span>{item.node.canonicalName}</span></button>
             </div>
             {hasChildren && isExpanded && <KnowledgeTree expanded={expanded} items={item.children} onSelect={onSelect} onToggle={onToggle} selectedId={selectedId} visibleIds={visibleIds} />}
           </li>
@@ -146,7 +152,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
         setTextbooks(next)
         setTextbookId((current) => current && next.some((book) => book.id === current)
           ? current
-          : next.find((book) => book.isCurrent)?.id ?? next[0]?.id ?? null)
+          : next[0]?.id ?? null)
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setLoading(false))
@@ -251,15 +257,6 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
-  const setCurrent = async () => {
-    if (!selectedTextbook) return
-    setBusy(true)
-    try {
-      await setCurrentTextbook(selectedTextbook)
-      setTextbooks(await listTextbooks(selectedTextbook.subject))
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
-  }
-
   const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
   const visibleNodeIds = useMemo(() => matchingKnowledgeNodeIds(nodes, query), [nodes, query])
   const chapterCount = nodes.filter((node) => node.nodeType === 'chapter').length
@@ -312,7 +309,10 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     <main className="workspace curriculum-workspace">
       <header className="workspace-header curriculum-page-header">
         <div><p className="eyebrow">学习资料</p><h1>课程</h1><p className="subtitle">管理教材、知识结构与当前科目的标签概况。</p></div>
-        <Button onClick={beginNewImport} variant="primary">导入教材</Button>
+        <div className="curriculum-page-header__actions">
+          {curriculumJob && <CurriculumAnalysisStatusPill onOpen={() => openProgress(curriculumJob.id)} />}
+          <Button onClick={beginNewImport} variant="primary">导入教材</Button>
+        </div>
       </header>
 
       <div className="curriculum-filters">
@@ -322,7 +322,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
         </SelectField>
         <SelectField disabled={!subject || !textbooks.length} label="教材" onChange={(event) => setTextbookId(event.target.value || null)} value={textbookId ?? ''}>
           {!textbooks.length && <option value="">暂无教材</option>}
-          {textbooks.map((book) => <option key={book.id} value={book.id}>{book.title}{book.isCurrent ? ' · 当前使用' : ''}</option>)}
+          {textbooks.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
         </SelectField>
       </div>
 
@@ -344,9 +344,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
           ) : (
             <>
               <section className="curriculum-book-summary">
-                <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2>{selectedTextbook.isCurrent && <StatusBadge tone="brand">当前使用</StatusBadge>}</div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
+                <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2></div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
                 <dl><div><dt>章节</dt><dd>{chapterCount}</dd></div><div><dt>知识点</dt><dd>{knowledgeCount}</dd></div><div><dt>待确认</dt><dd>{reviewCount}</dd></div></dl>
-                <Menu label="教材操作"><MenuItem disabled={selectedTextbook.isCurrent || busy} onClick={() => void setCurrent()}>设为当前教材</MenuItem></Menu>
               </section>
               <Surface className="curriculum-structure-shell">
                 <aside className="curriculum-tree-panel">

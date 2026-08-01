@@ -2,14 +2,13 @@ import { useEffect, useState } from 'react'
 import { Sidebar, type AppSection } from '../../components/Sidebar'
 import { ModulePlaceholder } from '../placeholder/ModulePlaceholder'
 import { CurriculumAnalysisProvider, useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
-import { CurriculumAnalysisStatusButton } from './CurriculumAnalysisStatusButton'
 import { CurriculumWorkspace } from './CurriculumWorkspace'
 import {
   curriculumPreviewImportJob,
   installCurriculumPreviewFixture,
 } from './curriculumPreviewFixture'
 
-function CurriculumPreviewShell({ state, hasImport }: { state: string; hasImport: boolean }) {
+function CurriculumPreviewShell({ state }: { state: string }) {
   const [section, setSection] = useState<AppSection>('curriculum')
   const { openProgress } = useCurriculumAnalysisStatus()
 
@@ -27,9 +26,6 @@ function CurriculumPreviewShell({ state, hasImport }: { state: string; hasImport
     <Sidebar
       active={section}
       onChange={setSection}
-      statusControl={hasImport
-        ? <CurriculumAnalysisStatusButton onOpen={() => setSection('curriculum')} />
-        : undefined}
     />
     {workspace}
   </div>
@@ -40,6 +36,6 @@ export function CurriculumPreview({ state }: { state: string }) {
   const hasImport = state.startsWith('import-') || state.startsWith('global-analysis-')
   const initialJob = hasImport ? curriculumPreviewImportJob(state) : null
   return <CurriculumAnalysisProvider enabled={false} initialJob={initialJob} resumeOnMount={false}>
-    <CurriculumPreviewShell hasImport={hasImport} state={state} />
+    <CurriculumPreviewShell state={state} />
   </CurriculumAnalysisProvider>
 }
