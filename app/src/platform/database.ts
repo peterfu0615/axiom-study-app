@@ -60,14 +60,14 @@ import { resolveUserOverride } from '../domain/problemSelection'
 import {
   canonicalizePath,
   cropProblemImage,
+  deleteAIProviderApiKey,
   deleteMediaFile,
   getDatabasePath,
-  hasApiKey,
   isDesktopRuntime,
   listMediaDirectory,
+  persistAIProviderProfiles,
+  recoverLegacyProviderApiKeys,
   removeProblemImage,
-  storeApiKey,
-  deleteApiKey,
   type PersistedProblemImage,
 } from './native'
 import { applyControlledProblemAnalysis } from './horizonDatabase'
@@ -115,6 +115,10 @@ function database() {
       databasePathError = pathCheck
     } else {
       databasePathError = null
+      // The plugin has now applied every migration, including the recovery
+      // marker table.  Do not run this from Rust setup: setup precedes that
+      // migration lifecycle on the first launch of a new release.
+      await recoverLegacyProviderApiKeys()
     }
 
     // 3. 所有数据操作走单一 sqlx 连接（Rust 端 db_execute / db_select），
@@ -3112,6 +3116,8 @@ const defaultAIProviderProfiles: AIProviderProfile[] = [{
   provider: 'mock',
   baseUrl: '',
   apiKey: '',
+  hasApiKey: false,
+  apiKeySuffix: '',
   credentialRef: '',
   commandPath: '',
   model: 'mock-vision-v1',
@@ -3136,8 +3142,11 @@ function rowToAIProviderProfile(
           ? 'antigravity_cli'
         : 'mock',
     baseUrl: String(row.base_url || ''),
-    // Secrets never leave Keychain; presence is represented by credentialRef.
+    // The full database key is intentionally not selected into React.  Only a
+    // boolean and its final four characters are safe to render.
     apiKey: '',
+    hasApiKey: parseSQLiteBoolean(row.has_api_key),
+    apiKeySuffix: String(row.api_key_suffix || ''),
     credentialRef: String(row.credential_ref || ''),
     commandPath: String(row.command_path || ''),
     model: String(row.model || ''),
@@ -3153,25 +3162,19 @@ function rowToAIProviderProfile(
 export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   if (!isDesktopRuntime()) return defaultAIProviderProfiles
   const rows = await (await database()).select<Record<string, unknown>[]>(
-    `SELECT *
+    `SELECT id, name, provider, base_url, credential_ref, command_path, model,
+       supports_vision, supports_text, enabled, sort_order, created_at, updated_at,
+       CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS has_api_key,
+       CASE
+         WHEN length(trim(api_key)) > 4 THEN substr(trim(api_key), -4)
+         ELSE ''
+       END AS api_key_suffix
      FROM ai_provider_profiles
      ORDER BY sort_order, created_at`,
   )
-  const profiles = rows.length
+  return rows.length
     ? rows.map(rowToAIProviderProfile)
     : defaultAIProviderProfiles
-  return Promise.all(profiles.map(async (profile) => {
-    if (profile.provider !== 'openai_compatible' || !profile.credentialRef) {
-      return profile
-    }
-    try {
-      return await hasApiKey(profile.credentialRef)
-        ? profile
-        : { ...profile, credentialRef: '' }
-    } catch (error) {
-      throw new Error(`无法读取“${profile.name}”的 Keychain 状态：${String(error)}`)
-    }
-  }))
 }
 
 export async function saveAIProviderProfiles(
@@ -3194,6 +3197,14 @@ export async function saveAIProviderProfiles(
       throw new Error(`“${profile.name}”启用前请填写 Base URL 和 Model`)
     }
     if (
+      profile.provider === 'openai_compatible' &&
+      profile.enabled &&
+      !profile.apiKey.trim() &&
+      !profile.hasApiKey
+    ) {
+      throw new Error(`“${profile.name}”启用前请保存 API Key`)
+    }
+    if (
       profile.provider === 'antigravity_cli' &&
       profile.enabled &&
       (!profile.commandPath.trim() || !profile.model.trim())
@@ -3207,6 +3218,8 @@ export async function saveAIProviderProfiles(
     name: profile.name.trim(),
     baseUrl: profile.baseUrl.trim(),
     apiKey: profile.apiKey.trim(),
+    hasApiKey: profile.hasApiKey,
+    apiKeySuffix: profile.apiKeySuffix,
     credentialRef:
       profile.provider === 'openai_compatible'
         ? profile.credentialRef.trim()
@@ -3220,88 +3233,32 @@ export async function saveAIProviderProfiles(
     createdAt: profile.createdAt || now,
     updatedAt: now,
   }))
-  const db = await database()
-  const existingRows = await db.select<Array<{ id: string; credential_ref: string }>>(
-    'SELECT id, credential_ref FROM ai_provider_profiles',
-  )
-  const resolved = [] as typeof normalized
-  for (const profile of normalized) {
-    let credentialRef = profile.credentialRef
-    if (profile.provider === 'openai_compatible') {
-      if (profile.apiKey) {
-        try {
-          credentialRef = await storeApiKey(profile.id, profile.apiKey)
-        } catch (error) {
-          throw new Error(`“${profile.name}”的 API Key 保存失败：${String(error)}`)
-        }
-      } else if (credentialRef) {
-        try {
-          if (!await hasApiKey(credentialRef)) credentialRef = ''
-        } catch (error) {
-          throw new Error(`无法校验“${profile.name}”的 Keychain 状态：${String(error)}`)
-        }
-      }
-      if (profile.enabled && !credentialRef) {
-        throw new Error(`“${profile.name}”启用前请保存 API Key`)
-      }
+  if (normalized.some((profile) => profile.apiKey.includes('••'))) {
+    throw new Error('API Key 输入框只能填写真实的新 Key，不能保存掩码文本')
+  }
+  await persistAIProviderProfiles(normalized)
+  const saved = await listAIProviderProfiles()
+  for (const profile of normalized.filter((candidate) => candidate.apiKey)) {
+    if (!saved.find((candidate) => candidate.id === profile.id)?.hasApiKey) {
+      throw new Error(`“${profile.name}”的 API Key 保存后校验失败`)
     }
-    resolved.push({ ...profile, credentialRef })
   }
-  for (const profile of resolved) {
-    await db.execute(
-      `INSERT INTO ai_provider_profiles (
-         id, name, provider, base_url, api_key, credential_ref, command_path, model,
-         supports_vision, supports_text, enabled, sort_order,
-         created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         provider = excluded.provider,
-         base_url = excluded.base_url,
-         api_key = excluded.api_key,
-         credential_ref = excluded.credential_ref,
-         command_path = excluded.command_path,
-         model = excluded.model,
-         supports_vision = excluded.supports_vision,
-         supports_text = excluded.supports_text,
-         enabled = excluded.enabled,
-         sort_order = excluded.sort_order,
-         updated_at = excluded.updated_at`,
-      [
-        profile.id,
-        profile.name,
-        profile.provider,
-        profile.baseUrl,
-        '',
-        profile.credentialRef,
-        profile.commandPath,
-        profile.model,
-        profile.supportsVision ? 1 : 0,
-        profile.supportsText ? 1 : 0,
-        profile.enabled ? 1 : 0,
-        profile.sortOrder,
-        profile.createdAt,
-        profile.updatedAt,
-      ],
-    )
+  return saved
+}
+
+/** Explicit deletion is intentionally separate from normal Settings save. */
+export async function deleteAIProviderProfileApiKey(
+  providerId: string,
+): Promise<AIProviderProfile[]> {
+  if (!isDesktopRuntime()) {
+    throw new Error('AI Provider 设置需要在 Axiom 桌面 App 中保存')
   }
-  const placeholders = resolved
-    .map((_, index) => `$${index + 1}`)
-    .join(', ')
-  await db.execute(
-    `DELETE FROM ai_provider_profiles WHERE id NOT IN (${placeholders})`,
-    resolved.map((profile) => profile.id),
-  )
-  const retainedIds = new Set(resolved.map((profile) => profile.id))
-  await Promise.all(
-    existingRows
-      .filter((row) => !retainedIds.has(String(row.id)) && row.credential_ref)
-      .map((row) => deleteApiKey(String(row.credential_ref))),
-  )
-  return resolved.map((profile) => ({
-    ...profile,
-    apiKey: '',
-  }))
+  await deleteAIProviderApiKey(providerId)
+  const profiles = await listAIProviderProfiles()
+  if (profiles.find((profile) => profile.id === providerId)?.hasApiKey) {
+    throw new Error('API Key 删除后校验失败')
+  }
+  return profiles
 }
 
 /**

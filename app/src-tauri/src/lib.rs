@@ -148,6 +148,12 @@ pub fn run() {
             sql: include_str!("../migrations/0020_curriculum_attempt_serialization.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "restore_sqlite_api_keys",
+            sql: include_str!("../migrations/0021_restore_sqlite_api_keys.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
@@ -206,14 +212,14 @@ pub fn run() {
             commands::delete_media_file,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
+            ai::persist_ai_provider_profiles,
+            ai::delete_ai_provider_api_key,
             db::db_execute,
             db::db_select,
             db::get_database_path,
             db::canonicalize_path,
             db::migrate_database,
-            keystore::store_api_key,
-            keystore::has_api_key,
-            keystore::delete_api_key,
+            keystore::recover_legacy_api_keys,
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,
             horizon::create_curriculum_import_attempt,
@@ -230,9 +236,6 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 if let Err(e) = db::init_db(&handle).await {
                     log::error!("初始化数据库连接失败：{e}");
-                }
-                if let Err(e) = keystore::migrate_api_keys_to_keychain(&handle).await {
-                    log::warn!("数据库明文 API Key → Keychain 迁移失败（不阻塞启动）：{e}");
                 }
             });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制

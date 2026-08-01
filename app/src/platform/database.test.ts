@@ -21,6 +21,7 @@ vi.mock('./native', () => ({
   isDesktopRuntime: () => true,
   listMediaDirectory: vi.fn(async (_subdir: string) => []),
   migrateDatabase: vi.fn(async () => undefined),
+  recoverLegacyProviderApiKeys: vi.fn(async () => undefined),
   removeProblemImage: vi.fn(async () => undefined),
 }))
 

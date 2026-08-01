@@ -6,6 +6,7 @@ import type {
   NativeCapabilities,
   NormalizedRect,
   PersistedMedia,
+  AIProviderProfile,
 } from '../domain/models'
 
 export interface PersistedProblemImage {
@@ -205,11 +206,16 @@ export async function getDatabasePath(): Promise<string> {
   return invoke<string>('get_database_path')
 }
 
+/** Runs the one-time Keychain → SQLite compatibility recovery after migrations. */
+export async function recoverLegacyProviderApiKeys() {
+  return invoke<void>('recover_legacy_api_keys')
+}
+
 export async function analyzeProblemWithOpenAICompatible(request: {
   baseUrl: string
   model: string
-  /** Keychain reference. Rust reads the key internally. */
-  credentialRef: string
+  /** Provider ID. Rust reads its API Key from local SQLite internally. */
+  providerId: string
   /** 主图（可选，与 imagePaths 合并） */
   cropImagePath?: string
   /** 附加图片（多区域分析时使用） */
@@ -242,16 +248,17 @@ export async function analyzeProblemWithOpenAICompatible(request: {
   )
 }
 
-export async function storeApiKey(providerId: string, apiKey: string) {
-  return invoke<string>('store_api_key', { providerId, apiKey })
+/**
+ * Save Provider fields and a newly-entered API Key in one native SQLite
+ * transaction.  A blank `apiKey` means retain the existing database value.
+ */
+export async function persistAIProviderProfiles(profiles: AIProviderProfile[]) {
+  return invoke<void>('persist_ai_provider_profiles', { profiles })
 }
 
-export async function hasApiKey(credentialRef: string) {
-  return invoke<boolean>('has_api_key', { credentialRef })
-}
-
-export async function deleteApiKey(credentialRef: string) {
-  return invoke<void>('delete_api_key', { credentialRef })
+/** Explicit deletion is the only path that clears a saved SQLite API Key. */
+export async function deleteAIProviderApiKey(providerId: string) {
+  return invoke<void>('delete_ai_provider_api_key', { providerId })
 }
 
 export async function mergeTagDefinitions(

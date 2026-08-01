@@ -523,4 +523,21 @@ mod tests {
         assert!(is_newer("abc", "def"));
         assert!(!is_newer("same", "same"));
     }
+
+    #[test]
+    fn installer_replaces_only_the_app_bundle_not_application_support_data() {
+        let update_dir =
+            std::env::temp_dir().join(format!("axiom-updater-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&update_dir).unwrap();
+        let app_path = std::path::Path::new("/Applications/Axiom.app");
+        let new_app_path = update_dir.join("Axiom.app");
+        let script = write_install_script(42, app_path, &new_app_path, &update_dir).unwrap();
+        let contents = std::fs::read_to_string(&script).unwrap();
+        assert!(contents.contains("APP_PATH=\"/Applications/Axiom.app\""));
+        assert!(contents.contains("rm -rf \"$APP_PATH\""));
+        assert!(!contents.contains("Application Support"));
+        assert!(!contents.contains("axiom.db"));
+        assert!(!contents.contains("media/"));
+        let _ = std::fs::remove_dir_all(update_dir);
+    }
 }

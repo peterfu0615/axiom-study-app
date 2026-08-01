@@ -16,7 +16,8 @@ use futures_util::StreamExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{ipc::Channel, AppHandle, Manager};
+use sqlx::{Executor, Row};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_IMAGE_TOTAL_BYTES: u64 = 60 * 1024 * 1024;
@@ -37,8 +38,8 @@ pub struct StreamChunk {
 pub struct OpenAICompatibleAnalysisRequest {
     base_url: String,
     model: String,
-    /// Keychain credential reference. The actual key never crosses IPC.
-    credential_ref: String,
+    /// Provider identity. Rust loads its API Key directly from local SQLite.
+    provider_id: String,
     /// 主图（与 image_paths 合并使用，兼容旧调用）
     #[serde(default)]
     crop_image_path: Option<String>,
@@ -67,6 +68,234 @@ pub struct AntigravityCLIAnalysisRequest {
     json_schema: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedAIProviderProfile {
+    id: String,
+    name: String,
+    provider: String,
+    base_url: String,
+    /// Only a newly-entered value is supplied here.  A blank value means
+    /// preserve SQLite's existing key, never overwrite it with an empty string.
+    api_key: String,
+    credential_ref: String,
+    command_path: String,
+    model: String,
+    supports_vision: bool,
+    supports_text: bool,
+    enabled: bool,
+    sort_order: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+fn provider_profile_error(profile: &PersistedAIProviderProfile) -> Result<(), String> {
+    if profile.id.trim().is_empty() {
+        return Err("Provider ID 不能为空".to_string());
+    }
+    if profile.name.trim().is_empty() {
+        return Err("Provider 名称不能为空".to_string());
+    }
+    if !matches!(
+        profile.provider.as_str(),
+        "mock" | "openai_compatible" | "antigravity_cli"
+    ) {
+        return Err("Provider 类型无效".to_string());
+    }
+    if profile.enabled
+        && profile.provider == "openai_compatible"
+        && (profile.base_url.trim().is_empty() || profile.model.trim().is_empty())
+    {
+        return Err(format!("“{}”启用前请填写 Base URL 和 Model", profile.name));
+    }
+    if profile.enabled
+        && profile.provider == "antigravity_cli"
+        && (profile.command_path.trim().is_empty() || profile.model.trim().is_empty())
+    {
+        return Err(format!("“{}”启用前请填写 CLI 路径和 Model", profile.name));
+    }
+    Ok(())
+}
+
+async fn upsert_ai_provider_profile(
+    conn: &mut sqlx::SqliteConnection,
+    profile: &PersistedAIProviderProfile,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO ai_provider_profiles (
+           id, name, provider, base_url, api_key, credential_ref, command_path, model,
+           supports_vision, supports_text, enabled, sort_order, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           provider = excluded.provider,
+           base_url = excluded.base_url,
+           api_key = CASE
+             WHEN excluded.provider != 'openai_compatible' THEN ''
+             WHEN trim(excluded.api_key) != '' THEN excluded.api_key
+             ELSE ai_provider_profiles.api_key
+           END,
+           credential_ref = CASE
+             WHEN excluded.provider != 'openai_compatible' THEN ''
+             WHEN trim(excluded.credential_ref) != '' THEN excluded.credential_ref
+             ELSE ai_provider_profiles.credential_ref
+           END,
+           command_path = excluded.command_path,
+           model = excluded.model,
+           supports_vision = excluded.supports_vision,
+           supports_text = excluded.supports_text,
+           enabled = excluded.enabled,
+           sort_order = excluded.sort_order,
+           updated_at = excluded.updated_at",
+    )
+    .bind(profile.id.trim())
+    .bind(profile.name.trim())
+    .bind(profile.provider.trim())
+    .bind(profile.base_url.trim())
+    .bind(profile.api_key.trim())
+    .bind(profile.credential_ref.trim())
+    .bind(profile.command_path.trim())
+    .bind(profile.model.trim())
+    .bind(profile.supports_vision)
+    .bind(profile.supports_text)
+    .bind(profile.enabled)
+    .bind(profile.sort_order)
+    .bind(profile.created_at)
+    .bind(profile.updated_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(|error| format!("保存 Provider 配置失败：{error}"))?;
+
+    // Verify the just-written row without selecting the secret back into the
+    // frontend.  This makes a failed SQLite write explicit.
+    if !profile.api_key.trim().is_empty()
+        || (profile.enabled && profile.provider == "openai_compatible")
+    {
+        let saved: i64 = sqlx::query_scalar(
+            "SELECT CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END
+             FROM ai_provider_profiles WHERE id = $1",
+        )
+        .bind(profile.id.trim())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|error| format!("校验 Provider API Key 保存失败：{error}"))?;
+        if saved != 1 {
+            return Err(format!("“{}”启用前请保存 API Key", profile.name));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn persist_ai_provider_profiles(
+    state: State<'_, crate::db::DbState>,
+    profiles: Vec<PersistedAIProviderProfile>,
+) -> Result<(), String> {
+    if profiles.is_empty() {
+        return Err("请至少保留一个 Provider".to_string());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for profile in &profiles {
+        provider_profile_error(profile)?;
+        if !ids.insert(profile.id.trim().to_string()) {
+            return Err("Provider ID 不能重复".to_string());
+        }
+    }
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    conn.execute("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("无法开始 Provider 保存事务：{error}"))?;
+    let result = async {
+        let existing_ids = sqlx::query("SELECT id FROM ai_provider_profiles")
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|error| format!("读取已有 Provider 失败：{error}"))?;
+        for profile in &profiles {
+            upsert_ai_provider_profile(conn, profile).await?;
+        }
+        for row in existing_ids {
+            let id: String = row
+                .try_get("id")
+                .map_err(|error| format!("读取已有 Provider ID 失败：{error}"))?;
+            if !ids.contains(&id) {
+                sqlx::query("DELETE FROM ai_provider_profiles WHERE id = $1")
+                    .bind(&id)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(|error| format!("删除 Provider 配置失败：{error}"))?;
+            }
+        }
+        Ok::<_, String>(())
+    }
+    .await;
+    match result {
+        Ok(()) => conn
+            .execute("COMMIT")
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("提交 Provider 保存事务失败：{error}")),
+        Err(error) => {
+            let _ = conn.execute("ROLLBACK").await;
+            Err(error)
+        }
+    }
+}
+
+async fn clear_ai_provider_api_key(
+    conn: &mut sqlx::SqliteConnection,
+    provider_id: &str,
+) -> Result<(), String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return Err("Provider ID 不能为空".to_string());
+    }
+    let changed = sqlx::query("UPDATE ai_provider_profiles SET api_key = '' WHERE id = $1")
+        .bind(provider_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("删除 Provider API Key 失败：{error}"))?;
+    if changed.rows_affected() != 1 {
+        return Err("找不到指定的 AI Provider".to_string());
+    }
+    let saved: i64 = sqlx::query_scalar(
+        "SELECT CASE WHEN trim(api_key) = '' THEN 1 ELSE 0 END
+             FROM ai_provider_profiles WHERE id = $1",
+    )
+    .bind(provider_id)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|error| format!("校验 Provider API Key 删除失败：{error}"))?;
+    if saved != 1 {
+        return Err("Provider API Key 删除后校验失败".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_ai_provider_api_key(
+    state: State<'_, crate::db::DbState>,
+    provider_id: String,
+) -> Result<(), String> {
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    conn.execute("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("无法开始 API Key 删除事务：{error}"))?;
+    let result = clear_ai_provider_api_key(conn, &provider_id).await;
+    match result {
+        Ok(()) => conn
+            .execute("COMMIT")
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("提交 API Key 删除事务失败：{error}")),
+        Err(error) => {
+            let _ = conn.execute("ROLLBACK").await;
+            Err(error)
+        }
+    }
+}
+
 fn endpoint_url(base_url: &str) -> Result<Url, String> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -88,6 +317,39 @@ fn endpoint_url(base_url: &str) -> Result<Url, String> {
         }
     }
     Ok(url)
+}
+
+async fn load_provider_api_key_from_connection(
+    conn: &mut sqlx::SqliteConnection,
+    provider_id: &str,
+) -> Result<String, String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return Err("Provider ID 不能为空".to_string());
+    }
+    let row = sqlx::query("SELECT api_key FROM ai_provider_profiles WHERE id = $1")
+        .bind(provider_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|error| format!("读取 Provider 配置失败：{error}"))?
+        .ok_or_else(|| "找不到指定的 AI Provider".to_string())?;
+    let api_key: String = row
+        .try_get("api_key")
+        .map_err(|error| format!("读取 Provider API Key 失败：{error}"))?;
+    let api_key = api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err("该 Provider 尚未保存 API Key，请在设置中填写后重试".to_string());
+    }
+    Ok(api_key)
+}
+
+async fn load_provider_api_key(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+    let db_state = app
+        .try_state::<crate::db::DbState>()
+        .ok_or_else(|| "数据库状态未初始化".to_string())?;
+    let mut guard = db_state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    load_provider_api_key_from_connection(conn, provider_id).await
 }
 
 fn managed_image_path(app: &AppHandle, image_path: &str) -> Result<PathBuf, String> {
@@ -278,15 +540,9 @@ pub async fn analyze_problem_with_openai_compatible(
     if model.is_empty() {
         return Err("Model 不能为空".to_string());
     }
-    let credential_ref = request.credential_ref.trim();
-    if credential_ref.is_empty() {
-        return Err("凭据引用不能为空（请先在设置中保存 API Key）".to_string());
-    }
-    // Rust reads the secret directly; it is never returned to the frontend.
-    let api_key = crate::keystore::load_api_key_internal(credential_ref)?;
-    if api_key.is_empty() {
-        return Err("Keychain 中未找到 API Key，请重新保存".to_string());
-    }
+    // The credential never crosses IPC and is never copied into ModelRun or
+    // request diagnostics.  SQLite is the persistent source across app swaps.
+    let api_key = load_provider_api_key(&app, &request.provider_id).await?;
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
         return Err("分析 Prompt 不能为空".to_string());
@@ -751,9 +1007,11 @@ fn analyze_problem_with_antigravity_cli_blocking(
 #[cfg(test)]
 mod tests {
     use super::{
-        antigravity_command, antigravity_response, endpoint_url, is_vision_unsupported,
-        provider_error_message, read_bounded,
+        antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
+        is_vision_unsupported, load_provider_api_key_from_connection, provider_error_message,
+        read_bounded, upsert_ai_provider_profile, PersistedAIProviderProfile,
     };
+    use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -821,5 +1079,184 @@ mod tests {
         .unwrap();
         assert_eq!(output.len(), 32);
         assert!(exceeded.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn sqlite_provider_key_survives_a_simulated_app_bundle_replacement() {
+        tauri::async_runtime::block_on(async {
+            let path = std::env::temp_dir().join(format!(
+                "axiom-provider-key-update-{}.db",
+                uuid::Uuid::new_v4()
+            ));
+            let options = SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true);
+            let mut old_app = options.connect().await.unwrap();
+            old_app
+                .execute(
+                    "CREATE TABLE ai_provider_profiles (
+                       id TEXT PRIMARY KEY NOT NULL,
+                       api_key TEXT NOT NULL DEFAULT ''
+                     )",
+                )
+                .await
+                .unwrap();
+            old_app
+                .execute(
+                    "INSERT INTO ai_provider_profiles (id, api_key)
+                     VALUES ('provider', 'sk-update-persistence-test')",
+                )
+                .await
+                .unwrap();
+            drop(old_app);
+
+            // A self-update replaces only Axiom.app.  Opening the same stable
+            // app-data database after that replacement must return the key.
+            let options = SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(false);
+            let mut new_app = options.connect().await.unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut new_app, "provider")
+                    .await
+                    .unwrap(),
+                "sk-update-persistence-test"
+            );
+            drop(new_app);
+            let _ = std::fs::remove_file(path);
+        });
+    }
+
+    #[test]
+    fn database_key_loader_rejects_missing_or_empty_keys_without_keychain() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = sqlx::SqliteConnection::connect(":memory:").await.unwrap();
+            conn.execute(
+                "CREATE TABLE ai_provider_profiles (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   api_key TEXT NOT NULL DEFAULT ''
+                 )",
+            )
+            .await
+            .unwrap();
+            conn.execute("INSERT INTO ai_provider_profiles (id, api_key) VALUES ('empty', '')")
+                .await
+                .unwrap();
+            assert!(load_provider_api_key_from_connection(&mut conn, "empty")
+                .await
+                .unwrap_err()
+                .contains("尚未保存"));
+            assert!(load_provider_api_key_from_connection(&mut conn, "missing")
+                .await
+                .unwrap_err()
+                .contains("找不到"));
+        });
+    }
+
+    #[test]
+    fn sqlite_profile_save_preserves_blank_input_replaces_new_key_and_deletes_explicitly() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = sqlx::SqliteConnection::connect(":memory:").await.unwrap();
+            conn.execute(
+                "CREATE TABLE ai_provider_profiles (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   provider TEXT NOT NULL,
+                   base_url TEXT NOT NULL,
+                   api_key TEXT NOT NULL DEFAULT '',
+                   credential_ref TEXT NOT NULL DEFAULT '',
+                   command_path TEXT NOT NULL DEFAULT '',
+                   model TEXT NOT NULL,
+                   supports_vision INTEGER NOT NULL,
+                   supports_text INTEGER NOT NULL,
+                   enabled INTEGER NOT NULL,
+                   sort_order INTEGER NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 )",
+            )
+            .await
+            .unwrap();
+            let mut profile = PersistedAIProviderProfile {
+                id: "provider-a".to_string(),
+                name: "Provider A".to_string(),
+                provider: "openai_compatible".to_string(),
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-original-key".to_string(),
+                credential_ref: "legacy-a".to_string(),
+                command_path: "".to_string(),
+                model: "model-a".to_string(),
+                supports_vision: true,
+                supports_text: true,
+                enabled: true,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            };
+            upsert_ai_provider_profile(&mut conn, &profile)
+                .await
+                .unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-a")
+                    .await
+                    .unwrap(),
+                "sk-original-key"
+            );
+
+            // A blank field is the UI's "do not change" signal.
+            profile.api_key.clear();
+            profile.updated_at = 2;
+            upsert_ai_provider_profile(&mut conn, &profile)
+                .await
+                .unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-a")
+                    .await
+                    .unwrap(),
+                "sk-original-key"
+            );
+
+            profile.api_key = "sk-replacement-key".to_string();
+            profile.updated_at = 3;
+            upsert_ai_provider_profile(&mut conn, &profile)
+                .await
+                .unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-a")
+                    .await
+                    .unwrap(),
+                "sk-replacement-key"
+            );
+
+            let mut second = profile;
+            second.id = "provider-b".to_string();
+            second.name = "Provider B".to_string();
+            second.api_key = "sk-second-key".to_string();
+            second.sort_order = 1;
+            upsert_ai_provider_profile(&mut conn, &second)
+                .await
+                .unwrap();
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-b")
+                    .await
+                    .unwrap(),
+                "sk-second-key"
+            );
+
+            clear_ai_provider_api_key(&mut conn, "provider-a")
+                .await
+                .unwrap();
+            assert!(
+                load_provider_api_key_from_connection(&mut conn, "provider-a")
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                load_provider_api_key_from_connection(&mut conn, "provider-b")
+                    .await
+                    .unwrap(),
+                "sk-second-key"
+            );
+        });
     }
 }

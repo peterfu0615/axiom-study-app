@@ -7,6 +7,7 @@ import type {
   AIProviderProfile,
 } from '../../domain/models'
 import {
+  deleteAIProviderProfileApiKey,
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
@@ -33,6 +34,8 @@ function newProvider(index: number): AIProviderProfile {
     provider: 'openai_compatible',
     baseUrl: '',
     apiKey: '',
+    hasApiKey: false,
+    apiKeySuffix: '',
     credentialRef: '',
     commandPath: '',
     model: '',
@@ -136,6 +139,21 @@ export function AISettings() {
       }
       return next
     })
+  }
+
+  const deleteApiKey = async (profile: AIProviderProfile) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const saved = await deleteAIProviderProfileApiKey(profile.id)
+      configureAIProviders(saved)
+      setProfiles(saved)
+      setMessage({ text: `已删除“${profile.name}”的 API Key`, tone: 'success' })
+    } catch (error) {
+      setMessage({ text: `删除 API Key 失败：${readableError(error)}`, tone: 'error' })
+    } finally {
+      setSaving(false)
+    }
   }
 
   const enabledVisionCount = useMemo(
@@ -407,24 +425,44 @@ export function AISettings() {
                           />
                         </label>
                         {selectedProfile.provider === 'openai_compatible' && (
-                          <label className="provider-api-key-field">
-                            <span>
-                              API Key
-                              <small>{selectedProfile.credentialRef ? '已保存到 Keychain' : '未保存'}</small>
-                            </span>
-                            <input
-                              autoComplete="off"
-                              disabled={saving}
-                              onChange={(event) =>
-                                update(selectedProfile.id, {
-                                  apiKey: event.target.value,
-                                })
-                              }
-                              placeholder="输入 Provider API Key"
-                              type="password"
-                              value={selectedProfile.apiKey}
-                            />
-                          </label>
+                          <>
+                            <label className="provider-api-key-field">
+                              <span>
+                                API Key
+                                <small>
+                                  {selectedProfile.hasApiKey
+                                    ? `已保存 · sk-••••••••${selectedProfile.apiKeySuffix}`
+                                    : '未保存'}
+                                </small>
+                              </span>
+                              <input
+                                autoComplete="off"
+                                disabled={saving}
+                                onChange={(event) =>
+                                  update(selectedProfile.id, {
+                                    apiKey: event.target.value,
+                                  })
+                                }
+                                placeholder={
+                                  selectedProfile.hasApiKey
+                                    ? '不填写则保留已保存 Key'
+                                    : '输入 Provider API Key'
+                                }
+                                type="password"
+                                value={selectedProfile.apiKey}
+                              />
+                            </label>
+                            {selectedProfile.hasApiKey && (
+                              <button
+                                className="secondary-action"
+                                disabled={saving}
+                                onClick={() => void deleteApiKey(selectedProfile)}
+                                type="button"
+                              >
+                                删除 API Key
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
 

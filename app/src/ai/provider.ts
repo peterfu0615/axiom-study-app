@@ -346,7 +346,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       profile.provider !== 'openai_compatible' ||
       !profile.baseUrl ||
       !profile.model ||
-      !profile.credentialRef
+      !profile.hasApiKey
     ) {
       throw new Error('OpenAI-compatible Provider 配置不完整')
     }
@@ -361,11 +361,11 @@ export class OpenAICompatibleProvider implements AIProvider {
     input: AIProblemInput,
   ): Promise<AIProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const response = await analyzeProblemWithOpenAICompatible({
         baseUrl,
         model,
-        credentialRef,
+        providerId: this.profile.id,
         cropImagePath: input.cropImagePath,
         prompt: PROBLEM_ANALYSIS_PROMPT,
         jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
@@ -392,11 +392,11 @@ export class OpenAICompatibleProvider implements AIProvider {
     input: ProblemAnalysisInput,
   ): Promise<AIProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       cropImagePath: input.questionImagePath,
       imagePaths: [
         input.questionImagePath,
@@ -433,11 +433,11 @@ export class OpenAICompatibleProvider implements AIProvider {
   ): Promise<StudentAttemptProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
     if (!input.answerImagePaths.length) throw new Error('未提供用户作答区域')
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       cropImagePath: input.answerImagePaths[0],
       imagePaths: input.answerImagePaths,
       prompt: buildStudentAttemptPrompt(input),
@@ -466,7 +466,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<ReasoningProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     // 文本任务：仅当 Provider 支持视觉时附带题目图片，纯 LLM 只发文本
     const imagePaths = this.supportsVision && input.cropImagePath
       ? [input.cropImagePath]
@@ -474,7 +474,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       imagePaths,
       prompt: buildReasoningAnalysisPrompt(input),
       jsonSchema: JSON.stringify(reasoningAnalysisAntigravityJSONSchema),
@@ -503,14 +503,14 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<ExplainProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const imagePaths = this.supportsVision && input.cropImagePath
       ? [input.cropImagePath]
       : []
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       imagePaths,
       prompt: buildExplainSelectionPrompt(input),
       jsonSchema: JSON.stringify(explainSelectionAntigravityJSONSchema),
@@ -539,7 +539,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<SolutionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const { cropImagePath, ...structuredProblem } = input
     // 正解生成为文字任务：LLM 也可完成，只在 Provider 支持视觉时附带题目图片
     const imagePaths = this.supportsVision && cropImagePath
@@ -554,7 +554,7 @@ ${JSON.stringify(structuredProblem)}
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       imagePaths,
       prompt,
       jsonSchema: JSON.stringify(solutionAntigravityJSONSchema),
@@ -582,12 +582,12 @@ ${JSON.stringify(structuredProblem)}
     input: TextbookRecognitionInput,
   ): Promise<TextbookRecognitionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const prompt = buildTextbookRecognitionPrompt(input)
     const response = await analyzeProblemWithOpenAICompatible({
       baseUrl,
       model,
-      credentialRef,
+      providerId: this.profile.id,
       prompt,
       userText: `教材文件：${input.sourceName}；共 ${input.pageCount} 页。`,
       jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
@@ -611,9 +611,9 @@ ${JSON.stringify(structuredProblem)}
 
   async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model, credentialRef } = this.profile
+    const { baseUrl, model } = this.profile
     const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl, model, credentialRef, prompt: input.prompt,
+      baseUrl, model, providerId: this.profile.id, prompt: input.prompt,
       jsonSchema: JSON.stringify(input.jsonSchema),
     })
     if (response.errorMessage) throw new AIProviderFailure(response.errorMessage, response.rawOutput)
