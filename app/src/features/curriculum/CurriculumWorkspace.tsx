@@ -306,10 +306,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }]} value={view} />
 
-      {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
+      <div className={`curriculum-view-scroll curriculum-view-scroll--${view}`}>
+        {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
 
-      {view === 'tags' ? <TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} subject={subject} textbook={selectedTextbook} /> : (
-        <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
+        {view === 'tags' ? <TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} subject={subject} textbook={selectedTextbook} /> : (
+          <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
           {!selectedTextbook ? (
             <EmptyState
               action={<Button onClick={() => { setContinueImportId(null); setImportMode(true) }} variant="primary">导入教材</Button>}
@@ -342,8 +343,9 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               </Surface>
             </>
           )}
-        </AsyncState>
-      )}
+          </AsyncState>
+        )}
+      </div>
 
       <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
         <div className="curriculum-dialog-form"><label>科目<input onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /></label><label>教材或课程名称<input onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>

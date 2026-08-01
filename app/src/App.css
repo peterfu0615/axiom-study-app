@@ -1,8 +1,8 @@
 .app-shell {
   position: relative;
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 226px minmax(0, 1fr);
+  display: flex;
+  align-items: stretch;
   background: var(--canvas);
 }
 
@@ -17,8 +17,11 @@
 }
 
 .sidebar {
-  position: relative;
-  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  width: 226px;
+  height: 100vh;
+  flex: 0 0 226px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -124,6 +127,11 @@
   box-sizing: border-box;
   padding: 42px 36px 34px;
   overflow: auto;
+}
+
+.app-shell > .workspace {
+  width: 0;
+  flex: 1 1 auto;
 }
 
 .workspace-header {
@@ -4032,6 +4040,8 @@
   color: var(--muted);
   font-size: 8px;
 }
+
+.settings-save-row > span.is-error { color: var(--danger); }
 
 .library-empty {
   min-height: 180px;
