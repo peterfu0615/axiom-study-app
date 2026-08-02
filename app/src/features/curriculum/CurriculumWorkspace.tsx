@@ -19,6 +19,7 @@ import {
   archiveKnowledgeNode,
   confirmKnowledgeNode,
   createManualTextbook,
+  getCurriculumReviewCount,
   listHorizonSubjects,
   listKnowledgeEdges,
   listKnowledgeNodes,
@@ -31,9 +32,10 @@ import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
 import { CurriculumAnalysisStatusPill } from './CurriculumAnalysisStatusButton'
 import { buildKnowledgeTree, knowledgeNodeLabel, matchingKnowledgeNodeIds, type KnowledgeTreeItem } from './curriculumTree'
 import { TagOverview } from './TagOverview'
+import { ReviewCenter } from './ReviewCenter'
 import './Curriculum.css'
 
-type CourseView = 'structure' | 'tags'
+type CourseView = 'structure' | 'tags' | 'review'
 type NodeEditor = { node: KnowledgeNode | null; parentId: string | null } | null
 type NodeRelation = { node: KnowledgeNode; targetId: string; relation: 'contains' | 'prerequisite_of' | 'derived_from' | 'similar_to' | 'confusable_with' | 'used_by' | 'appears_in' } | null
 
@@ -125,6 +127,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [mergeTargetId, setMergeTargetId] = useState('')
   const [relation, setRelation] = useState<NodeRelation>(null)
   const [busy, setBusy] = useState(false)
+  const [pendingReviewCount, setPendingReviewCount] = useState(0)
 
   const selectedTextbook = textbooks.find((book) => book.id === textbookId) ?? null
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
@@ -172,6 +175,24 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   }, [textbookId])
 
   useEffect(() => { void refreshTree().catch((reason) => setError(String(reason))) }, [refreshTree])
+
+  const refreshReviewCount = useCallback(async () => {
+    if (!subject) {
+      setPendingReviewCount(0)
+      return
+    }
+    try {
+      setPendingReviewCount(await getCurriculumReviewCount(subject, textbookId))
+    } catch (reason) {
+      setError(String(reason))
+    }
+  }, [subject, textbookId])
+
+  useEffect(() => { void refreshReviewCount() }, [refreshReviewCount])
+
+  const handleReviewDataChanged = useCallback(() => {
+    void refreshReviewCount()
+  }, [refreshReviewCount])
 
   const selectSubject = (next: string) => {
     setSubject(next)
@@ -326,12 +347,12 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
         </SelectField>
       </div>
 
-      <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }]} value={view} />
+      <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }, { value: 'review', label: '审核确认', count: pendingReviewCount }]} value={view} />
 
       <div className={`curriculum-view-scroll curriculum-view-scroll--${view}`}>
         {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
 
-        {view === 'tags' ? <TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} subject={subject} textbook={selectedTextbook} /> : (
+        {view === 'tags' ? <div className="curriculum-tags-view"><TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : view === 'review' ? <div className="curriculum-review-view"><ReviewCenter onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : (
           <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
           {!selectedTextbook ? (
             <EmptyState

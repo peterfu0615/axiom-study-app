@@ -146,14 +146,28 @@ async fn bulk_review_curriculum_tags_in_transaction(
                      AND (pt.tag_type != 'knowledge' OR (
                        ? IS NOT NULL AND kn.textbook_id = ? AND kn.archived_at IS NULL
                      ))
-                 )",
+                 )
+                 AND (pt.tag_type != 'knowledge' OR EXISTS (
+                   SELECT 1 FROM problems problem
+                   WHERE problem.id = pt.problem_id
+                     AND problem.matched_textbook_id = ?
+                     AND trim(COALESCE(NULLIF(problem.user_subject, ''),
+                       NULLIF(problem.ai_subject, ''), NULLIF(problem.subject, ''))) = pt.subject
+                 ))",
             )
         } else {
             (
                 "mapping_status = 'rejected', tag_id = NULL,
                  candidate_name = COALESCE(NULLIF(candidate_name, ''), '已驳回映射'),
                  verification_status = 'rejected', is_locked = 1, source = 'user', updated_at = ?",
-                "pt.mapping_status != 'rejected'",
+                "pt.mapping_status != 'rejected'
+                 AND (pt.tag_type != 'knowledge' OR EXISTS (
+                   SELECT 1 FROM problems problem
+                   WHERE problem.id = pt.problem_id
+                     AND problem.matched_textbook_id = ?
+                     AND trim(COALESCE(NULLIF(problem.user_subject, ''),
+                       NULLIF(problem.ai_subject, ''), NULLIF(problem.subject, ''))) = pt.subject
+                 ))",
             )
         };
         let base = format!(
@@ -170,7 +184,12 @@ async fn bulk_review_curriculum_tags_in_transaction(
             statement = statement.bind(id);
         }
         if approve {
-            statement = statement.bind(textbook_id).bind(textbook_id);
+            statement = statement
+                .bind(textbook_id)
+                .bind(textbook_id)
+                .bind(textbook_id);
+        } else {
+            statement = statement.bind(textbook_id);
         }
         let affected = statement
             .execute(&mut *conn)
@@ -1570,11 +1589,21 @@ mod bulk_review_tests {
         let mut conn = SqliteConnection::connect(":memory:").await.unwrap();
         for statement in [
             "CREATE TABLE knowledge_nodes (id TEXT PRIMARY KEY, subject TEXT NOT NULL, textbook_id TEXT NOT NULL, archived_at INTEGER)",
+            "CREATE TABLE problems (id TEXT PRIMARY KEY, subject TEXT NOT NULL, user_subject TEXT, ai_subject TEXT, matched_textbook_id TEXT)",
             "CREATE TABLE tag_definitions (id TEXT PRIMARY KEY, subject TEXT NOT NULL, tag_type TEXT NOT NULL, knowledge_node_id TEXT, lifecycle_status TEXT NOT NULL, verification_status TEXT NOT NULL, archived_at INTEGER, updated_at INTEGER)",
             "CREATE TABLE problem_tags (id TEXT PRIMARY KEY, problem_id TEXT NOT NULL, subject TEXT NOT NULL, tag_type TEXT NOT NULL, tag_id TEXT, candidate_name TEXT, mapping_status TEXT NOT NULL, verification_status TEXT NOT NULL, is_locked INTEGER NOT NULL, source TEXT NOT NULL, superseded_at INTEGER, evidence TEXT NOT NULL DEFAULT '', updated_at INTEGER)",
         ] {
             conn.execute(statement).await.unwrap();
         }
+        conn.execute(
+            "INSERT INTO problems (id, subject, user_subject, ai_subject, matched_textbook_id) VALUES
+             ('p-1', '数学', NULL, NULL, 'book-1'),
+             ('p-2', '数学', NULL, NULL, 'book-1'),
+             ('p-3', '数学', NULL, NULL, 'book-1'),
+             ('p-4', '英语', NULL, NULL, NULL)",
+        )
+        .await
+        .unwrap();
         conn
     }
 

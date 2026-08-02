@@ -14,15 +14,12 @@ import type { TagDefinition, Textbook } from '../../domain/horizon'
 import type { HorizonTagType } from '../../domain/models'
 import {
   addTagAlias,
-  confirmProblemTag,
   createRelabelBatch,
   createTagDefinition,
   getCurriculumTagStats,
   getLatestRelabelBatch,
   getRelabelScopeCount,
-  bulkReviewTagScope,
   listTagDefinitionSummaries,
-  listTagReviewItems,
   mergeTagDefinitions,
   pauseRelabelBatch,
   refreshRelabelBatch,
@@ -31,10 +28,8 @@ import {
   type CurriculumTagStats,
   type RelabelBatch,
   type TagDefinitionSummary,
-  type TagReviewItem,
 } from '../../platform/horizonDatabase'
 import { startRelabelBatchWorker } from './relabelWorker'
-import { selectBulkReviewScope } from './bulkReviewScope'
 
 type TagStatusFilter = 'all' | 'review' | 'active' | 'archived'
 
@@ -53,23 +48,20 @@ function tagStatus(tag: TagDefinition) {
   return { label: '未采用', tone: 'neutral' as const }
 }
 
-function confidenceLabel(confidence: number) {
-  return `${Math.round(confidence * 100)}%`
-}
-
 export function TagOverview({
   subject,
   textbook,
   onCreateKnowledge,
+  onReviewDataChanged,
 }: {
   subject: string
   textbook: Textbook | null
   onCreateKnowledge?: () => void
+  onReviewDataChanged?: () => void
 }) {
   const [type, setType] = useState<HorizonTagType>('knowledge')
   const [stats, setStats] = useState<CurriculumTagStats | null>(null)
   const [tags, setTags] = useState<TagDefinitionSummary[]>([])
-  const [reviewItems, setReviewItems] = useState<TagReviewItem[]>([])
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<TagStatusFilter>('all')
   const [loading, setLoading] = useState(false)
@@ -80,36 +72,33 @@ export function TagOverview({
   const [detailTag, setDetailTag] = useState<TagDefinitionSummary | null>(null)
   const [alias, setAlias] = useState('')
   const [mergeTargetId, setMergeTargetId] = useState('')
-  const [mappingItem, setMappingItem] = useState<TagReviewItem | null>(null)
-  const [mappingTagId, setMappingTagId] = useState('')
   const [scopeOpen, setScopeOpen] = useState(false)
   const [scopeCount, setScopeCount] = useState(0)
   const [batch, setBatch] = useState<RelabelBatch | null>(null)
   const [busy, setBusy] = useState(false)
-  const [bulkDecision, setBulkDecision] = useState<'approve' | 'reject' | null>(null)
 
   const refresh = useCallback(async () => {
     if (!subject) {
-      setStats(null); setTags([]); setReviewItems([]); setBatch(null)
+      setStats(null); setTags([]); setBatch(null)
       return
     }
     setLoading(true)
     try {
-      const [nextStats, nextTags, nextReviews, nextBatch, nextScope] = await Promise.all([
+      const [nextStats, nextTags, nextBatch, nextScope] = await Promise.all([
         getCurriculumTagStats(subject, textbook?.id ?? null),
         listTagDefinitionSummaries(subject, type, textbook?.id ?? null),
-        listTagReviewItems(subject, type),
         getLatestRelabelBatch(subject),
         getRelabelScopeCount(subject),
       ])
-      setStats(nextStats); setTags(nextTags); setReviewItems(nextReviews); setBatch(nextBatch); setScopeCount(nextScope)
+      setStats(nextStats); setTags(nextTags); setBatch(nextBatch); setScopeCount(nextScope)
       setError(null)
+      onReviewDataChanged?.()
     } catch (reason) {
       setError(String(reason))
     } finally {
       setLoading(false)
     }
-  }, [subject, textbook?.id, type])
+  }, [onReviewDataChanged, subject, textbook?.id, type])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -127,14 +116,6 @@ export function TagOverview({
     return queryMatches && statusMatches
   }), [query, statusFilter, tags])
 
-  const bulkScope = useMemo(() => selectBulkReviewScope(filtered, reviewItems, query, statusFilter), [filtered, query, reviewItems, statusFilter])
-  const { definitionIds: bulkDefinitionIds, filteredReviewItems, approveProblemTagIds: bulkApproveProblemTagIds, rejectProblemTagIds: bulkRejectProblemTagIds, unmappedReviewCount } = bulkScope
-  const bulkProblemTagIds = bulkDecision === 'reject' ? bulkRejectProblemTagIds : bulkApproveProblemTagIds
-  const approveItemCount = bulkDefinitionIds.length + bulkApproveProblemTagIds.length
-  const rejectItemCount = bulkDefinitionIds.length + bulkRejectProblemTagIds.length
-  const bulkItemCount = bulkDecision === 'reject' ? rejectItemCount : approveItemCount
-  const bulkScopeLabel = query.trim() || statusFilter !== 'all' ? '筛选结果' : '全部'
-
   const createTag = async () => {
     if (!newName.trim() || !subject) return
     setBusy(true)
@@ -144,7 +125,7 @@ export function TagOverview({
     } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
-  const reviewTag = async (tag: TagDefinition, decision: 'approve' | 'reject' | 'archive') => {
+  const reviewTag = async (tag: TagDefinition, decision: 'archive') => {
     setBusy(true)
     try { await reviewTagDefinition(tag, decision); await refresh() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
@@ -159,12 +140,6 @@ export function TagOverview({
     if (!detailTag || !mergeTargetId) return
     setBusy(true)
     try { await mergeTagDefinitions(detailTag.subject, detailTag.id, mergeTargetId); setDetailTag(null); await refresh() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
-  }
-
-  const confirmMapping = async () => {
-    if (!mappingItem || !mappingTagId) return
-    setBusy(true)
-    try { await confirmProblemTag(mappingItem.id, mappingTagId); setMappingItem(null); setMappingTagId(''); await refresh() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
   const startBatch = async () => {
@@ -186,30 +161,6 @@ export function TagOverview({
       setBatch(next)
       if (next?.status === 'processing') void startRelabelBatchWorker(next.id)
     } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
-  }
-
-  const confirmBulkReview = async () => {
-    if (!bulkDecision || !bulkItemCount) return
-    setBusy(true)
-    try {
-      const result = await bulkReviewTagScope({
-        subject,
-        tagType: type,
-        textbookId: type === 'knowledge' ? textbook?.id ?? null : null,
-        definitionIds: bulkDefinitionIds,
-        problemTagIds: bulkProblemTagIds,
-        decision: bulkDecision,
-      })
-      setBulkDecision(null)
-      await refresh()
-      const affected = result.approvedDefinitions + result.approvedProblemTags +
-        result.rejectedDefinitions + result.rejectedProblemTags
-      setError(`${bulkDecision === 'approve' ? '批准' : '驳回'}完成：已处理 ${affected} 项。`)
-    } catch (reason) {
-      setError(String(reason))
-    } finally {
-      setBusy(false)
-    }
   }
 
   if (!subject) {
@@ -248,10 +199,8 @@ export function TagOverview({
         <div className="curriculum-tag-content">
           <header className="curriculum-tag-content__header"><div><h2>{currentDimension.label}</h2><p>{type === 'knowledge' && !textbook ? '请选择教材后查看教材知识点。' : currentDimension.description}</p></div>{type === 'knowledge' ? <Button disabled={!textbook} onClick={onCreateKnowledge}>新增知识点</Button> : <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button>}</header>
           {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><Button onClick={() => { setError(null); void refresh() }} variant="ghost">重试</Button></div>}
-          <div className="curriculum-tag-toolbar"><label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /></label><SelectField aria-label="标签状态" onChange={(event) => setStatusFilter(event.target.value as TagStatusFilter)} value={statusFilter}><option value="all">全部状态</option><option value="review">待确认</option><option value="active">可用</option><option value="archived">已归档</option></SelectField><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span><div className="curriculum-tag-bulk-actions"><Button disabled={busy || !approveItemCount} onClick={() => setBulkDecision('approve')} variant="secondary">批准{bulkScopeLabel} {approveItemCount}</Button><Button disabled={busy || !rejectItemCount} onClick={() => setBulkDecision('reject')} variant="danger">驳回{bulkScopeLabel} {rejectItemCount}</Button></div></div>
-          {!loading && !filtered.length ? <EmptyState action={type !== 'knowledge' ? <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button> : undefined} description={type === 'knowledge' ? '所选教材尚未确认知识点。可返回知识结构新增或确认节点。' : `当前科目还没有${currentDimension.label}。`} title={`暂无${currentDimension.label}`} /> : <div className="curriculum-tag-table"><div className="curriculum-tag-table__header"><span>标签名称</span><span>类型或角色</span><span>关联错题</span><span>状态</span><span /></div>{filtered.map((tag) => { const status = tagStatus(tag); return <article key={tag.id}><button className="curriculum-tag-name" onClick={() => { setDetailTag(tag); setAlias(''); setMergeTargetId('') }} type="button"><strong>{tag.canonicalName}</strong><small>{tag.aliases.length ? `别名：${tag.aliases.join('、')}` : tag.description || '暂无说明'}</small></button><span>{tag.tagType === 'method' ? tag.methodClass === 'core' ? '核心方法' : '辅助方法' : currentDimension.label}</span><span>{tag.problemCount}</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge><Menu><MenuItem onClick={() => setDetailTag(tag)}>查看详情</MenuItem>{tag.lifecycleStatus === 'candidate' && <MenuItem disabled={busy} onClick={() => void reviewTag(tag, 'approve')}>确认使用</MenuItem>}{tag.lifecycleStatus === 'active' && <MenuItem disabled={busy} onClick={() => void reviewTag(tag, 'archive')}>归档</MenuItem>}{tag.lifecycleStatus === 'candidate' && <MenuItem className="is-danger" disabled={busy} onClick={() => void reviewTag(tag, 'reject')}>不采用</MenuItem>}</Menu></article> })}</div>}
-
-          {filteredReviewItems.length > 0 && <section className="curriculum-review-queue"><div><h3>需要确认的标签</h3><p>{filteredReviewItems.length} 个识别结果尚未完成审核。</p></div><div>{filteredReviewItems.slice(0, 3).map((item) => <button key={item.id} onClick={() => { setMappingItem(item); setMappingTagId('') }} type="button"><strong>{item.candidateName || '已映射标签'}</strong><span>依据：{item.evidence || '暂无'}</span><small>{confidenceLabel(item.confidence)}</small></button>)}</div></section>}
+          <div className="curriculum-tag-toolbar"><label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /></label><SelectField aria-label="标签状态" onChange={(event) => setStatusFilter(event.target.value as TagStatusFilter)} value={statusFilter}><option value="all">全部状态</option><option value="review">待确认</option><option value="active">可用</option><option value="archived">已归档</option></SelectField><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span></div>
+          {!loading && !filtered.length ? <EmptyState action={type !== 'knowledge' ? <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button> : undefined} description={type === 'knowledge' ? '所选教材尚未确认知识点。可返回知识结构新增或确认节点。' : `当前科目还没有${currentDimension.label}。`} title={`暂无${currentDimension.label}`} /> : <div className="curriculum-tag-table"><div className="curriculum-tag-table__header"><span>标签名称</span><span>类型或角色</span><span>关联错题</span><span>状态</span><span /></div>{filtered.map((tag) => { const status = tagStatus(tag); return <article key={tag.id}><button className="curriculum-tag-name" onClick={() => { setDetailTag(tag); setAlias(''); setMergeTargetId('') }} type="button"><strong>{tag.canonicalName}</strong><small>{tag.aliases.length ? `别名：${tag.aliases.join('、')}` : tag.description || '暂无说明'}</small></button><span>{tag.tagType === 'method' ? tag.methodClass === 'core' ? '核心方法' : '辅助方法' : currentDimension.label}</span><span>{tag.problemCount}</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge><Menu><MenuItem onClick={() => setDetailTag(tag)}>查看详情</MenuItem>{tag.lifecycleStatus === 'active' && <MenuItem disabled={busy} onClick={() => void reviewTag(tag, 'archive')}>归档</MenuItem>}</Menu></article> })}</div>}
 
           <section className="curriculum-relabel-task">
             <div><span>旧错题标签更新</span><h3>{batch?.status === 'completed' ? '当前科目的标签更新已完成' : `还有 ${batch ? Math.max(0, batch.totalCount - done) : scopeCount} 道当前科目的错题可以更新`}</h3><p>{batch ? `已完成 ${batch.completedCount} 道，待确认 ${batch.needsReviewCount} 项，失败 ${batch.failedCount} 道。` : '更新后，这些错题可以参与后续复习。'}</p></div>
@@ -274,8 +223,6 @@ export function TagOverview({
 
       <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><label>名称<input onChange={(event) => setNewName(event.target.value)} value={newName} /></label>{type === 'method' && <label>角色<select onChange={(event) => setMethodClass(event.target.value as 'core' | 'optional')} value={methodClass}><option value="core">核心方法</option><option value="optional">辅助方法</option></select></label>}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
       <Dialog onClose={() => setDetailTag(null)} open={Boolean(detailTag)} title={detailTag?.canonicalName || '标签详情'}><div className="curriculum-dialog-form"><p>{detailTag?.description || '可在这里维护别名、合并和归档等低频操作。'}</p><label>添加别名<input onChange={(event) => setAlias(event.target.value)} placeholder="输入当前科目内的另一种说法" value={alias} /></label><Button disabled={!alias.trim()} loading={busy} onClick={() => void saveAlias()}>添加别名</Button><label>合并到<select onChange={(event) => setMergeTargetId(event.target.value)} value={mergeTargetId}><option value="">选择同类型标签</option>{tags.filter((item) => item.id !== detailTag?.id && item.lifecycleStatus === 'active').map((item) => <option key={item.id} value={item.id}>{item.canonicalName}</option>)}</select></label><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeTag()}>合并标签</Button>{detailTag?.lifecycleStatus === 'active' && <Button loading={busy} onClick={() => void reviewTag(detailTag, 'archive')} variant="danger">归档标签</Button>}</div></Dialog>
-      <Dialog onClose={() => setMappingItem(null)} open={Boolean(mappingItem)} title="确认识别结果"><div className="curriculum-dialog-form"><p>“{mappingItem?.candidateName}”需要对应到当前科目中的一个标签。依据：{mappingItem?.evidence || '暂无'}</p><label>对应标签<select onChange={(event) => setMappingTagId(event.target.value)} value={mappingTagId}><option value="">请选择标签</option>{tags.filter((tag) => tag.lifecycleStatus === 'active').map((tag) => <option key={tag.id} value={tag.id}>{tag.canonicalName}</option>)}</select></label><div className="curriculum-dialog-actions"><Button onClick={() => setMappingItem(null)} variant="ghost">取消</Button><Button disabled={!mappingTagId} loading={busy} onClick={() => void confirmMapping()} variant="primary">确认对应</Button></div></div></Dialog>
-      <Dialog onClose={() => { if (!busy) setBulkDecision(null) }} open={Boolean(bulkDecision)} title={bulkDecision === 'approve' ? '批准标签审核结果' : '驳回标签审核结果'}><div className="curriculum-dialog-form"><p>{bulkDecision === 'approve' ? <>将批准 {bulkDefinitionIds.length} 个标签定义和 {bulkProblemTagIds.length} 个已明确映射的题目标签。仍需手动处理：{unmappedReviewCount} 个未映射或映射不明确项目。</> : <>将驳回当前科目“{subject}”的 {bulkDefinitionIds.length + bulkProblemTagIds.length} 个候选结果。知识点维度的作用教材为“{textbook?.title || '未选择教材'}”。历史证据不会被删除。</>}</p><div className="curriculum-dialog-actions"><Button disabled={busy} onClick={() => setBulkDecision(null)} variant="ghost">取消</Button><Button disabled={busy || !bulkItemCount} loading={busy} onClick={() => void confirmBulkReview()} variant={bulkDecision === 'approve' ? 'primary' : 'danger'}>{bulkDecision === 'approve' ? '确认批准' : '确认驳回'}</Button></div></div></Dialog>
       <Dialog onClose={() => setScopeOpen(false)} open={scopeOpen} title="旧错题标签更新范围"><div className="curriculum-dialog-form"><p>当前科目共有 {batch?.totalCount ?? scopeCount} 道已保存错题会进入更新任务。用户已经确认的标签不会被重新覆盖。</p>{batch && <p>已完成 {batch.completedCount} 道，待确认 {batch.needsReviewCount} 项，失败 {batch.failedCount} 道。</p>}<div className="curriculum-dialog-actions"><Button onClick={() => setScopeOpen(false)} variant="primary">知道了</Button></div></div></Dialog>
     </section>
   )

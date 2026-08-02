@@ -41,4 +41,22 @@ describe('selectBulkReviewScope', () => {
     expect(scope.rejectProblemTagIds).toEqual(['unmapped'])
     expect(scope.unmappedReviewCount).toBe(1)
   })
+
+  it('keeps project filters and rejected rows out of bulk decisions', () => {
+    const scope = selectBulkReviewScope(
+      [definition({ id: 'definition' })],
+      [
+        review({ id: 'mapped', mappingStatus: 'mapped', tagId: 'tag-1' }),
+        review({ id: 'unmapped', candidateName: '未映射', mappingStatus: 'candidate' }),
+        review({ id: 'rejected', mappingStatus: 'mapped', tagId: 'tag-2', verificationStatus: 'rejected' }),
+      ],
+      '',
+      'review',
+      'mapping',
+    )
+    expect(scope.definitionIds).toEqual([])
+    expect(scope.approveProblemTagIds).toEqual(['mapped'])
+    expect(scope.rejectProblemTagIds).toEqual(['mapped'])
+    expect(scope.filteredReviewItems.map((item) => item.id)).toEqual(['mapped', 'rejected'])
+  })
 })

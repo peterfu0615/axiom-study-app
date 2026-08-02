@@ -1320,30 +1320,80 @@ export interface TagReviewItem {
   id: string
   problemId: string
   tagId: string | null
+  tagType?: HorizonTagType
   candidateName: string
   confidence: number
   evidence: string
+  source?: ProblemTag['source']
+  currentTargetName?: string | null
+  textbookId?: string | null
+  textbookTitle?: string | null
   mappingStatus: ProblemTag['mappingStatus']
   verificationStatus: ProblemTag['verificationStatus']
   isLocked: boolean
 }
 
-export async function listTagReviewItems(subject: string, tagType: HorizonTagType) {
+export async function listTagReviewItems(
+  subject: string,
+  tagType: HorizonTagType,
+  textbookId: string | null = null,
+) {
   const rows = await select<Record<string, unknown>[]>(
-    `SELECT * FROM problem_tags WHERE subject = $1 AND tag_type = $2
-       AND superseded_at IS NULL
-       AND (mapping_status != 'mapped' OR verification_status IN ('needs_review', 'ai_verified'))
-     ORDER BY updated_at DESC`,
-    [subject, tagType],
+    `SELECT pt.*, COALESCE(td.canonical_name, pt.candidate_name, '') AS current_target_name,
+       p.matched_textbook_id AS problem_textbook_id,
+       matched.title AS matched_textbook_title
+     FROM problem_tags pt
+     JOIN problems p ON p.id = pt.problem_id
+     LEFT JOIN tag_definitions td ON td.id = pt.tag_id
+     LEFT JOIN textbooks matched ON matched.id = p.matched_textbook_id
+     WHERE pt.subject = $1 AND pt.tag_type = $2
+       AND pt.superseded_at IS NULL
+       AND (pt.mapping_status IN ('unmapped', 'candidate', 'rejected')
+         OR pt.verification_status IN ('needs_review', 'ai_verified', 'rejected'))
+       AND (pt.tag_type != 'knowledge' OR ($3 != '' AND p.matched_textbook_id = $3))
+     ORDER BY pt.updated_at DESC`,
+    [subject, tagType, textbookId?.trim() ?? ''],
   )
   return rows.map((row): TagReviewItem => ({
     id: String(row.id), problemId: String(row.problem_id), tagId: nullableString(row.tag_id),
+    tagType: String(row.tag_type) as HorizonTagType,
     candidateName: String(row.candidate_name ?? ''), confidence: Number(row.confidence),
     evidence: String(row.evidence ?? ''),
+    source: String(row.source || 'model') as ProblemTag['source'],
+    currentTargetName: nullableString(row.current_target_name),
+    textbookId: nullableString(row.problem_textbook_id),
+    textbookTitle: nullableString(row.matched_textbook_title),
     mappingStatus: String(row.mapping_status) as TagReviewItem['mappingStatus'],
     verificationStatus: String(row.verification_status) as TagReviewItem['verificationStatus'],
     isLocked: bool(row.is_locked),
   }))
+}
+
+export async function getCurriculumReviewCount(subject: string, textbookId: string | null) {
+  const rows = await select<Array<{ count: number }>>(
+    `SELECT count(*) AS count FROM (
+       SELECT td.id
+       FROM tag_definitions td
+       LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+       WHERE td.subject = $1
+         AND td.lifecycle_status NOT IN ('archived', 'merged', 'rejected')
+         AND td.verification_status NOT IN ('user_verified', 'rejected')
+         AND (td.lifecycle_status = 'candidate' OR td.verification_status = 'needs_review')
+         AND (td.tag_type != 'knowledge' OR ($2 != '' AND kn.textbook_id = $2 AND kn.archived_at IS NULL))
+       UNION ALL
+       SELECT pt.id
+       FROM problem_tags pt
+       JOIN problems p ON p.id = pt.problem_id
+       WHERE pt.subject = $1 AND pt.superseded_at IS NULL
+         AND pt.is_locked = 0
+         AND pt.verification_status NOT IN ('user_verified', 'rejected')
+         AND (pt.mapping_status IN ('unmapped', 'candidate')
+           OR pt.verification_status IN ('needs_review', 'ai_verified'))
+         AND (pt.tag_type != 'knowledge' OR ($2 != '' AND p.matched_textbook_id = $2))
+     )`,
+    [subject, textbookId?.trim() ?? ''],
+  )
+  return Number(rows[0]?.count ?? 0)
 }
 
 export async function createTagDefinition(input: {
@@ -1475,13 +1525,15 @@ export async function confirmProblemTag(problemTagId: string, tagId?: string) {
     const rows = await select<Array<{
       problem_subject: string
       problem_textbook_id: string | null
+      problem_tag_type: HorizonTagType
       tag_subject: string
       tag_type: HorizonTagType
       tag_textbook_id: string | null
       tag_lifecycle_status: TagDefinition['lifecycleStatus']
       tag_archived_at: number | null
     }>>(
-      `SELECT pt.subject AS problem_subject, p.matched_textbook_id AS problem_textbook_id,
+      `SELECT pt.subject AS problem_subject, pt.tag_type AS problem_tag_type,
+          p.matched_textbook_id AS problem_textbook_id,
           td.subject AS tag_subject, td.tag_type, tag_node.textbook_id AS tag_textbook_id,
           td.lifecycle_status AS tag_lifecycle_status, td.archived_at AS tag_archived_at
        FROM problem_tags pt
@@ -1493,6 +1545,7 @@ export async function confirmProblemTag(problemTagId: string, tagId?: string) {
     )
     const target = rows[0]
     if (!target || target.problem_subject !== target.tag_subject ||
+      target.problem_tag_type !== target.tag_type ||
       target.tag_lifecycle_status !== 'active' || target.tag_archived_at !== null ||
       (target.tag_type === 'knowledge' &&
         (!target.problem_textbook_id || target.problem_textbook_id !== target.tag_textbook_id))) {
@@ -1505,12 +1558,54 @@ export async function confirmProblemTag(problemTagId: string, tagId?: string) {
       [tagId, now, problemTagId],
     )
   } else {
+    const rows = await select<Array<{
+      problem_tag_type: HorizonTagType
+      problem_subject: string
+      problem_textbook_id: string | null
+      tag_subject: string
+      tag_type: HorizonTagType
+      tag_textbook_id: string | null
+      tag_lifecycle_status: TagDefinition['lifecycleStatus']
+      tag_archived_at: number | null
+      tag_id: string | null
+    }>>(
+      `SELECT pt.tag_id, pt.tag_type AS problem_tag_type,
+          pt.subject AS problem_subject, p.matched_textbook_id AS problem_textbook_id,
+          td.subject AS tag_subject, td.tag_type, tag_node.textbook_id AS tag_textbook_id,
+          td.lifecycle_status AS tag_lifecycle_status, td.archived_at AS tag_archived_at
+       FROM problem_tags pt
+       JOIN problems p ON p.id = pt.problem_id
+       LEFT JOIN tag_definitions td ON td.id = pt.tag_id
+       LEFT JOIN knowledge_nodes tag_node ON tag_node.id = td.knowledge_node_id
+       WHERE pt.id = $1 AND pt.superseded_at IS NULL LIMIT 1`,
+      [problemTagId],
+    )
+    const target = rows[0]
+    if (!target || !target.tag_id || target.problem_subject !== target.tag_subject ||
+      target.problem_tag_type !== target.tag_type ||
+      target.tag_lifecycle_status !== 'active' || target.tag_archived_at !== null ||
+      (target.tag_type === 'knowledge' &&
+        (!target.problem_textbook_id || target.problem_textbook_id !== target.tag_textbook_id))) {
+      throw new Error('标签不属于本题的科目或匹配教材，无法确认')
+    }
     await execute(
       `UPDATE problem_tags SET source = 'user', verification_status = 'user_verified',
        is_locked = 1, updated_at = $1 WHERE id = $2 AND tag_id IS NOT NULL`,
       [now, problemTagId],
     )
   }
+}
+
+export async function rejectProblemTag(problemTagId: string) {
+  const now = Date.now()
+  await execute(
+    `UPDATE problem_tags SET mapping_status = 'rejected', tag_id = NULL,
+       candidate_name = COALESCE(NULLIF(candidate_name, ''), '已驳回映射'),
+       verification_status = 'rejected', is_locked = 1, source = 'user', updated_at = $1
+     WHERE id = $2 AND superseded_at IS NULL AND is_locked = 0
+       AND verification_status NOT IN ('user_verified', 'rejected')`,
+    [now, problemTagId],
+  )
 }
 
 export async function removeProblemTag(problemTagId: string) {
