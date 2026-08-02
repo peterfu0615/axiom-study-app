@@ -371,7 +371,7 @@ pub async fn merge_knowledge_nodes(
         .map_err(|error| format!("无法开始知识节点合并事务：{error}"))?;
     let result = async {
         let rows = sqlx::query(
-            "SELECT id, textbook_id FROM knowledge_nodes \
+            "SELECT id, textbook_id, node_type, parent_id FROM knowledge_nodes \
              WHERE subject = $1 AND id IN ($2, $3) AND archived_at IS NULL",
         )
         .bind(subject)
@@ -390,10 +390,40 @@ pub async fn merge_knowledge_nodes(
         if textbook_ids.len() != 1 {
             return Err("知识节点只能在同一科目的同一本教材内合并".to_string());
         }
+        let source = rows
+            .iter()
+            .find(|row| row.get::<String, _>("id") == source_node_id)
+            .ok_or("找不到源知识节点")?;
+        let target = rows
+            .iter()
+            .find(|row| row.get::<String, _>("id") == target_node_id)
+            .ok_or("找不到目标知识节点")?;
+        if source.get::<String, _>("node_type") != "knowledge"
+            || target.get::<String, _>("node_type") != "knowledge"
+        {
+            return Err("只能合并同一章节下的知识点".to_string());
+        }
+        let source_parent: Option<String> = source.get("parent_id");
+        let target_parent: Option<String> = target.get("parent_id");
+        if source_parent.is_none() || source_parent != target_parent {
+            return Err("只能合并同一章节下的知识点".to_string());
+        }
+        let child_count = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM knowledge_nodes \
+             WHERE parent_id = $1 AND subject = $2 AND archived_at IS NULL",
+        )
+        .bind(&source_node_id)
+        .bind(subject)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|error| format!("检查待合并节点子项失败：{error}"))?;
+        if child_count > 0 {
+            return Err("知识点不能包含结构子节点，请先完成教材结构迁移".to_string());
+        }
         let now = chrono_millis()?;
         sqlx::query(
-            "UPDATE knowledge_nodes SET parent_id = $1, updated_at = $2 \
-             WHERE parent_id = $3 AND subject = $4",
+            "UPDATE tag_definitions SET knowledge_node_id = $1, updated_at = $2 \
+             WHERE knowledge_node_id = $3 AND subject = $4",
         )
         .bind(&target_node_id)
         .bind(now)
@@ -401,7 +431,62 @@ pub async fn merge_knowledge_nodes(
         .bind(subject)
         .execute(&mut *conn)
         .await
-        .map_err(|error| format!("迁移子节点失败：{error}"))?;
+        .map_err(|error| format!("迁移知识点标签引用失败：{error}"))?;
+        sqlx::query(
+            "UPDATE tag_definition_revisions SET knowledge_node_id = $1 \
+             WHERE knowledge_node_id = $2 AND subject = $3",
+        )
+        .bind(&target_node_id)
+        .bind(&source_node_id)
+        .bind(subject)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("迁移标签历史引用失败：{error}"))?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO curriculum_tag_knowledge_links \
+             (tag_id, knowledge_node_id, source, confidence, created_at) \
+             SELECT tag_id, $1, source, confidence, created_at \
+             FROM curriculum_tag_knowledge_links WHERE knowledge_node_id = $2",
+        )
+        .bind(&target_node_id)
+        .bind(&source_node_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("迁移课程标签关联失败：{error}"))?;
+        sqlx::query("DELETE FROM curriculum_tag_knowledge_links WHERE knowledge_node_id = $1")
+            .bind(&source_node_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(|error| format!("清理旧课程标签关联失败：{error}"))?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO knowledge_edges (\
+               id, subject, from_node_id, to_node_id, relation_type, confidence,\
+               source, verification_status, created_at, updated_at\
+             )\
+             SELECT lower(hex(randomblob(16))), subject,\
+               CASE WHEN from_node_id = $1 THEN $2 ELSE from_node_id END,\
+               CASE WHEN to_node_id = $1 THEN $2 ELSE to_node_id END,\
+               relation_type, confidence, source, verification_status, created_at, updated_at\
+             FROM knowledge_edges\
+             WHERE subject = $3 AND (from_node_id = $1 OR to_node_id = $1)\
+               AND CASE WHEN from_node_id = $1 THEN $2 ELSE from_node_id END\
+                 != CASE WHEN to_node_id = $1 THEN $2 ELSE to_node_id END",
+        )
+        .bind(&source_node_id)
+        .bind(&target_node_id)
+        .bind(subject)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("迁移知识点关系失败：{error}"))?;
+        sqlx::query(
+            "DELETE FROM knowledge_edges WHERE subject = $1 \
+             AND (from_node_id = $2 OR to_node_id = $2)",
+        )
+        .bind(subject)
+        .bind(&source_node_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|error| format!("清理旧知识点关系失败：{error}"))?;
         sqlx::query(
             "UPDATE knowledge_nodes \
              SET merged_into_id = $1, archived_at = $2, updated_at = $2 \

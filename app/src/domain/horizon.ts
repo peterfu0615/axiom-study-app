@@ -42,6 +42,23 @@ export interface TextbookMetadataField {
   evidence: string
 }
 
+export interface TextbookKnowledgePointRecognition {
+  name: string
+  pageNumbers: number[]
+  evidence: string
+  confidence: number
+  chapterName?: string | null
+}
+
+export interface TextbookChapterRecognition {
+  title: string
+  pageStart: number | null
+  pageEnd: number | null
+  evidenceText?: string | null
+  knowledgePoints: TextbookKnowledgePointRecognition[]
+  isUnclassified?: boolean
+}
+
 export interface TextbookRecognition {
   title: TextbookMetadataField
   subject: TextbookMetadataField
@@ -49,6 +66,7 @@ export interface TextbookRecognition {
   volume: TextbookMetadataField
   publisher: TextbookMetadataField
   edition: TextbookMetadataField
+  chapters: TextbookChapterRecognition[]
   overallConfidence: number
   warnings: string[]
 }
@@ -137,6 +155,7 @@ export interface KnowledgeNode {
   archivedAt: number | null
   createdAt: number
   updatedAt: number
+  isUnclassified: boolean
 }
 
 export interface KnowledgeEdge {

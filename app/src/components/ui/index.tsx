@@ -1,13 +1,11 @@
 import {
   useEffect,
-  useId,
   useRef,
   useState,
   type ButtonHTMLAttributes,
   type ChangeEvent,
   type HTMLAttributes,
   type ReactNode,
-  type SelectHTMLAttributes,
 } from 'react'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
@@ -83,26 +81,6 @@ export function InlineNotice({
       {action && <span className="ax-inline-notice__action">{action}</span>}
       {onClose && <IconButton label="关闭提示" onClick={onClose}>×</IconButton>}
     </div>
-  )
-}
-
-export function SelectField({
-  label,
-  hint,
-  className = '',
-  children,
-  ...props
-}: SelectHTMLAttributes<HTMLSelectElement> & {
-  label?: string
-  hint?: string
-}) {
-  const id = useId()
-  return (
-    <label className={`ax-select-field ${className}`.trim()} htmlFor={id}>
-      {label && <span className="ax-field-label">{label}</span>}
-      <select {...props} id={id}>{children}</select>
-      {hint && <span className="ax-field-hint">{hint}</span>}
-    </label>
   )
 }
 

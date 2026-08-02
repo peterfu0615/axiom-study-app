@@ -35,8 +35,7 @@
 .ax-button:focus-visible,
 .ax-icon-button:focus-visible,
 .ax-tabs button:focus-visible,
-.ax-file-dropzone > button:focus-visible,
-.ax-select-field select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ax-file-dropzone > button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .ax-button:disabled,
 .ax-icon-button:disabled { opacity: .48; cursor: not-allowed; }
 .ax-inline-notice {
@@ -97,12 +96,8 @@
 .ax-button--primary .ax-spinner { color: #4a3b00; }
 @keyframes ax-spin { to { transform: rotate(360deg); } }
 
-.ax-select-field { display: grid; min-width: 0; gap: 5px; }
 .ax-field-label { color: var(--muted); font-size: 11px; font-weight: 650; }
 .ax-field-hint { color: var(--muted); font-size: 11px; }
-.ax-select-field select { width: 100%; min-height: var(--control-height); padding: 0 32px 0 11px; border: 1px solid var(--border); border-radius: var(--control-radius); outline: none; color: var(--ink); background: var(--surface); font: inherit; font-size: 13px; }
-.ax-select-field select:hover { border-color: color-mix(in srgb, var(--brand) 52%, var(--border)); }
-.ax-select-field select:disabled { opacity: .54; cursor: not-allowed; }
 .ax-listbox-field { min-width: 0; display: grid; gap: 5px; }
 .ax-listbox-trigger {
   width: 100%;

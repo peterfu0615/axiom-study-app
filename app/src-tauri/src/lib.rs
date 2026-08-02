@@ -166,6 +166,12 @@ pub fn run() {
             sql: include_str!("../migrations/0023_problem_textbook_match.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 24,
+            description: "flatten_curriculum_tree",
+            sql: include_str!("../migrations/0024_flatten_curriculum_tree.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。

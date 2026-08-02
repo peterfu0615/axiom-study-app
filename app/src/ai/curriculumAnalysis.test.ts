@@ -13,6 +13,7 @@ const recognition = {
   volume: { value: null, confidence: 0, evidence: '' },
   publisher: { value: null, confidence: 0, evidence: '' },
   edition: { value: null, confidence: 0, evidence: '' },
+  chapters: [],
   overallConfidence: .9, warnings: [],
 }
 
@@ -32,6 +33,18 @@ describe('curriculum tag inference', () => {
       page_numbers: [], evidence_text: null, confidence: .82,
     }], warnings: [] }), '数学')
     expect(result.candidates[0]).toMatchObject({ canonicalName: '倍长中线', origin: 'ai_inferred', pageNumbers: [] })
+  })
+
+  it('keeps the AI knowledge candidate chapter reference without introducing a section level', () => {
+    const result = parseCurriculumTags(JSON.stringify({ subject: '数学', tags: [{
+      tag_type: 'knowledge', canonical_name: '相似三角形', aliases: [], description: '图形相似',
+      origin: 'textbook_extracted', knowledge_names: [], chapter_name: '第二章 几何',
+      page_numbers: [24], evidence_text: '教材原文', confidence: .9,
+    }], warnings: [] }), '数学')
+    expect(result.candidates[0]).toMatchObject({ chapterName: '第二章 几何' })
+    const prompt = buildCurriculumTagPrompt({ recognition, outline: [], pages: [], existingTags: [] })
+    expect(prompt).toContain('chapter_name')
+    expect(prompt).toContain('不要生成 section 或根级知识点')
   })
 
   it('reuses a subject-scoped synonymous method instead of creating another', () => {

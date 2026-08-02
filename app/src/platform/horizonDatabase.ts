@@ -35,6 +35,13 @@ import {
   TEXTBOOK_RECOGNITION_SCHEMA_VERSION,
 } from '../ai/textbookRecognitionContract'
 import { inferMissingTextbookRecognition } from '../ai/textbookRecognitionInference'
+import { normalizeTextbookRecognitionChapters } from '../ai/textbookRecognitionParser'
+import {
+  normalizeTextbookStructure,
+  resolveKnowledgeChapterIndex,
+  type NormalizedCurriculumChapter,
+  type CurriculumStructureTagReference,
+} from '../features/curriculum/curriculumStructure'
 import {
   completeCurriculumImportAttempt,
   createCurriculumImportAttempt,
@@ -79,6 +86,83 @@ function parseJSON<T>(value: unknown, fallback: T): T {
 
 function sourceNameFromPath(sourcePath: string) {
   return sourcePath.split(/[\\/]/u).filter(Boolean).at(-1) || '未命名教材'
+}
+
+interface PersistedKnowledgeReference {
+  id: string
+  chapterIndex: number
+  name: string
+  pageNumbers: number[]
+}
+
+function structureTagReference(candidate: CurriculumTagAnalysis['candidates'][number]): CurriculumStructureTagReference {
+  return {
+    tagType: candidate.tagType,
+    canonicalName: candidate.canonicalName,
+    description: candidate.description,
+    knowledgeNames: candidate.knowledgeNames,
+    chapterName: candidate.chapterName,
+    pageNumbers: candidate.pageNumbers,
+    evidenceText: candidate.evidenceText,
+    confidence: candidate.confidence,
+  }
+}
+
+function findPersistedKnowledgeReference(
+  candidate: CurriculumTagAnalysis['candidates'][number],
+  structure: NormalizedCurriculumChapter[],
+  references: PersistedKnowledgeReference[],
+) {
+  const chapterIndex = resolveKnowledgeChapterIndex(structure, structureTagReference(candidate))
+  const names = [candidate.canonicalName, ...candidate.knowledgeNames].map(normalizeTagName)
+  const inChapter = references.find((reference) =>
+    (chapterIndex < 0 || reference.chapterIndex === chapterIndex) && names.includes(normalizeTagName(reference.name)),
+  )
+  return inChapter ?? references.find((reference) => names.includes(normalizeTagName(reference.name))) ?? null
+}
+
+async function persistNormalizedKnowledgeNodes(input: {
+  textbookId: string
+  subject: string
+  sourcePath: string
+  extractionMethod: ImportedTextbookSource['extraction']['extractionMethod']
+  now: number
+  structure: NormalizedCurriculumChapter[]
+}) {
+  const references: PersistedKnowledgeReference[] = []
+  for (const [chapterIndex, chapter] of input.structure.entries()) {
+    const chapterId = id()
+    await execute(
+      `INSERT INTO knowledge_nodes (
+        id, textbook_id, subject, canonical_name, node_type, parent_id, path,
+        sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
+        extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, 'chapter', NULL, $4, $5, NULL, $6, $7, $8, $9, $10,
+        $11, 'needs_review', $12, $13, $13)`,
+      [chapterId, input.textbookId, input.subject, chapter.title, chapterIndex,
+        chapter.pageStart, chapter.pageEnd, chapter.evidenceText, input.sourcePath,
+        input.extractionMethod, chapter.confidence, chapter.isUnclassified ? 1 : 0, input.now],
+    )
+    for (const [sortOrder, point] of chapter.knowledgePoints.entries()) {
+      const nodeId = id()
+      const pageStart = point.pageNumbers[0] ?? null
+      const pageEnd = point.pageNumbers.at(-1) ?? null
+      await execute(
+        `INSERT INTO knowledge_nodes (
+          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
+          sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
+          extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, 'knowledge', $5, $6, $7, $8, $9, $10, $11, $12,
+          $13, $14, 'needs_review', 0, $15, $15)`,
+        [nodeId, input.textbookId, input.subject, point.name, chapterId,
+          `${chapter.title}/${point.name}`, sortOrder, point.description, pageStart,
+          pageEnd, point.evidenceText, input.sourcePath, input.extractionMethod,
+          point.confidence, input.now],
+      )
+      references.push({ id: nodeId, chapterIndex, name: point.name, pageNumbers: point.pageNumbers })
+    }
+  }
+  return references
 }
 
 async function inputHash(value: unknown) {
@@ -138,6 +222,7 @@ function rowToTextbook(row: Record<string, unknown>): Textbook {
 }
 
 function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImportJob {
+  const storedRecognition = parseJSON<Record<string, unknown> | null>(row.metadata_json, null)
   return {
     id: String(row.id),
     originalSourcePath: String(row.original_source_path),
@@ -150,7 +235,12 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
     pageCount: nullableNumber(row.page_count),
     extractionMethod: nullableString(row.extraction_method) as CurriculumImportJob['extractionMethod'],
     extraction: parseJSON<CurriculumImportJob['extraction']>(row.extraction_json, null),
-    recognition: parseJSON<TextbookRecognition | null>(row.metadata_json, null),
+    recognition: storedRecognition
+      ? {
+          ...storedRecognition,
+          chapters: normalizeTextbookRecognitionChapters(storedRecognition),
+        } as TextbookRecognition
+      : null,
     provider: nullableString(row.provider),
     model: nullableString(row.model),
     promptVersion: nullableString(row.prompt_version),
@@ -194,6 +284,7 @@ function rowToKnowledgeNode(row: Record<string, unknown>): KnowledgeNode {
     archivedAt: nullableNumber(row.archived_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    isUnclassified: bool(row.is_unclassified),
   }
 }
 
@@ -403,30 +494,11 @@ export async function importTextbook(
         ],
       )
     }
-    const parents = new Map<number, { id: string; path: string }>()
-    for (const [index, candidate] of imported.extraction.outline.entries()) {
-      const level = Math.max(1, Math.min(3, candidate.level))
-      const parent = parents.get(level - 1) ?? null
-      const nodeId = id()
-      const path = parent ? `${parent.path}/${candidate.title}` : candidate.title
-      await execute(
-        `INSERT INTO knowledge_nodes (
-          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-          sort_order, source_page_start, source_page_end, evidence_text, source_path,
-          extraction_method, confidence, verification_status, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13,
-          'needs_review', $14, $14)`,
-        [
-          nodeId, textbookId, subject.trim(), candidate.title,
-          level === 1 ? 'chapter' : level === 2 ? 'section' : 'knowledge',
-          parent?.id ?? null, path, index, candidate.pageNumber,
-          candidate.evidenceText, imported.sourcePath,
-          imported.extraction.extractionMethod, candidate.confidence, now,
-        ],
-      )
-      parents.set(level, { id: nodeId, path })
-      for (let deeper = level + 1; deeper <= 3; deeper += 1) parents.delete(deeper)
-    }
+    await persistNormalizedKnowledgeNodes({
+      textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
+      extractionMethod: imported.extraction.extractionMethod, now,
+      structure: normalizeTextbookStructure({ outline: imported.extraction.outline }),
+    })
     })
   } catch (error) {
     await removeTextbookSource(imported.sourcePath).catch(() => {})
@@ -582,7 +654,10 @@ async function runStructureStage(
     const applied = await completeCurriculumImportAttempt({
       ...attemptIdentity(jobId, 'ai_analyzing_structure', lease),
       metadataJson: JSON.stringify(recognition),
-      structureJson: JSON.stringify(initial.extraction?.outline ?? []),
+      structureJson: JSON.stringify({
+        chapters: recognition.chapters,
+        legacy_outline: initial.extraction?.outline ?? [],
+      }),
       rawOutput: result.rawOutput,
     })
     if (!applied) return getCurriculumImportJob(jobId)
@@ -840,6 +915,7 @@ async function persistImportedTextbook(
   confirmation: TextbookImportConfirmation,
   tagAnalysis: CurriculumTagAnalysis | null,
   rejectedTagNames: string[],
+  recognition: TextbookRecognition | null,
 ) {
   const subject = confirmation.subject.trim()
   const title = confirmation.title.trim()
@@ -847,6 +923,15 @@ async function persistImportedTextbook(
   const textbookId = id()
   const now = Date.now()
   const outline = confirmation.outline ?? imported.extraction.outline
+  const rejected = new Set(rejectedTagNames.map(normalizeTagName))
+  const acceptedCandidates = (tagAnalysis?.candidates ?? []).filter(
+    (candidate) => !rejected.has(normalizeTagName(candidate.canonicalName)),
+  )
+  const structure = normalizeTextbookStructure({
+    chapters: recognition?.chapters,
+    outline,
+    tagCandidates: acceptedCandidates.map(structureTagReference),
+  })
   await ensureTaxonomyVersion(subject)
   await transaction(async () => {
     await execute(
@@ -871,68 +956,32 @@ async function persistImportedTextbook(
           page.extractionMethod, page.confidence, now],
       )
     }
-    const parents = new Map<number, { id: string; path: string }>()
-    const knowledgeByName = new Map<string, string>()
-    for (const [index, candidate] of outline.entries()) {
-      const level = Math.max(1, Math.min(3, candidate.level))
-      const parent = parents.get(level - 1) ?? null
-      const nodeId = id()
-      const path = parent ? `${parent.path}/${candidate.title}` : candidate.title
-      await execute(
-        `INSERT INTO knowledge_nodes (
-          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-          sort_order, source_page_start, source_page_end, evidence_text, source_path,
-          extraction_method, confidence, verification_status, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13,
-          'needs_review', $14, $14)`,
-        [
-          nodeId, textbookId, subject, candidate.title,
-          level === 1 ? 'chapter' : level === 2 ? 'section' : 'knowledge', parent?.id ?? null,
-          path, index, candidate.pageNumber, candidate.evidenceText, imported.sourcePath,
-          imported.extraction.extractionMethod, candidate.confidence, now,
-        ],
-      )
-      parents.set(level, { id: nodeId, path })
-      knowledgeByName.set(normalizeTagName(candidate.title), nodeId)
-      for (let deeper = level + 1; deeper <= 3; deeper += 1) parents.delete(deeper)
-    }
-    const rejected = new Set(rejectedTagNames.map(normalizeTagName))
-    for (const candidate of tagAnalysis?.candidates ?? []) {
-      if (rejected.has(normalizeTagName(candidate.canonicalName))) continue
-      let knowledgeNodeId = candidate.knowledgeNames
-        .map((name) => knowledgeByName.get(normalizeTagName(name)))
-        .find(Boolean) ?? null
-      if (candidate.tagType === 'knowledge' && !knowledgeNodeId) {
-        const nodeId = id()
-        const page = candidate.pageNumbers[0] ?? null
-        await execute(
-          `INSERT OR IGNORE INTO knowledge_nodes (
-            id, textbook_id, subject, canonical_name, node_type, path, sort_order,
-            description, source_page_start, source_page_end, evidence_text, source_path,
-            extraction_method, confidence, verification_status, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, 'knowledge', $4, $5, $6, $7, $7, $8, $9,
-            $10, $11, 'needs_review', $12, $12)`,
-          [nodeId, textbookId, subject, candidate.canonicalName, knowledgeByName.size,
-            candidate.description, page, candidate.evidenceText, imported.sourcePath,
-            imported.extraction.extractionMethod, candidate.confidence, now],
-        )
-        const rows = await select<Array<{ id: string }>>(
-          `SELECT id FROM knowledge_nodes WHERE textbook_id = $1 AND subject = $2
-           AND node_type = 'knowledge' AND canonical_name = $3 COLLATE NOCASE
-           AND archived_at IS NULL LIMIT 1`,
-          [textbookId, subject, candidate.canonicalName],
-        )
-        knowledgeNodeId = rows[0]?.id ?? null
-        if (knowledgeNodeId) knowledgeByName.set(normalizeTagName(candidate.canonicalName), knowledgeNodeId)
-      }
+    const references = await persistNormalizedKnowledgeNodes({
+      textbookId, subject, sourcePath: imported.sourcePath,
+      extractionMethod: imported.extraction.extractionMethod, now, structure,
+    })
+    for (const candidate of acceptedCandidates) {
+      const reference = findPersistedKnowledgeReference(candidate, structure, references)
+      const knowledgeNodeId = candidate.tagType === 'knowledge' ? reference?.id ?? null : null
       if (candidate.existingTagId) {
-        for (const knowledgeName of candidate.knowledgeNames) {
-          const linkedNodeId = knowledgeByName.get(normalizeTagName(knowledgeName))
-          if (linkedNodeId) await execute(
+        if (candidate.tagType === 'knowledge' && knowledgeNodeId) {
+          await execute(
+            `UPDATE tag_definitions SET knowledge_node_id = COALESCE(knowledge_node_id, $1), updated_at = $2
+             WHERE id = $3 AND subject = $4`,
+            [knowledgeNodeId, now, candidate.existingTagId, subject],
+          )
+        }
+        const linkReferences = candidate.tagType === 'knowledge' && reference
+          ? [reference]
+          : references.filter((item) => candidate.knowledgeNames.some(
+            (name) => normalizeTagName(name) === normalizeTagName(item.name),
+          ))
+        for (const linked of linkReferences) {
+          await execute(
             `INSERT OR IGNORE INTO curriculum_tag_knowledge_links (
               tag_id, knowledge_node_id, source, confidence, created_at
             ) VALUES ($1, $2, 'ai_inferred', $3, $4)`,
-            [candidate.existingTagId, linkedNodeId, candidate.confidence, now],
+            [candidate.existingTagId, linked.id, candidate.confidence, now],
           )
         }
         continue
@@ -963,12 +1012,12 @@ async function persistImportedTextbook(
         [id(), subject, persistedTagId, alias, now],
       )
       for (const knowledgeName of candidate.knowledgeNames) {
-        const linkedNodeId = knowledgeByName.get(normalizeTagName(knowledgeName))
-        if (linkedNodeId) await execute(
+        const linked = references.find((item) => normalizeTagName(item.name) === normalizeTagName(knowledgeName))
+        if (linked) await execute(
           `INSERT OR IGNORE INTO curriculum_tag_knowledge_links (
             tag_id, knowledge_node_id, source, confidence, created_at
           ) VALUES ($1, $2, $3, $4, $5)`,
-          [persistedTagId, linkedNodeId,
+          [persistedTagId, linked.id,
             candidate.origin === 'textbook_extracted' ? 'textbook_extracted' : 'ai_inferred',
             candidate.confidence, now],
         )
@@ -1008,7 +1057,9 @@ export async function confirmCurriculumImportJob(
   const rejectedTagNames = job.audit && typeof job.audit === 'object' &&
     Array.isArray((job.audit as { rejectedNames?: unknown }).rejectedNames)
     ? (job.audit as { rejectedNames: string[] }).rejectedNames : []
-  const textbookId = await persistImportedTextbook(imported, confirmation, tagAnalysis, rejectedTagNames)
+  const textbookId = await persistImportedTextbook(
+    imported, confirmation, tagAnalysis, rejectedTagNames, job.recognition,
+  )
   await execute('DELETE FROM curriculum_import_jobs WHERE id = $1', [jobId])
   return textbookId
 }
@@ -1078,6 +1129,7 @@ export async function moveKnowledgeNode(input: {
     )
     parent = parents[0] ?? null
     if (!parent) throw new Error('目标章节不属于当前教材')
+    if (String(parent.node_type) !== 'chapter') throw new Error('知识点只能归属于章节或单元')
     if (String(parent.id) === input.id) throw new Error('节点不能移动到自身')
     const descendants = await select<Array<{ id: string }>>(
       `WITH RECURSIVE tree(id) AS (
@@ -1093,6 +1145,13 @@ export async function moveKnowledgeNode(input: {
   }
   const canonicalName = input.canonicalName.trim()
   if (!canonicalName) throw new Error('节点名称不能为空')
+  const nextNodeType: KnowledgeNode['nodeType'] = input.parentId ? 'knowledge' : 'chapter'
+  if (nextNodeType === 'chapter' && String(node.node_type) !== 'chapter') {
+    throw new Error('根级只能保存章节或单元')
+  }
+  if (nextNodeType === 'knowledge' && String(node.node_type) === 'chapter') {
+    throw new Error('章节或单元不能移动到知识点层级')
+  }
   const oldPath = String(node.path || node.canonical_name)
   const nextPath = parent
     ? `${String(parent.path || parent.canonical_name)}/${canonicalName}`
@@ -1122,7 +1181,7 @@ export async function moveKnowledgeNode(input: {
        WHERE (id = $1 OR path LIKE $8 || '/%')
          AND textbook_id = $10 AND subject = $11`,
       [
-        input.id, canonicalName, input.nodeType, input.parentId,
+        input.id, canonicalName, nextNodeType, input.parentId,
         input.description?.trim() || null, sortOrder, nextPath, oldPath, now,
         input.textbookId, input.subject,
       ],
@@ -1147,12 +1206,15 @@ export async function saveKnowledgeNode(input: {
   const nodeId = id()
   const parentRows = input.parentId
     ? await select<Record<string, unknown>[]>(
-      `SELECT path, canonical_name FROM knowledge_nodes
+      `SELECT path, canonical_name, node_type FROM knowledge_nodes
        WHERE id = $1 AND textbook_id = $2 AND subject = $3 AND archived_at IS NULL`,
       [input.parentId, input.textbookId, input.subject],
     )
     : []
   if (input.parentId && !parentRows[0]) throw new Error('目标章节不属于当前教材')
+  if (input.parentId && String(parentRows[0]?.node_type) !== 'chapter') {
+    throw new Error('知识点只能归属于章节或单元')
+  }
   const parent = parentRows[0]
   const siblings = await select<Array<{ sort_order: number }>>(
     `SELECT COALESCE(max(sort_order), -1) AS sort_order FROM knowledge_nodes
@@ -1169,7 +1231,7 @@ export async function saveKnowledgeNode(input: {
       id, textbook_id, subject, canonical_name, node_type, parent_id, path,
       sort_order, description, extraction_method, confidence, verification_status, created_at, updated_at
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'manual', 1, 'user_verified', $10, $10)`,
-    [nodeId, input.textbookId, input.subject, name, input.nodeType, input.parentId, path,
+    [nodeId, input.textbookId, input.subject, name, input.parentId ? 'knowledge' : 'chapter', input.parentId, path,
       Number(siblings[0]?.sort_order ?? -1) + 1, input.description?.trim() || null, now],
   )
   return nodeId
@@ -1819,7 +1881,8 @@ export interface RelabelModelRunSummary {
 function redactRelabelError(value: unknown) {
   return String(value)
     .replace(/\bBearer\s+[A-Za-z0-9._~-]+/giu, 'Bearer [已隐藏]')
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}/gu, 'sk-[已隐藏]')
+    .replace(/\b(?:sk-(?:ant-)?|AIza|gsk_|xai-)[A-Za-z0-9._~-]{8,}/giu, '[已隐藏]')
+    .replace(/((?:api[_-]?key|authorization|access[_-]?token|secret|token)\s*[:=]\s*)["']?[A-Za-z0-9._~+/=-]{8,}["']?/giu, '$1[已隐藏]')
     .slice(0, 1200)
 }
 
@@ -1839,11 +1902,12 @@ export async function createRelabelBatch(subject: string): Promise<string> {
        AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1`,
       [subject],
     )
-    await execute(
-      `INSERT INTO tag_relabel_batches (id, subject, total_count, created_at, updated_at)
+    const inserted = await execute(
+      `INSERT OR IGNORE INTO tag_relabel_batches (id, subject, total_count, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4)`,
       [batchId, subject, problems.length, now],
     )
+    if (inserted.rowsAffected !== 1) return
     for (const problem of problems) {
       await execute(
         `INSERT INTO tag_relabel_items (batch_id, problem_id, subject, created_at, updated_at)
@@ -1917,7 +1981,7 @@ export async function refreshRelabelBatch(batchId: string): Promise<RelabelBatch
           WHEN status = 'cancelled' THEN 'cancelled'
           WHEN paused_at IS NOT NULL THEN 'processing'
           WHEN EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing'))
-            THEN CASE WHEN status = 'pending' THEN 'pending' ELSE 'processing' END
+            THEN 'processing'
           WHEN EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status = 'failed') THEN 'failed'
           ELSE 'completed' END,
         completed_at = CASE WHEN paused_at IS NULL AND NOT EXISTS (

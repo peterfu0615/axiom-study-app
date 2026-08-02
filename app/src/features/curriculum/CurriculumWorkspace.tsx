@@ -200,10 +200,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   }
 
   const openNodeEditor = (node: KnowledgeNode | null, parentId: string | null) => {
+    const effectiveParentId = node?.parentId ?? parentId
     setNodeEditor({ node, parentId })
     setNodeName(node?.canonicalName ?? '')
-    setNodeType(node?.nodeType ?? 'knowledge')
-    setNodeParentId(node?.parentId ?? parentId)
+    setNodeType(node?.nodeType === 'chapter' || (!node && !effectiveParentId) ? 'chapter' : 'knowledge')
+    setNodeParentId(effectiveParentId)
     setNodeDescription(node?.description ?? '')
   }
 
@@ -211,12 +212,15 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     if (!selectedTextbook || !nodeEditor) return
     setBusy(true)
     try {
+      const parent = nodeParentId ? nodes.find((candidate) => candidate.id === nodeParentId) : null
+      if (nodeParentId && parent?.nodeType !== 'chapter') throw new Error('知识点只能归属于章节或单元')
+      const normalizedNodeType: KnowledgeNode['nodeType'] = nodeParentId ? 'knowledge' : 'chapter'
       const nodeId = await saveKnowledgeNode({
         id: nodeEditor.node?.id,
         textbookId: selectedTextbook.id,
         subject: selectedTextbook.subject,
         canonicalName: nodeName,
-        nodeType,
+        nodeType: normalizedNodeType,
         parentId: nodeParentId,
         description: nodeDescription,
       })
@@ -279,7 +283,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
   const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
   const visibleNodeIds = useMemo(() => matchingKnowledgeNodeIds(nodes, query), [nodes, query])
-  const chapterCount = nodes.filter((node) => node.nodeType === 'chapter').length
+  const chapterCount = nodes.filter((node) => node.nodeType === 'chapter' && !node.isUnclassified).length
   const knowledgeCount = nodes.filter((node) => ['knowledge', 'definition', 'formula', 'theorem', 'property'].includes(node.nodeType)).length
   const reviewCount = nodes.filter((node) => node.verificationStatus === 'needs_review').length
 
@@ -345,7 +349,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       <div className={`curriculum-view-scroll curriculum-view-scroll--${view}`}>
         {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
 
-        {view === 'tags' ? <div className="curriculum-tags-view"><TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.id ?? null) }} onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : view === 'review' ? <div className="curriculum-review-view"><ReviewCenter onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : (
+        {view === 'tags' ? <div className="curriculum-tags-view"><TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null) }} onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : view === 'review' ? <div className="curriculum-review-view"><ReviewCenter onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : (
           <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
           {!selectedTextbook ? (
             <EmptyState
@@ -363,13 +367,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               </section>
               <Surface className="curriculum-structure-shell">
                 <aside className="curriculum-tree-panel">
-                  <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><Button onClick={() => openNodeEditor(null, selectedNode?.id ?? null)}>新增节点</Button></div>
+                  <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><Button onClick={() => openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null)}>新增节点</Button></div>
                   <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
                   <div className="curriculum-tree-scroll"><KnowledgeTree expanded={expanded} items={tree} onSelect={(node) => setSelectedNodeId(node.id)} onToggle={(nodeId) => setExpanded((current) => { const next = new Set(current); if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId); return next })} selectedId={selectedNodeId} visibleIds={visibleNodeIds} /></div>
                 </aside>
                 <section className="curriculum-node-detail">
                   {selectedNode ? <>
-                    <header><div><div className="curriculum-detail-kicker"><span>{knowledgeNodeLabel(selectedNode)}</span><StatusBadge tone={verification(selectedNode).tone}>{verification(selectedNode).label}</StatusBadge></div><h2>{selectedNode.canonicalName}</h2><p>{selectedNode.path}</p></div><div className="curriculum-node-actions"><Button onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>编辑</Button><Menu><MenuItem disabled={busy || selectedNode.verificationStatus === 'user_verified'} onClick={() => void confirmNode(selectedNode)}>确认节点</MenuItem><MenuItem onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>移动到章节</MenuItem><MenuItem onClick={() => { setMergeSource(selectedNode); setMergeTargetId('') }}>合并节点</MenuItem><MenuItem onClick={() => setRelation({ node: selectedNode, targetId: '', relation: 'prerequisite_of' })}>添加关联</MenuItem><MenuItem className="is-danger" onClick={() => void archiveNode(selectedNode)}>归档节点</MenuItem></Menu></div></header>
+                    <header><div><div className="curriculum-detail-kicker"><span>{knowledgeNodeLabel(selectedNode)}</span><StatusBadge tone={verification(selectedNode).tone}>{verification(selectedNode).label}</StatusBadge></div><h2>{selectedNode.canonicalName}</h2><p>{selectedNode.path}</p></div><div className="curriculum-node-actions"><Button onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>编辑</Button><Menu><MenuItem disabled={busy || selectedNode.verificationStatus === 'user_verified'} onClick={() => void confirmNode(selectedNode)}>确认节点</MenuItem><MenuItem onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>移动到章节</MenuItem>{selectedNode.nodeType === 'knowledge' && <MenuItem onClick={() => { setMergeSource(selectedNode); setMergeTargetId('') }}>合并节点</MenuItem>}<MenuItem onClick={() => setRelation({ node: selectedNode, targetId: '', relation: 'prerequisite_of' })}>添加关联</MenuItem><MenuItem className="is-danger" onClick={() => void archiveNode(selectedNode)}>归档节点</MenuItem></Menu></div></header>
                     <dl className="curriculum-node-facts"><div><dt>教材页码</dt><dd>{selectedNode.sourcePageStart ? `第 ${selectedNode.sourcePageStart}${selectedNode.sourcePageEnd && selectedNode.sourcePageEnd !== selectedNode.sourcePageStart ? `–${selectedNode.sourcePageEnd}` : ''} 页` : '手动建立'}</dd></div><div><dt>来源</dt><dd>{selectedNode.extractionMethod === 'manual' ? '手动建立' : selectedNode.extractionMethod === 'vision_ocr' ? '扫描识别' : '教材文字提取'}</dd></div><div><dt>识别可信度</dt><dd>{Math.round(selectedNode.confidence * 100)}%</dd></div><div><dt>关联关系</dt><dd>{edgeCount ? `${edgeCount} 条课程关系` : '尚未添加'}</dd></div></dl>
                     <section className="curriculum-evidence"><h3>教材依据</h3><p>{selectedNode.evidenceText || '该节点由你手动建立，尚未添加教材依据。'}</p></section>
                     {selectedNode.description && <section className="curriculum-evidence"><h3>备注</h3><p>{selectedNode.description}</p></section>}
@@ -387,11 +391,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
-        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => setNodeType(value as KnowledgeNode['nodeType'])} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[{ value: '', label: '作为根章节' }, ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">
-        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的节点，历史引用会保留。</p><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== mergeSource?.id).map((node) => ({ value: node.id, label: node.path }))]} value={mergeTargetId} /><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
+        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的同章节知识点，历史引用会保留。</p><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.nodeType === 'knowledge' && node.parentId === mergeSource?.parentId && node.id !== mergeSource?.id).map((node) => ({ value: node.id, label: node.path }))]} value={mergeTargetId} /><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setRelation(null)} open={Boolean(relation)} title="添加课程关联">

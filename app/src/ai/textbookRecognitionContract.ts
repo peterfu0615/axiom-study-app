@@ -1,14 +1,35 @@
 import textbookRecognitionSchema from './textbookRecognition.schema.json'
 
-export const TEXTBOOK_RECOGNITION_SCHEMA_VERSION = 'textbook-recognition-v1'
-export const TEXTBOOK_RECOGNITION_PROMPT_VERSION = 'textbook-recognition-v1'
+export const TEXTBOOK_RECOGNITION_SCHEMA_VERSION = 'textbook-recognition-v2-chapter-knowledge'
+export const TEXTBOOK_RECOGNITION_PROMPT_VERSION = 'textbook-recognition-v2-chapter-knowledge'
 export const textbookRecognitionJSONSchema = textbookRecognitionSchema
+
+const textbookChapterSchema = {
+  type: 'object',
+  required: ['title', 'page_start', 'page_end', 'knowledge_points'],
+  properties: {
+    title: { type: 'string', minLength: 1 },
+    page_start: { type: ['integer', 'null'], minimum: 1 },
+    page_end: { type: ['integer', 'null'], minimum: 1 },
+    knowledge_points: {
+      type: 'array', maxItems: 180, items: {
+        type: 'object', required: ['name', 'page_numbers', 'evidence', 'confidence'], properties: {
+          name: { type: 'string', minLength: 1 },
+          page_numbers: { type: 'array', items: { type: 'integer', minimum: 1 } },
+          evidence: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          chapter_name: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} as const
 
 export const textbookRecognitionAntigravityJSONSchema = {
   type: 'object',
   required: [
     'title', 'subject', 'grade', 'volume', 'publisher', 'edition',
-    'overall_confidence', 'warnings',
+    'chapters', 'overall_confidence', 'warnings',
   ],
   properties: {
     // Keep the nested field contract explicit.  The previous schema only said
@@ -47,6 +68,7 @@ export const textbookRecognitionAntigravityJSONSchema = {
         value: { type: ['string', 'null'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidence: { type: 'string' },
       },
     },
+    chapters: { type: 'array', maxItems: 120, items: textbookChapterSchema },
     overall_confidence: { type: 'number' },
     warnings: { type: 'array', items: { type: 'string' } },
   },
@@ -62,6 +84,9 @@ export const TEXTBOOK_RECOGNITION_PROMPT = String.raw`
 4. subject 使用用户可读名称，例如“数学”“物理”“化学”“英语”。
 5. evidence 必须引用输入中的短文本、目录标题或文件名；不能引用时返回空字符串。
 6. overall_confidence 表示整本教材信息的可信度，warnings 写入冲突、缺失或 OCR 风险。
+7. chapters 必须使用“章节/单元 → knowledge_points”的嵌套结构。章节可以是章、单元或篇，但必须是教材顶层教学单元；不要输出 section、节或根级独立 knowledge 节点。
+8. 每个 knowledge_points 项必须给出 name、page_numbers、evidence、confidence；无法可靠归属章节的项目放入唯一标题为“待归类知识点”的章节，confidence 如实填写。
+9. page_start/page_end 不确定时返回 null，不要用 0 或猜测页码。
 `.trim()
 
 export function buildTextbookRecognitionPrompt(input: {

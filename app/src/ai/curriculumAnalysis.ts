@@ -1,7 +1,7 @@
 import { normalizeTagName, type TextbookRecognition } from '../domain/horizon'
 
-export const CURRICULUM_TAG_PROMPT_VERSION = 'curriculum-tags-v2'
-export const CURRICULUM_TAG_SCHEMA_VERSION = 'curriculum-tags-v2'
+export const CURRICULUM_TAG_PROMPT_VERSION = 'curriculum-tags-v3-chapter-link'
+export const CURRICULUM_TAG_SCHEMA_VERSION = 'curriculum-tags-v3-chapter-link'
 export const CURRICULUM_AUDIT_PROMPT_VERSION = 'curriculum-audit-v2'
 export const CURRICULUM_AUDIT_SCHEMA_VERSION = 'curriculum-audit-v2'
 
@@ -22,6 +22,7 @@ export interface CurriculumTagCandidate {
   evidenceText: string | null
   confidence: number
   existingTagId: string | null
+  chapterName?: string | null
 }
 
 export interface CurriculumTagAnalysis {
@@ -93,6 +94,7 @@ export const curriculumTagsJSONSchema = {
       description: { type: ['string', 'null'] },
       origin: { type: 'string', enum: ['textbook_extracted', 'ai_inferred', 'existing_library'] },
       knowledge_names: { type: 'array', items: { type: 'string' } },
+      chapter_name: { type: ['string', 'null'] },
       page_numbers: { type: 'array', items: { type: 'integer' } },
       evidence_text: { type: ['string', 'null'] }, confidence: { type: 'number' },
     } } }, warnings: { type: 'array', items: { type: 'string' } },
@@ -120,7 +122,7 @@ export function buildCurriculumTagPrompt(input: {
 }) {
   return `你是中国 K12 课程标签设计助手。只返回符合 JSON Schema 的 JSON。
 
-知识点以当前教材全文和目录为主要边界，必须属于当前教材，尽量给出页码、原文依据和章节，不得明显超出教学范围。
+知识点以当前教材全文和目录为主要边界，必须属于当前教材，尽量给出页码、原文依据和章节，不得明显超出教学范围。知识点候选请用 chapter_name 明确归属章节；不要生成 section 或根级知识点。
 
 解题方法和题型模型既可从教材提取，也可根据已识别科目、年级、知识结构及学科常识合理扩展。不要求教材原文明确命名，不要求页码或原文证据；不得因教材未写出“倍长中线”“待定系数法”“一线三等角”等名称而拒绝建立相关标签。推断项使用 ai_inferred。方法和模型须关联适用知识点，关联可由你推断。
 
@@ -178,6 +180,7 @@ export function parseCurriculumTags(rawOutput: string, expectedSubject: string):
       tagType: type, canonicalName, aliases: strings(tag.aliases),
       description: typeof tag.description === 'string' ? tag.description.trim() || null : null,
       origin, knowledgeNames: strings(tag.knowledge_names),
+      chapterName: typeof tag.chapter_name === 'string' ? tag.chapter_name.trim() || null : null,
       pageNumbers: type === 'knowledge' && Array.isArray(tag.page_numbers)
         ? tag.page_numbers.filter((page): page is number => Number.isInteger(page) && Number(page) > 0) : [],
       evidenceText: type === 'knowledge' && typeof tag.evidence_text === 'string' ? tag.evidence_text.trim() || null : null,
@@ -229,6 +232,7 @@ export function reconcileCurriculumTagCandidates(
       knowledgeNames: [...new Set([...duplicate.knowledgeNames, ...normalizedCandidate.knowledgeNames])],
       pageNumbers: [...new Set([...duplicate.pageNumbers, ...normalizedCandidate.pageNumbers])].sort((a, b) => a - b),
       evidenceText: duplicate.evidenceText ?? normalizedCandidate.evidenceText,
+      chapterName: duplicate.chapterName ?? normalizedCandidate.chapterName,
       confidence: Math.max(duplicate.confidence, normalizedCandidate.confidence),
       origin: duplicate.origin === 'existing_library' || normalizedCandidate.origin === 'existing_library'
         ? 'existing_library' : duplicate.origin,

@@ -312,6 +312,7 @@ export class MockAIProvider implements AIProvider {
       volume: { value: null, confidence: 0, evidence: '' },
       publisher: { value: null, confidence: 0, evidence: '' },
       edition: { value: null, confidence: 0, evidence: '' },
+      chapters: [],
       overall_confidence: 0.1,
       warnings: ['当前由 Mock Provider 生成教材信息，请确认或配置真实 Provider。'],
     })

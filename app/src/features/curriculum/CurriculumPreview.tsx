@@ -17,7 +17,7 @@ function CurriculumPreviewShell({ state }: { state: string }) {
   }, [openProgress, state])
 
   const workspace = section === 'curriculum'
-    ? <CurriculumWorkspace initialView={state.startsWith('tags-') || state.startsWith('relabel-') ? 'tags' : state.startsWith('review-') ? 'review' : 'structure'} />
+    ? <CurriculumWorkspace initialView={state.startsWith('tags-') || state.startsWith('relabel-') || state === 'tag-table-centered' || state === 'custom-select-open' ? 'tags' : state.startsWith('review-') || state === 'bulk-review-success' ? 'review' : 'structure'} />
     : section === 'capture'
       ? <main className="workspace placeholder-workspace"><header className="workspace-header"><div><p className="eyebrow">学习素材</p><h1>采集</h1></div></header></main>
       : <ModulePlaceholder section={section} />

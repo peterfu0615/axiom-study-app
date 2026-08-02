@@ -42,8 +42,8 @@ export function matchingKnowledgeNodeIds(nodes: KnowledgeNode[], query: string) 
 
 export function knowledgeNodeLabel(node: KnowledgeNode) {
   const labels: Record<KnowledgeNode['nodeType'], string> = {
-    book: '教材', chapter: '章', section: '节', knowledge: '知识点',
-    definition: '定义', formula: '公式', theorem: '定理', property: '性质',
+    book: '章节/单元', chapter: '章节/单元', section: '知识点', knowledge: '知识点',
+    definition: '知识点', formula: '知识点', theorem: '知识点', property: '知识点',
   }
   return labels[node.nodeType]
 }
