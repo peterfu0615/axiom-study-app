@@ -2923,9 +2923,43 @@ export async function listProblemModelRuns(
   return rows.map(rowToModelRun)
 }
 
+export const SUBJECT_CHANGE_REQUIRES_TEXTBOOK_UNLOCK = 'SUBJECT_CHANGE_REQUIRES_TEXTBOOK_UNLOCK'
+
+export class ProblemSubjectChangeConflict extends Error {
+  readonly code = SUBJECT_CHANGE_REQUIRES_TEXTBOOK_UNLOCK
+
+  constructor() {
+    super('当前教材属于原科目。更改科目将清除已确认教材，是否继续？')
+    this.name = 'ProblemSubjectChangeConflict'
+  }
+}
+
+export class ProblemSubjectChangeTagConflict extends Error {
+  constructor() {
+    super('当前题目仍有原科目标签。修改科目前请先处理这些标签，题目数据未改变。')
+    this.name = 'ProblemSubjectChangeTagConflict'
+  }
+}
+
+function normalizedSubjectKey(value: string | null | undefined) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('zh-CN')
+    .replace(/[\s\u3000]+/gu, '')
+}
+
+function effectiveSubjectForEdit(
+  userSubject: string,
+  aiSubject: string | null | undefined,
+  legacySubject: string | null | undefined,
+) {
+  return userSubject.trim() || String(aiSubject ?? '').trim() || String(legacySubject ?? '').trim()
+}
+
 export async function updateProblemUserFields(
   id: string,
   edits: ProblemUserEdits,
+  options: { confirmTextbookReset?: boolean } = {},
 ): Promise<SavedProblem> {
   if (!isDesktopRuntime()) {
     throw new Error('错题编辑需要在 Axiom 桌面 App 中运行')
@@ -2941,33 +2975,88 @@ export async function updateProblemUserFields(
   const knowledgePoints = edits.knowledgePoints
     .map((point) => point.trim())
     .filter(Boolean)
-  const solutionInputChanged =
-    subject !== (current.subject ?? '') ||
-    stemMarkdown !== (current.stemMarkdown ?? '') ||
-    JSON.stringify(knowledgePoints) !==
-      JSON.stringify(current.knowledgePoints)
+  let solutionInputChanged = false
   const now = Date.now()
-  const result = await (await database()).execute(
-    `UPDATE problems
-     SET user_title = $1,
-         user_subject = $2,
-         user_stem_markdown = $3,
-         user_knowledge_points_json = $4,
-         user_edited_at = $5,
-         updated_at = $5
-     WHERE id = $6 AND status = 'saved' AND deleted_at IS NULL`,
-    [
-      title,
-      subject,
-      stemMarkdown,
-      JSON.stringify(knowledgePoints),
-      now,
-      id,
-    ],
-  )
-  if (result.rowsAffected !== 1) {
-    throw new Error('错题不存在或状态已发生变化')
-  }
+  const db = await database()
+  await inDatabaseTransaction(db, async () => {
+    const rows = await db.select<Array<{
+      subject: string | null
+      user_subject: string | null
+      ai_subject: string | null
+      user_stem_markdown: string | null
+      user_knowledge_points_json: string | null
+      matched_textbook_id: string | null
+      textbook_match_locked: number
+    }>>(
+      `SELECT subject, user_subject, ai_subject, user_stem_markdown,
+              user_knowledge_points_json, matched_textbook_id, textbook_match_locked
+       FROM problems
+       WHERE id = $1 AND status = 'saved' AND deleted_at IS NULL
+       LIMIT 1`,
+      [id],
+    )
+    const row = rows[0]
+    if (!row) throw new Error('错题不存在或状态已发生变化')
+    const previousSubject = effectiveSubjectForEdit(
+      String(row.user_subject ?? ''), row.ai_subject, row.subject,
+    )
+    const nextSubject = effectiveSubjectForEdit(subject, row.ai_subject, row.subject)
+    const subjectChanged = normalizedSubjectKey(previousSubject) !== normalizedSubjectKey(nextSubject)
+    const activeTagRows = await db.select<Array<{ subject: string }>>(
+      `SELECT subject FROM problem_tags
+       WHERE problem_id = $1 AND superseded_at IS NULL`,
+      [id],
+    )
+    const hasCrossSubjectActiveTags = activeTagRows.some((tag) =>
+      normalizedSubjectKey(tag.subject) !== normalizedSubjectKey(nextSubject),
+    )
+    if (subjectChanged && hasCrossSubjectActiveTags) {
+      throw new ProblemSubjectChangeTagConflict()
+    }
+    if (subjectChanged && row.matched_textbook_id && Number(row.textbook_match_locked) === 1 && !options.confirmTextbookReset) {
+      throw new ProblemSubjectChangeConflict()
+    }
+    // SQLite's historical tag trigger compares trimmed strings.  Reuse the
+    // active tag spelling when the semantic subject is unchanged so harmless
+    // whitespace/case edits cannot trip that integrity guard.
+    const subjectForStorage = activeTagRows[0]?.subject && !hasCrossSubjectActiveTags
+      ? activeTagRows[0].subject
+      : subject
+    const previousStemMarkdown = row.user_stem_markdown ?? current.stemMarkdown ?? ''
+    const previousKnowledgePoints = row.user_knowledge_points_json == null
+      ? current.knowledgePoints
+      : parseJSON<string[]>(row.user_knowledge_points_json, [])
+    solutionInputChanged = subjectChanged ||
+      stemMarkdown !== previousStemMarkdown ||
+      JSON.stringify(knowledgePoints) !== JSON.stringify(previousKnowledgePoints)
+
+    const result = await db.execute(
+      `UPDATE problems
+       SET user_title = $1,
+           user_subject = $2,
+           user_stem_markdown = $3,
+           user_knowledge_points_json = $4,
+           matched_textbook_id = CASE WHEN $6 = 1 THEN NULL ELSE matched_textbook_id END,
+           textbook_match_confidence = CASE WHEN $6 = 1 THEN 0 ELSE textbook_match_confidence END,
+           textbook_match_reason = CASE WHEN $6 = 1 THEN '科目变化，等待重新识别' ELSE textbook_match_reason END,
+           textbook_match_source = CASE WHEN $6 = 1 THEN 'unresolved' ELSE textbook_match_source END,
+           textbook_match_locked = CASE WHEN $6 = 1 THEN 0 ELSE textbook_match_locked END,
+           textbook_match_updated_at = CASE WHEN $6 = 1 THEN $5 ELSE textbook_match_updated_at END,
+           user_edited_at = $5,
+           updated_at = $5
+       WHERE id = $7 AND status = 'saved' AND deleted_at IS NULL`,
+      [
+        title,
+        subjectForStorage,
+        stemMarkdown,
+        JSON.stringify(knowledgePoints),
+        now,
+        subjectChanged ? 1 : 0,
+        id,
+      ],
+    )
+    if (result.rowsAffected !== 1) throw new Error('错题不存在或状态已发生变化')
+  })
   const updated = await getSavedProblem(id)
   if (!updated) {
     throw new Error('修改已写入，但无法重新读取错题')

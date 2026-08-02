@@ -27,12 +27,15 @@ import {
   queueProblemAI,
   queueProblemSolution,
   queueStudentAttempt,
+  ProblemSubjectChangeConflict,
+  ProblemSubjectChangeTagConflict,
   setProblemArchived,
   updateProblemUserFields,
 } from '../../platform/database'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
+import { Button, Dialog } from '../../components/ui'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
 import {
@@ -208,6 +211,7 @@ export function ProblemLibrary() {
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
+  const [subjectChangeConfirming, setSubjectChangeConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss } = useToast()
@@ -372,10 +376,11 @@ export function ProblemLibrary() {
 
   const cancelEditing = () => {
     setEditing(false)
+    setSubjectChangeConfirming(false)
     dismiss()
   }
 
-  const saveEdits = async () => {
+  const saveEdits = async (confirmTextbookReset = false) => {
     if (!selected) return
     if (!editTitle.trim()) {
       notify('保存失败：标题不能为空', 'error')
@@ -392,18 +397,25 @@ export function ProblemLibrary() {
           .split(/[,，、\n]/)
           .map((point) => point.trim())
           .filter(Boolean),
-      })
+      }, { confirmTextbookReset })
       setProblems((current) =>
         current.map((problem) =>
           problem.id === updated.id ? updated : problem,
         ),
       )
       setEditing(false)
+      setSubjectChangeConfirming(false)
       notify('修改已保存', 'success')
       void runSolutionWorker()
       setSolution(await getProblemSolution(selected.id))
     } catch (error) {
-      notify(`保存修改失败：${String(error)}`, 'error')
+      if (error instanceof ProblemSubjectChangeConflict) {
+        setSubjectChangeConfirming(true)
+      } else if (error instanceof ProblemSubjectChangeTagConflict) {
+        notify(error.message, 'error')
+      } else {
+        notify(`保存修改失败：${String(error)}`, 'error')
+      }
     } finally {
       setUpdating(false)
     }
@@ -1209,6 +1221,19 @@ export function ProblemLibrary() {
         </article>
       </section>
 
+      <Dialog
+        onClose={() => { if (!updating) setSubjectChangeConfirming(false) }}
+        open={subjectChangeConfirming}
+        title="确认更改题目科目"
+      >
+        <div className="problem-edit-form">
+          <p>当前教材属于原科目。更改科目将清除已确认教材，之后可以在新科目范围重新匹配。</p>
+          <div className="curriculum-dialog-actions">
+            <Button onClick={() => setSubjectChangeConfirming(false)} variant="ghost">取消</Button>
+            <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续并清除教材</Button>
+          </div>
+        </div>
+      </Dialog>
       <Toast toast={toast} />
     </main>
   )
