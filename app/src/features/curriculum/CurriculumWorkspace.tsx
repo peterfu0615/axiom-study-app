@@ -342,7 +342,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               title="建立你的课程知识结构"
             />
           ) : (
-            <>
+            <div className="curriculum-structure-view">
               <section className="curriculum-book-summary">
                 <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2></div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
                 <dl><div><dt>章节</dt><dd>{chapterCount}</dd></div><div><dt>知识点</dt><dd>{knowledgeCount}</dd></div><div><dt>待确认</dt><dd>{reviewCount}</dd></div></dl>
@@ -362,7 +362,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
                   </> : <EmptyState description="从左侧选择章节或知识点，即可查看教材依据并进行编辑。" title="选择一个课程节点" />}
                 </section>
               </Surface>
-            </>
+            </div>
           )}
           </AsyncState>
         )}

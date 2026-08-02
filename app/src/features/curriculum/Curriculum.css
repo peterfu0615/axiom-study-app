@@ -1,6 +1,6 @@
 .curriculum-workspace {
   width: 100%;
-  height: 100vh;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -12,9 +12,24 @@
   padding-inline: clamp(16px, 3vw, 32px);
 }
 
+.app-shell:has(> .curriculum-workspace) {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell:has(> .curriculum-workspace) > .curriculum-workspace {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .curriculum-view-scroll {
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   overflow: hidden;
   padding-bottom: 2px;
   scrollbar-gutter: stable;
@@ -71,6 +86,7 @@
 }
 
 .curriculum-inline-error {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -82,6 +98,23 @@
   background: color-mix(in srgb, var(--danger) 6%, var(--surface));
   font-size: 12px;
   line-height: 1.45;
+}
+
+.curriculum-structure-view {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(8px, 1.4vw, 18px);
+  overflow: hidden;
+}
+
+.curriculum-structure-view > .ax-async-state,
+.curriculum-structure-view > .ax-empty-state {
+  min-height: 0;
+  grid-row: 1 / -1;
 }
 
 .curriculum-book-summary {
@@ -102,15 +135,16 @@
 
 .curriculum-structure-shell {
   width: 100%;
-  height: 100%;
+  height: auto;
   min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(270px, 31%) minmax(0, 1fr);
   overflow: hidden;
+  align-self: stretch;
 }
 
-.curriculum-tree-panel { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+.curriculum-tree-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
 .curriculum-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 17px 16px 11px; }
 .curriculum-panel-heading > div { display: grid; gap: 3px; }
 .curriculum-panel-heading h2,
@@ -124,7 +158,7 @@
 .curriculum-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font: inherit; font-size: 12px; }
 .curriculum-search input::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 
-.curriculum-tree-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 8px 14px; scrollbar-gutter: stable; }
+.curriculum-tree-scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 0 8px 14px; scrollbar-gutter: stable; }
 .curriculum-tree { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
 .curriculum-tree ul { margin: 0 0 0 17px; padding: 0; list-style: none; }
 .curriculum-tree-row { position: relative; min-height: 35px; display: flex; align-items: center; gap: 2px; border-radius: 7px; }
@@ -139,7 +173,7 @@
 .curriculum-tree-toggle span { transition: transform 140ms ease; }
 .curriculum-tree-toggle span.is-open { transform: rotate(90deg); }
 
-.curriculum-node-detail { min-width: 0; min-height: 0; padding: clamp(18px, 3vw, 25px); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.curriculum-node-detail { min-width: 0; min-height: 0; padding: clamp(18px, 3vw, 25px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .curriculum-node-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 19px; border-bottom: 1px solid var(--border); }
 .curriculum-detail-kicker { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 11px; }
 .curriculum-node-detail h2 { font-size: 22px; letter-spacing: -.035em; }
