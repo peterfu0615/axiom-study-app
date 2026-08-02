@@ -274,6 +274,12 @@ function nullableString(value: unknown) {
   return value === null || value === undefined ? null : String(value)
 }
 
+function redactAIError(value: unknown) {
+  return String(value)
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/giu, 'Bearer [已隐藏]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/gu, 'sk-[已隐藏]')
+}
+
 /**
  * 将 SQLite 列值稳健地转换为 boolean。
  *
@@ -2488,6 +2494,22 @@ export async function queueProblemAI(
   const run = createAIModelRun(current)
   const now = Date.now()
   await inDatabaseTransaction(db, async () => {
+    const activeRuns = await db.select<Array<{ id: string }>>(
+      `SELECT mr.id
+       FROM model_runs mr
+       JOIN problems p ON p.ai_active_model_run_id = mr.id
+       WHERE p.id = $1
+         AND mr.task_type = $2
+         AND mr.status IN ('pending', 'processing')
+         AND p.ai_status IN ('pending', 'processing')
+       LIMIT 1`,
+      [problemId, AI_TASK_TYPE],
+    )
+    if (activeRuns[0]) {
+      // A repeated start signal (including two relabel workers racing after a
+      // resume) must reuse the durable run instead of creating a duplicate.
+      return
+    }
     await insertAIModelRuns(db, [run])
     const result = await db.execute(
       `UPDATE problems
@@ -2761,7 +2783,7 @@ export async function recordProcessingModelRunOutput(
     model: run.model,
     rawOutput: rawOutput.slice(0, 128 * 1024),
     repairStrategy,
-    errorMessage,
+    errorMessage: errorMessage == null ? null : redactAIError(errorMessage),
     recordedAt: Date.now(),
   })
   const retainedAttempts = attempts.slice(-12)
@@ -2789,7 +2811,7 @@ export async function failProblemAIModelRun(
 ) {
   const db = await database()
   const now = Date.now()
-  const message = String(error).slice(0, 2000)
+  const message = redactAIError(error).slice(0, 2000)
   await inDatabaseTransaction(db, async () => {
     await db.execute(
       `UPDATE model_runs

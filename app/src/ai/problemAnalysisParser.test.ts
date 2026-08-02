@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  normalizeProblemAnalysisDifficultyScore,
   parseProblemAnalysis,
   ProblemAnalysisParseError,
 } from './problemAnalysisParser'
@@ -40,6 +41,80 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.analysis.title).toBe(valid.title)
     expect(parsed.repairStrategy).toBeNull()
   })
+
+  it('keeps a complete numeric difficulty score', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify(valid))
+    expect(parsed.analysis.difficulty?.score).toBe(0.2)
+    expect(parsed.analysis.warnings).toEqual([])
+  })
+
+  it('accepts an explicitly nullable difficulty score', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      difficulty: { ...valid.difficulty, score: null },
+    }))
+    expect(parsed.analysis.difficulty?.score).toBeNull()
+    expect(parsed.repairStrategy).toBeNull()
+  })
+
+  it('normalizes a missing difficulty score without discarding the problem', () => {
+    const difficulty = { ...valid.difficulty }
+    delete (difficulty as { score?: number | null }).score
+    const parsed = parseProblemAnalysis(JSON.stringify({ ...valid, difficulty }))
+    expect(parsed.analysis.stemMarkdown).toBe(valid.stem_markdown)
+    expect(parsed.analysis.knowledgePoints).toEqual(valid.knowledge_points)
+    expect(parsed.analysis.difficulty?.score).toBeNull()
+    expect(parsed.analysis.warnings).toContain('模型未返回难度分数，已保留为空')
+    expect(parsed.repairStrategy).toContain('normalize-missing-difficulty-score')
+  })
+
+  it('normalizes a string difficulty score to null with a warning', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      difficulty: { ...valid.difficulty, score: '0.8' },
+    }))
+    expect(parsed.analysis.difficulty?.score).toBeNull()
+    expect(parsed.analysis.warnings).toContain('模型返回的难度分数无效，已保留为空')
+    expect(parsed.repairStrategy).toContain('normalize-invalid-difficulty-score')
+  })
+
+  it('normalizes an out-of-range difficulty score to null', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      difficulty: { ...valid.difficulty, score: 1.01 },
+    }))
+    expect(parsed.analysis.difficulty?.score).toBeNull()
+    expect(parsed.analysis.warnings).toContain('模型返回的难度分数无效，已保留为空')
+    expect(parsed.repairStrategy).toContain('normalize-invalid-difficulty-score')
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'normalizes non-finite difficulty score %s to null',
+    (score) => {
+      const normalized = normalizeProblemAnalysisDifficultyScore({
+        ...valid,
+        difficulty: { ...valid.difficulty, score },
+      })
+      expect((normalized.value as typeof valid).difficulty?.score).toBeNull()
+      expect(normalized.repairStrategy).toBe('normalize-invalid-difficulty-score')
+    },
+  )
+
+  it('keeps a null difficulty unchanged', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({ ...valid, difficulty: null }))
+    expect(parsed.analysis.difficulty).toBeNull()
+    expect(parsed.repairStrategy).toBeNull()
+  })
+
+  it.each(['level', 'confidence', 'reason'] as const)(
+    'still rejects a difficulty object without %s',
+    (field) => {
+      const difficulty = { ...valid.difficulty }
+      delete (difficulty as Record<string, unknown>)[field]
+      expect(() => parseProblemAnalysis(JSON.stringify({ ...valid, difficulty })))
+        .toThrow(ProblemAnalysisParseError)
+    },
+  )
 
   it('normalizes an optional textbook hint without requiring a second AI call', () => {
     const parsed = parseProblemAnalysis(JSON.stringify({

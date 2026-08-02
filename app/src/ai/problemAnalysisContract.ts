@@ -1,7 +1,7 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
 
 export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v4-textbook-hint'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v4-textbook-hint'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v5-difficulty-score'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -125,7 +125,11 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
     也不得宣称已写入正式标签库。每项必须给出 primary/secondary、题面依据、来源和置信度。
 13. model_tags 必须描述稳定的问题结构或条件组合，禁止使用“选择题”“填空题”“解答题”等答题形式。
 14. 方法候选中的 primary 表示完成解答不可缺少的核心方法，secondary 表示可选辅助方法。
-15. difficulty.level 只能是 basic、intermediate、advanced，并给出相对当前学段的理由和置信度。
+15. difficulty 为 null，或必须严格返回以下完整对象：
+    {"level":"basic | intermediate | advanced","score":0 到 1 的数字或 null,
+     "confidence":0 到 1 的数字,"reason":"判断依据"}。
+    无法可靠量化 score 时必须返回 "score": null，绝对不能省略 score；
+    level、confidence 和 reason 仍然必须提供，不得用未知或空对象代替。
 16. error_categories 仅在附加的学生答案提供明确证据时识别；没有证据返回 []，不得根据错题身份猜测错因。
 17. textbook_hint 只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
     无法确认时返回 null；对象中的字段均可为 null，confidence 必须为 0 到 1，evidence 只写简短可审计依据。

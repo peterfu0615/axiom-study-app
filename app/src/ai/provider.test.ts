@@ -130,6 +130,11 @@ describe('MockAIProvider', () => {
           bbox: { x: 0.2, y: 0.2, width: 0.6, height: 0.6 },
         },
         knowledge_points: ['函数图像'],
+        difficulty: {
+          level: 'intermediate',
+          confidence: 0.74,
+          reason: '需要结合图像判断函数性质',
+        },
         confidence: 0.92,
         warnings: [],
       }),
@@ -169,6 +174,8 @@ describe('MockAIProvider', () => {
       jsonSchema: expect.stringContaining('"diagram"'),
     })
     expect(result.analysis.diagramKind).toBe('function')
+    expect(result.analysis.difficulty?.score).toBeNull()
+    expect(result.analysis.warnings).toContain('模型未返回难度分数，已保留为空')
   })
 
   it('generates a structured solution through the configured Antigravity model', async () => {

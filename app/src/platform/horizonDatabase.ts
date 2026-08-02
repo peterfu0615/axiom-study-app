@@ -1806,10 +1806,34 @@ export interface RelabelBatch {
   updatedAt: number
 }
 
+export interface RelabelModelRunSummary {
+  id: string
+  problemId: string
+  provider: string
+  model: string
+  repairStrategy: string | null
+  errorMessage: string | null
+  status: string
+}
+
+function redactRelabelError(value: unknown) {
+  return String(value)
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/giu, 'Bearer [已隐藏]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/gu, 'sk-[已隐藏]')
+    .slice(0, 1200)
+}
+
 export async function createRelabelBatch(subject: string): Promise<string> {
   const batchId = id()
   const now = Date.now()
   await transaction(async () => {
+    const active = await select<Array<{ id: string }>>(
+      `SELECT id FROM tag_relabel_batches
+       WHERE subject = $1 AND status IN ('pending', 'processing')
+       ORDER BY updated_at DESC LIMIT 1`,
+      [subject],
+    )
+    if (active[0]) return
     const problems = await select<Array<{ id: string }>>(
       `SELECT id FROM problems WHERE status = 'saved' AND deleted_at IS NULL
        AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1`,
@@ -1828,6 +1852,13 @@ export async function createRelabelBatch(subject: string): Promise<string> {
       )
     }
   })
+  const active = await select<Array<{ id: string }>>(
+    `SELECT id FROM tag_relabel_batches
+     WHERE subject = $1 AND status IN ('pending', 'processing')
+     ORDER BY updated_at DESC LIMIT 1`,
+    [subject],
+  )
+  if (active[0]) return active[0].id
   return batchId
 }
 
@@ -1884,12 +1915,14 @@ export async function refreshRelabelBatch(batchId: string): Promise<RelabelBatch
         failed_count = (SELECT count(*) FROM tag_relabel_items WHERE batch_id = $1 AND status = 'failed'),
         status = CASE
           WHEN status = 'cancelled' THEN 'cancelled'
-          WHEN paused_at IS NOT NULL THEN status
-          WHEN NOT EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing')) THEN 'completed'
-          ELSE status END,
+          WHEN paused_at IS NOT NULL THEN 'processing'
+          WHEN EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing'))
+            THEN CASE WHEN status = 'pending' THEN 'pending' ELSE 'processing' END
+          WHEN EXISTS (SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status = 'failed') THEN 'failed'
+          ELSE 'completed' END,
         completed_at = CASE WHEN paused_at IS NULL AND NOT EXISTS (
           SELECT 1 FROM tag_relabel_items WHERE batch_id = $1 AND status IN ('pending','queued','processing')
-        ) THEN $2 ELSE completed_at END,
+        ) THEN $2 ELSE NULL END,
         updated_at = $2 WHERE id = $1`,
       [batchId, now],
     )
@@ -1958,8 +1991,81 @@ export async function failRelabelItem(batchId: string, problemId: string, error:
   await execute(
     `UPDATE tag_relabel_items SET status = 'failed', error_message = $1, updated_at = $2
      WHERE batch_id = $3 AND problem_id = $4 AND status IN ('pending', 'queued', 'processing')`,
-    [String(error), Date.now(), batchId, problemId],
+    [JSON.stringify({
+      problem_id: problemId,
+      model_run_id: null,
+      provider: null,
+      model: null,
+      repairStrategy: null,
+      error_summary: redactRelabelError(error),
+    }), Date.now(), batchId, problemId],
   )
+}
+
+export async function getRelabelModelRunSummary(
+  modelRunId: string,
+): Promise<RelabelModelRunSummary | null> {
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT id, problem_id, provider, model, repair_strategy, error_message, status
+     FROM model_runs WHERE id = $1 LIMIT 1`,
+    [modelRunId],
+  )
+  const row = rows[0]
+  if (!row) return null
+  return {
+    id: String(row.id),
+    problemId: String(row.problem_id),
+    provider: String(row.provider),
+    model: String(row.model),
+    repairStrategy: nullableString(row.repair_strategy),
+    errorMessage: row.error_message == null ? null : redactRelabelError(row.error_message),
+    status: String(row.status),
+  }
+}
+
+export async function recordRelabelModelRunFailure(
+  batchId: string,
+  problemId: string,
+  summary: RelabelModelRunSummary,
+) {
+  await execute(
+    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1, updated_at = $2
+     WHERE batch_id = $3 AND problem_id = $4 AND model_run_id = $5
+       AND status IN ('queued', 'processing', 'failed')`,
+    [JSON.stringify({
+      problem_id: problemId,
+      model_run_id: summary.id,
+      provider: summary.provider,
+      model: summary.model,
+      repairStrategy: summary.repairStrategy,
+      error_summary: redactRelabelError(summary.errorMessage ?? '模型运行失败'),
+    }), Date.now(), batchId, problemId, summary.id],
+  )
+}
+
+export async function retryFailedRelabelItems(batchId: string) {
+  const now = Date.now()
+  await transaction(async () => {
+    const batch = await select<Array<{ id: string; status: string }>>(
+      `SELECT id, status FROM tag_relabel_batches WHERE id = $1 LIMIT 1`, [batchId],
+    )
+    if (!batch[0] || batch[0].status === 'cancelled') return
+    const reset = await execute(
+      `UPDATE tag_relabel_items
+       SET status = 'pending', model_run_id = NULL, error_message = NULL, updated_at = $1
+       WHERE batch_id = $2 AND status = 'failed'`,
+      [now, batchId],
+    )
+    if (reset.rowsAffected === 0) return
+    await execute(
+      `UPDATE tag_relabel_batches
+       SET status = CASE WHEN paused_at IS NULL THEN 'pending' ELSE 'processing' END,
+           completed_at = NULL, updated_at = $1
+       WHERE id = $2 AND status != 'cancelled'`,
+      [now, batchId],
+    )
+  })
+  return refreshRelabelBatch(batchId)
 }
 
 export async function cancelRelabelBatch(batchId: string) {

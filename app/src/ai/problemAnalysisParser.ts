@@ -295,6 +295,73 @@ function schemaErrorMessage(errors: ErrorObject[] | null | undefined) {
     .join('；')
 }
 
+export interface ProblemAnalysisDifficultyNormalization {
+  value: unknown
+  repairStrategy: string | null
+  warnings: string[]
+}
+
+/**
+ * `difficulty.score` is a useful auxiliary measurement, but it must not make
+ * an otherwise complete problem unusable.  Keep the strict schema for the
+ * core fields and repair only the score shape immediately before validation.
+ */
+export function normalizeProblemAnalysisDifficultyScore(
+  value: unknown,
+): ProblemAnalysisDifficultyNormalization {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { value, repairStrategy: null, warnings: [] }
+  }
+  const source = value as Record<string, unknown>
+  const difficulty = source.difficulty
+  if (difficulty === null || difficulty === undefined) {
+    return { value, repairStrategy: null, warnings: [] }
+  }
+  if (typeof difficulty !== 'object' || Array.isArray(difficulty)) {
+    return { value, repairStrategy: null, warnings: [] }
+  }
+
+  const candidate = difficulty as Record<string, unknown>
+  const hasOwnScore = Object.prototype.hasOwnProperty.call(candidate, 'score')
+  const warningFor = (message: string) => {
+    if (Array.isArray(source.warnings)) return [...source.warnings, message]
+    if (source.warnings === undefined) return [message]
+    // Keep an invalid warnings field intact so the strict schema still rejects
+    // it; this compatibility repair must not hide an unrelated schema error.
+    return source.warnings
+  }
+
+  if (!hasOwnScore) {
+    return {
+      value: {
+        ...source,
+        difficulty: { ...candidate, score: null },
+        warnings: warningFor('模型未返回难度分数，已保留为空'),
+      },
+      repairStrategy: 'normalize-missing-difficulty-score',
+      warnings: ['模型未返回难度分数，已保留为空'],
+    }
+  }
+
+  const score = candidate.score
+  if (
+    score === null ||
+    (typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 1)
+  ) {
+    return { value, repairStrategy: null, warnings: [] }
+  }
+
+  return {
+    value: {
+      ...source,
+      difficulty: { ...candidate, score: null },
+      warnings: warningFor('模型返回的难度分数无效，已保留为空'),
+    },
+    repairStrategy: 'normalize-invalid-difficulty-score',
+    warnings: ['模型返回的难度分数无效，已保留为空'],
+  }
+}
+
 export function parseProblemAnalysis(rawOutput: string): ParsedProblemAnalysis {
   const strategies: string[] = []
   let candidate = rawOutput.trim()
@@ -320,6 +387,12 @@ export function parseProblemAnalysis(rawOutput: string): ParsedProblemAnalysis {
         strategies.length ? strategies.join(',') : null,
       )
     }
+  }
+
+  const difficultyNormalization = normalizeProblemAnalysisDifficultyScore(parsed)
+  if (difficultyNormalization.repairStrategy) {
+    strategies.push(difficultyNormalization.repairStrategy)
+    parsed = difficultyNormalization.value
   }
 
   const bboxNormalization = normalizeDiagramBBoxArray(parsed)
