@@ -11,6 +11,8 @@ import {
 } from 'react'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
+export { ListboxSelect } from './ListboxSelect'
+export type { ListboxSelectProps, SelectOption } from './ListboxSelect'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
@@ -53,6 +55,34 @@ export function IconButton({
     >
       {children}
     </button>
+  )
+}
+
+export type FeedbackTone = 'success' | 'warning' | 'danger'
+export type Feedback = { tone: FeedbackTone; message: string } | null
+
+export function InlineNotice({
+  feedback,
+  onClose,
+  action,
+}: {
+  feedback: Feedback
+  onClose?: () => void
+  action?: ReactNode
+}) {
+  if (!feedback) return null
+  const icon = feedback.tone === 'success' ? '✓' : feedback.tone === 'warning' ? '!' : '×'
+  return (
+    <div
+      aria-live={feedback.tone === 'danger' ? undefined : 'polite'}
+      className={`ax-inline-notice ax-inline-notice--${feedback.tone}`}
+      role={feedback.tone === 'danger' ? 'alert' : 'status'}
+    >
+      <span aria-hidden="true" className="ax-inline-notice__icon">{icon}</span>
+      <span className="ax-inline-notice__message">{feedback.message}</span>
+      {action && <span className="ax-inline-notice__action">{action}</span>}
+      {onClose && <IconButton label="关闭提示" onClick={onClose}>×</IconButton>}
+    </div>
   )
 }
 

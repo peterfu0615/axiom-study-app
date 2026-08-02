@@ -4,9 +4,9 @@ import {
   Dialog,
   EmptyState,
   FlowingTaskSurface,
+  ListboxSelect,
   Menu,
   MenuItem,
-  SelectField,
   StatusBadge,
   Tabs,
 } from '../../components/ui'
@@ -23,6 +23,7 @@ import {
   mergeTagDefinitions,
   pauseRelabelBatch,
   refreshRelabelBatch,
+  retryFailedRelabelItems,
   resumeRelabelBatch,
   reviewTagDefinition,
   type CurriculumTagStats,
@@ -163,6 +164,16 @@ export function TagOverview({
     } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
+  const retryBatch = async () => {
+    if (!batch) return
+    setBusy(true)
+    try {
+      const next = await retryFailedRelabelItems(batch.id)
+      setBatch(next)
+      if (next && ['pending', 'processing'].includes(next.status)) void startRelabelBatchWorker(next.id)
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
   if (!subject) {
     return <EmptyState description="先导入一本教材，或手动创建课程后再查看标签概况。" title="还没有可查看的课程" />
   }
@@ -179,9 +190,10 @@ export function TagOverview({
       ? 'paused'
       : batch?.status === 'completed'
         ? 'completed'
-        : batch?.status === 'failed'
+          : batch?.status === 'failed'
           ? 'failed'
           : 'idle' as const
+  const relabelIsActive = Boolean(batch && ['processing', 'paused', 'pending'].includes(batch.status))
 
   return (
     <section className="curriculum-tag-overview">
@@ -199,14 +211,13 @@ export function TagOverview({
         <div className="curriculum-tag-content">
           <header className="curriculum-tag-content__header"><div><h2>{currentDimension.label}</h2><p>{type === 'knowledge' && !textbook ? '请选择教材后查看教材知识点。' : currentDimension.description}</p></div>{type === 'knowledge' ? <Button disabled={!textbook} onClick={onCreateKnowledge}>新增知识点</Button> : <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button>}</header>
           {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><Button onClick={() => { setError(null); void refresh() }} variant="ghost">重试</Button></div>}
-          <div className="curriculum-tag-toolbar"><label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /></label><SelectField aria-label="标签状态" onChange={(event) => setStatusFilter(event.target.value as TagStatusFilter)} value={statusFilter}><option value="all">全部状态</option><option value="review">待确认</option><option value="active">可用</option><option value="archived">已归档</option></SelectField><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span></div>
+          <div className="curriculum-tag-toolbar"><label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /></label><ListboxSelect ariaLabel="标签状态" onValueChange={(value) => setStatusFilter(value as TagStatusFilter)} options={[{ value: 'all', label: '全部状态' }, { value: 'review', label: '待确认' }, { value: 'active', label: '可用' }, { value: 'archived', label: '已归档' }]} value={statusFilter} /><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span></div>
           {!loading && !filtered.length ? <EmptyState action={type !== 'knowledge' ? <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button> : undefined} description={type === 'knowledge' ? '所选教材尚未确认知识点。可返回知识结构新增或确认节点。' : `当前科目还没有${currentDimension.label}。`} title={`暂无${currentDimension.label}`} /> : <div className="curriculum-tag-table"><div className="curriculum-tag-table__header"><span>标签名称</span><span>类型或角色</span><span>关联错题</span><span>状态</span><span /></div>{filtered.map((tag) => { const status = tagStatus(tag); return <article key={tag.id}><button className="curriculum-tag-name" onClick={() => { setDetailTag(tag); setAlias(''); setMergeTargetId('') }} type="button"><strong>{tag.canonicalName}</strong><small>{tag.aliases.length ? `别名：${tag.aliases.join('、')}` : tag.description || '暂无说明'}</small></button><span>{tag.tagType === 'method' ? tag.methodClass === 'core' ? '核心方法' : '辅助方法' : currentDimension.label}</span><span>{tag.problemCount}</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge><Menu><MenuItem onClick={() => setDetailTag(tag)}>查看详情</MenuItem>{tag.lifecycleStatus === 'active' && <MenuItem disabled={busy} onClick={() => void reviewTag(tag, 'archive')}>归档</MenuItem>}</Menu></article> })}</div>}
 
-          <section className="curriculum-relabel-task">
-            <div><span>旧错题标签更新</span><h3>{batch?.status === 'completed' ? '当前科目的标签更新已完成' : `还有 ${batch ? Math.max(0, batch.totalCount - done) : scopeCount} 道当前科目的错题可以更新`}</h3><p>{batch ? `已完成 ${batch.completedCount} 道，待确认 ${batch.needsReviewCount} 项，失败 ${batch.failedCount} 道。` : '更新后，这些错题可以参与后续复习。'}</p></div>
-            {batch && ['processing', 'paused', 'pending'].includes(batch.status)
+          <section className={`curriculum-relabel-task${relabelIsActive ? ' is-active' : ''}`}>
+            {relabelIsActive && batch
               ? <FlowingTaskSurface
-                  actions={<><Button disabled={busy} onClick={() => void toggleBatch()}>{batch.status === 'paused' ? '继续' : '暂停'}</Button><Button onClick={() => setScopeOpen(true)} variant="ghost">查看详情</Button></>}
+                  actions={<Button disabled={busy} onClick={() => void toggleBatch()}>{batch.status === 'paused' ? '继续' : '暂停'}</Button>}
                   compact
                   detail={`已完成 ${batch.completedCount} 道 · 待确认 ${batch.needsReviewCount} 项 · 失败 ${batch.failedCount} 道`}
                   progress={batch.totalCount ? done / batch.totalCount : null}
@@ -216,13 +227,16 @@ export function TagOverview({
                   state={relabelState}
                   title={batch.status === 'paused' ? '旧错题更新已暂停' : '正在更新旧错题标签'}
                 />
-              : <div className="curriculum-relabel-task__actions"><Button onClick={() => setScopeOpen(true)} variant="secondary">查看范围</Button><Button disabled={busy || !scopeCount} onClick={() => void startBatch()} variant="primary">开始更新</Button></div>}
+              : <>
+                  <div><span>旧错题标签更新</span><h3>{batch?.status === 'completed' ? '当前科目的标签更新已完成' : batch?.status === 'failed' ? '旧错题标签更新未完成' : `还有 ${batch ? Math.max(0, batch.totalCount - done) : scopeCount} 道当前科目的错题可以更新`}</h3><p>{batch ? `已完成 ${batch.completedCount} 道，待确认 ${batch.needsReviewCount} 项，失败 ${batch.failedCount} 道。` : '更新后，这些错题可以参与后续复习。'}</p></div>
+                  <div className="curriculum-relabel-task__actions"><Button onClick={() => setScopeOpen(true)} variant="secondary">查看范围</Button>{batch?.status === 'failed' ? <Button disabled={busy || !batch.failedCount} loading={busy} onClick={() => void retryBatch()} variant="primary">重试失败项</Button> : <Button disabled={busy || !scopeCount} onClick={() => void startBatch()} variant="primary">开始更新</Button>}</div>
+                </>}
           </section>
         </div>
       </section>
 
-      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><label>名称<input onChange={(event) => setNewName(event.target.value)} value={newName} /></label>{type === 'method' && <label>角色<select onChange={(event) => setMethodClass(event.target.value as 'core' | 'optional')} value={methodClass}><option value="core">核心方法</option><option value="optional">辅助方法</option></select></label>}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
-      <Dialog onClose={() => setDetailTag(null)} open={Boolean(detailTag)} title={detailTag?.canonicalName || '标签详情'}><div className="curriculum-dialog-form"><p>{detailTag?.description || '可在这里维护别名、合并和归档等低频操作。'}</p><label>添加别名<input onChange={(event) => setAlias(event.target.value)} placeholder="输入当前科目内的另一种说法" value={alias} /></label><Button disabled={!alias.trim()} loading={busy} onClick={() => void saveAlias()}>添加别名</Button><label>合并到<select onChange={(event) => setMergeTargetId(event.target.value)} value={mergeTargetId}><option value="">选择同类型标签</option>{tags.filter((item) => item.id !== detailTag?.id && item.lifecycleStatus === 'active').map((item) => <option key={item.id} value={item.id}>{item.canonicalName}</option>)}</select></label><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeTag()}>合并标签</Button>{detailTag?.lifecycleStatus === 'active' && <Button loading={busy} onClick={() => void reviewTag(detailTag, 'archive')} variant="danger">归档标签</Button>}</div></Dialog>
+      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><label>名称<input onChange={(event) => setNewName(event.target.value)} value={newName} /></label>{type === 'method' && <ListboxSelect label="角色" onValueChange={(value) => setMethodClass(value as 'core' | 'optional')} options={[{ value: 'core', label: '核心方法' }, { value: 'optional', label: '辅助方法' }]} value={methodClass} />}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
+      <Dialog onClose={() => setDetailTag(null)} open={Boolean(detailTag)} title={detailTag?.canonicalName || '标签详情'}><div className="curriculum-dialog-form"><p>{detailTag?.description || '可在这里维护别名、合并和归档等低频操作。'}</p><label>添加别名<input onChange={(event) => setAlias(event.target.value)} placeholder="输入当前科目内的另一种说法" value={alias} /></label><Button disabled={!alias.trim()} loading={busy} onClick={() => void saveAlias()}>添加别名</Button><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '选择同类型标签' }, ...tags.filter((item) => item.id !== detailTag?.id && item.lifecycleStatus === 'active').map((item) => ({ value: item.id, label: item.canonicalName }))]} value={mergeTargetId} /><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeTag()}>合并标签</Button>{detailTag?.lifecycleStatus === 'active' && <Button loading={busy} onClick={() => void reviewTag(detailTag, 'archive')} variant="danger">归档标签</Button>}</div></Dialog>
       <Dialog onClose={() => setScopeOpen(false)} open={scopeOpen} title="旧错题标签更新范围"><div className="curriculum-dialog-form"><p>当前科目共有 {batch?.totalCount ?? scopeCount} 道已保存错题会进入更新任务。用户已经确认的标签不会被重新覆盖。</p>{batch && <p>已完成 {batch.completedCount} 道，待确认 {batch.needsReviewCount} 项，失败 {batch.failedCount} 道。</p>}<div className="curriculum-dialog-actions"><Button onClick={() => setScopeOpen(false)} variant="primary">知道了</Button></div></div></Dialog>
     </section>
   )

@@ -20,6 +20,10 @@
   padding: 14px 16px;
   border-radius: 12px;
 }
+.flowing-task-surface.is-full-width {
+  width: 100%;
+  max-width: none;
+}
 
 .flowing-task-surface__glow {
   position: absolute;

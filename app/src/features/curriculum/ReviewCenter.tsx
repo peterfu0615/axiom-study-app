@@ -4,10 +4,12 @@ import {
   Dialog,
   EmptyState,
   IconButton,
-  SelectField,
+  InlineNotice,
+  ListboxSelect,
   StatusBadge,
   Tabs,
 } from '../../components/ui'
+import type { Feedback } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import type { Textbook } from '../../domain/horizon'
 import {
@@ -95,7 +97,7 @@ export function ReviewCenter({
   const [bulkDecision, setBulkDecision] = useState<'approve' | 'reject' | null>(null)
   const [mappingItem, setMappingItem] = useState<TagReviewItem | null>(null)
   const [mappingTagId, setMappingTagId] = useState('')
-  const [notice, setNotice] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<Feedback>(null)
 
   const refresh = useCallback(async () => {
     if (!subject || (tagType === 'knowledge' && !textbook)) {
@@ -113,10 +115,10 @@ export function ReviewCenter({
       ])
       setDefinitions(nextDefinitions)
       setProblemTags(nextProblemTags)
-      setNotice(null)
+      setFeedback(null)
       onReviewDataChanged?.()
     } catch (reason) {
-      setNotice(String(reason))
+      setFeedback({ tone: 'danger', message: String(reason) })
     } finally {
       setLoading(false)
     }
@@ -239,9 +241,9 @@ export function ReviewCenter({
       await refresh()
       const affected = result.approvedDefinitions + result.rejectedDefinitions +
         result.approvedProblemTags + result.rejectedProblemTags
-      setNotice(`${decision === 'approve' ? '批准' : '驳回'}完成：已处理 ${affected} 项。`)
+      setFeedback({ tone: 'success', message: `${decision === 'approve' ? '批准' : '驳回'}完成：已处理 ${affected} 项。` })
     } catch (reason) {
-      setNotice(String(reason))
+      setFeedback({ tone: 'danger', message: String(reason) })
     } finally {
       setBusy(false)
     }
@@ -280,21 +282,15 @@ export function ReviewCenter({
       <div className="curriculum-review-center__body">
         <div className="curriculum-review-toolbar">
           <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、证据或映射目标" value={query} /></label>
-          <SelectField aria-label="审核项目类型" onChange={(event) => setProjectFilter(event.target.value as ReviewProjectFilter)} value={projectFilter}>
-            {projectFilters.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}
-          </SelectField>
-          <SelectField aria-label="审核状态" onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)} value={statusFilter}>
-            <option value="pending">待处理</option>
-            <option value="all">全部状态</option>
-            <option value="rejected">已驳回</option>
-          </SelectField>
+          <ListboxSelect ariaLabel="审核项目类型" onValueChange={(value) => setProjectFilter(value as ReviewProjectFilter)} options={projectFilters} value={projectFilter} />
+          <ListboxSelect ariaLabel="审核状态" onValueChange={(value) => setStatusFilter(value as ReviewStatusFilter)} options={[{ value: 'pending', label: '待处理' }, { value: 'all', label: '全部状态' }, { value: 'rejected', label: '已驳回' }]} value={statusFilter} />
           <div className="curriculum-review-bulk-actions">
             <Button disabled={busy || !approveCount} onClick={() => setBulkDecision('approve')} variant="secondary">一键批准 {approveCount} 项</Button>
             <Button disabled={busy || !rejectCount} onClick={() => setBulkDecision('reject')} variant="danger">一键驳回 {rejectCount} 项</Button>
           </div>
         </div>
 
-        {notice && <div className="curriculum-inline-error" role="alert"><span>{notice}</span><Button onClick={() => setNotice(null)} variant="ghost">关闭</Button></div>}
+        <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
 
         <div className="curriculum-review-list" aria-live="polite">
           {!loading && !rows.length
@@ -345,7 +341,7 @@ export function ReviewCenter({
       <Dialog onClose={() => { if (!busy) { setMappingItem(null); setMappingTagId('') } }} open={Boolean(mappingItem)} title="选择映射目标">
         <div className="curriculum-dialog-form">
           <p>“{mappingItem?.candidateName || '未命名候选'}”尚未映射到标签。选择有效目标后将立即批准并锁定。</p>
-          <label>对应标签<select onChange={(event) => setMappingTagId(event.target.value)} value={mappingTagId}><option value="">请选择标签</option>{mappingOptions.map((definition) => <option key={definition.id} value={definition.id}>{definition.canonicalName}</option>)}</select></label>
+          <ListboxSelect label="对应标签" onValueChange={setMappingTagId} options={[{ value: '', label: '请选择标签' }, ...mappingOptions.map((definition) => ({ value: definition.id, label: definition.canonicalName }))]} value={mappingTagId} />
           <div className="curriculum-dialog-actions"><Button onClick={() => { setMappingItem(null); setMappingTagId('') }} variant="ghost">取消</Button><Button disabled={!mappingTagId} loading={Boolean(mappingItem && rowBusy.has(`problem:${mappingItem.id}`))} onClick={() => void confirmMapping()} variant="primary">确认映射并批准</Button></div>
         </div>
       </Dialog>

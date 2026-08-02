@@ -17,6 +17,7 @@ export interface FlowingTaskSurfaceProps {
   progressTotal?: number | null
   progressLabel?: string | null
   compact?: boolean
+  widthMode?: 'content' | 'full'
   actions?: ReactNode
   children?: ReactNode
 }
@@ -35,6 +36,7 @@ export function FlowingTaskSurface({
   progressTotal,
   progressLabel,
   compact = false,
+  widthMode = 'content',
   actions,
   children,
 }: FlowingTaskSurfaceProps) {
@@ -46,7 +48,7 @@ export function FlowingTaskSurface({
   return (
     <section
       aria-live="polite"
-      className={`flowing-task-surface flowing-task-surface--${state}${compact ? ' is-compact' : ''}`}
+      className={`flowing-task-surface flowing-task-surface--${state}${compact ? ' is-compact' : ''}${widthMode === 'full' ? ' is-full-width' : ''}`}
     >
       {state === 'running' && <span aria-hidden="true" className="flowing-task-surface__glow" />}
       <div className="flowing-task-surface__header">

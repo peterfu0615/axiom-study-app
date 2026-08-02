@@ -8,6 +8,7 @@ import {
   FlowingTaskSurface,
   FileDropzone,
   IconButton,
+  ListboxSelect,
   StatusBadge,
 } from '../../components/ui'
 import { cancelTextbookImport, mediaAssetUrl } from '../../platform/native'
@@ -292,6 +293,7 @@ export function CurriculumImportFlow({
           progressTotal={extractionProgress?.totalPages}
           state="running"
           title="正在本地提取教材全文"
+          widthMode="full"
         />
       )}
 
@@ -305,6 +307,7 @@ export function CurriculumImportFlow({
           progressTotal={job.progressTotal}
           state="running"
           title={curriculumAnalysisStageLabel(job)}
+          widthMode="full"
         />
       )}
 
@@ -337,9 +340,13 @@ export function CurriculumImportFlow({
           <div className="curriculum-outline-list">
             {outline.map((item, index) => (
               <div className="curriculum-outline-row" key={`${item.title}-${index}`}>
-                <select aria-label={`${item.title} 的层级`} onChange={(event) => setOutline((items) => items.map((current, currentIndex) => currentIndex === index ? { ...current, level: Number(event.target.value) } : current))} value={item.level}>
-                  <option value={1}>章</option><option value={2}>节</option><option value={3}>知识点</option>
-                </select>
+                <ListboxSelect
+                  ariaLabel={`${item.title} 的层级`}
+                  className="curriculum-outline-level"
+                  onValueChange={(value) => setOutline((items) => items.map((current, currentIndex) => currentIndex === index ? { ...current, level: Number(value) } : current))}
+                  options={[{ value: '1', label: '章节/单元' }, { value: '2', label: '知识点' }]}
+                  value={String(item.level > 1 ? 2 : 1)}
+                />
                 <input aria-label="目录名称" onChange={(event) => setOutline((items) => items.map((current, currentIndex) => currentIndex === index ? { ...current, title: event.target.value } : current))} value={item.title} />
                 <small>p.{item.pageNumber} · {Math.round(item.confidence * 100)}%</small>
               </div>
@@ -347,7 +354,7 @@ export function CurriculumImportFlow({
             {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" title="目录需要手动建立" />}
           </div>
           {saving
-            ? <FlowingTaskSurface compact detail="正在保存教材、知识结构和候选标签" state="running" title="正在保存课程" />
+            ? <FlowingTaskSurface compact detail="正在保存教材、知识结构和候选标签" state="running" title="正在保存课程" widthMode="full" />
             : <div className="curriculum-import-card__actions"><Button loading={saving} onClick={() => void confirmStructure()} variant="primary">使用此课程结构</Button><Button onClick={() => setPhase('confirm')}>返回教材信息</Button></div>}
         </section>
       )}

@@ -11,6 +11,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
+import { ListboxSelect } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 
 type SettingsTab = 'providers' | 'appearance' | 'about' | 'update'
@@ -356,27 +357,17 @@ export function AISettings() {
                             value={selectedProfile.name}
                           />
                         </label>
-                        <label>
-                          <span>Provider</span>
-                          <select
-                            disabled={saving || selectedProfile.provider === 'mock'}
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                provider: event.target
-                                  .value as AIProviderKind,
-                              })
-                            }
-                            value={selectedProfile.provider}
-                          >
-                            <option value="mock">Mock Provider</option>
-                            <option value="openai_compatible">
-                              OpenAI Compatible
-                            </option>
-                            <option value="antigravity_cli">
-                              Gemini (Antigravity CLI)
-                            </option>
-                          </select>
-                        </label>
+                        <ListboxSelect
+                          disabled={saving || selectedProfile.provider === 'mock'}
+                          label="Provider"
+                          onValueChange={(value) => update(selectedProfile.id, { provider: value as AIProviderKind })}
+                          options={[
+                            { value: 'mock', label: 'Mock Provider' },
+                            { value: 'openai_compatible', label: 'OpenAI Compatible' },
+                            { value: 'antigravity_cli', label: 'Gemini (Antigravity CLI)' },
+                          ]}
+                          value={selectedProfile.provider}
+                        />
                         {selectedProfile.provider === 'openai_compatible' && (
                           <label>
                             <span>Base URL</span>

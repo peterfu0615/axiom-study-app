@@ -6,9 +6,9 @@ import {
   Dialog,
   EmptyState,
   IconButton,
+  ListboxSelect,
   Menu,
   MenuItem,
-  SelectField,
   StatusBadge,
   Surface,
   Tabs,
@@ -40,8 +40,7 @@ type NodeEditor = { node: KnowledgeNode | null; parentId: string | null } | null
 type NodeRelation = { node: KnowledgeNode; targetId: string; relation: 'contains' | 'prerequisite_of' | 'derived_from' | 'similar_to' | 'confusable_with' | 'used_by' | 'appears_in' } | null
 
 const nodeTypes: Array<[KnowledgeNode['nodeType'], string]> = [
-  ['chapter', '章'], ['section', '节'], ['knowledge', '知识点'],
-  ['definition', '定义'], ['formula', '公式'], ['theorem', '定理'], ['property', '性质'],
+  ['chapter', '章节/单元'], ['knowledge', '知识点'],
 ]
 
 function verification(node: KnowledgeNode) {
@@ -337,14 +336,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </header>
 
       <div className="curriculum-filters">
-        <SelectField label="科目" onChange={(event) => selectSubject(event.target.value)} value={subject}>
-          {!subjects.length && <option value="">暂无课程</option>}
-          {subjects.map((item) => <option key={item} value={item}>{item}</option>)}
-        </SelectField>
-        <SelectField disabled={!subject || !textbooks.length} label="教材" onChange={(event) => setTextbookId(event.target.value || null)} value={textbookId ?? ''}>
-          {!textbooks.length && <option value="">暂无教材</option>}
-          {textbooks.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
-        </SelectField>
+        <ListboxSelect label="科目" onValueChange={selectSubject} options={subjects.length ? subjects.map((item) => ({ value: item, label: item })) : [{ value: '', label: '暂无课程' }]} value={subject} />
+        <ListboxSelect disabled={!subject || !textbooks.length} label="教材" onValueChange={(value) => setTextbookId(value || null)} options={textbooks.length ? textbooks.map((book) => ({ value: book.id, label: book.title })) : [{ value: '', label: '暂无教材' }]} value={textbookId ?? ''} />
       </div>
 
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }, { value: 'review', label: '审核确认', count: pendingReviewCount }]} value={view} />
@@ -394,15 +387,15 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
-        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><label>类型<select onChange={(event) => setNodeType(event.target.value as KnowledgeNode['nodeType'])} value={nodeType}>{nodeTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>所属章节<select onChange={(event) => setNodeParentId(event.target.value || null)} value={nodeParentId ?? ''}><option value="">作为根节点</option>{nodes.filter((node) => node.id !== nodeEditor?.node?.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => setNodeType(value as KnowledgeNode['nodeType'])} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[{ value: '', label: '作为根章节' }, ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">
-        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的节点，历史引用会保留。</p><label>合并到<select onChange={(event) => setMergeTargetId(event.target.value)} value={mergeTargetId}><option value="">请选择节点</option>{nodes.filter((node) => node.id !== mergeSource?.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
+        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的节点，历史引用会保留。</p><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== mergeSource?.id).map((node) => ({ value: node.id, label: node.path }))]} value={mergeTargetId} /><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setRelation(null)} open={Boolean(relation)} title="添加课程关联">
-        <div className="curriculum-dialog-form"><label>关联类型<select onChange={(event) => setRelation((current) => current ? { ...current, relation: event.target.value as NonNullable<NodeRelation>['relation'] } : current)} value={relation?.relation ?? 'prerequisite_of'}><option value="prerequisite_of">前置知识</option><option value="derived_from">由此推导</option><option value="similar_to">相似知识</option><option value="confusable_with">易混淆</option><option value="used_by">被用于</option><option value="appears_in">出现于</option><option value="contains">包含</option></select></label><label>关联到<select onChange={(event) => setRelation((current) => current ? { ...current, targetId: event.target.value } : current)} value={relation?.targetId ?? ''}><option value="">请选择节点</option>{nodes.filter((node) => node.id !== relation?.node.id).map((node) => <option key={node.id} value={node.id}>{node.path}</option>)}</select></label><div className="curriculum-dialog-actions"><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加关联</Button></div></div>
+        <div className="curriculum-dialog-form"><ListboxSelect label="关联类型" onValueChange={(value) => setRelation((current) => current ? { ...current, relation: value as NonNullable<NodeRelation>['relation'] } : current)} options={[{ value: 'prerequisite_of', label: '前置知识' }, { value: 'derived_from', label: '由此推导' }, { value: 'similar_to', label: '相似知识' }, { value: 'confusable_with', label: '易混淆' }, { value: 'used_by', label: '被用于' }, { value: 'appears_in', label: '出现于' }, { value: 'contains', label: '包含' }]} value={relation?.relation ?? 'prerequisite_of'} /><ListboxSelect label="关联到" onValueChange={(value) => setRelation((current) => current ? { ...current, targetId: value } : current)} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== relation?.node.id).map((node) => ({ value: node.id, label: node.path }))]} value={relation?.targetId ?? ''} /><div className="curriculum-dialog-actions"><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加关联</Button></div></div>
       </Dialog>
     </main>
   )

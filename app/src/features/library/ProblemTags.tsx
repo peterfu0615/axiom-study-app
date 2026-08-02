@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
-import { Button, Dialog, StatusBadge } from '../../components/ui'
+import { Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import type { ProblemTag, TagDefinition } from '../../domain/horizon'
 import {
@@ -126,10 +126,13 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
       </div>
       <p className="problem-textbook-match__reason">识别依据：{textbookMatch.reason || textbookMatchSourceLabels[textbookMatch.source]} · 置信度：{Math.round(textbookMatch.confidence * 100)}%</p>
       <div className="problem-textbook-match__actions">
-        <label>选择本题教材<select disabled={textbookBusy} onChange={(event) => setSelectedTextbookId(event.target.value)} value={selectedTextbookId}>
-          <option value="">未匹配</option>
-          {textbookMatch.candidates.map((book) => <option key={book.id} value={book.id}>{book.title}{book.grade || book.volume ? `（${[book.grade, book.volume].filter(Boolean).join(' · ')}）` : ''}</option>)}
-        </select></label>
+        <ListboxSelect
+          ariaLabel="选择本题教材"
+          disabled={textbookBusy}
+          onValueChange={setSelectedTextbookId}
+          options={[{ value: '', label: '未匹配' }, ...textbookMatch.candidates.map((book) => ({ value: book.id, label: `${book.title}${book.grade || book.volume ? `（${[book.grade, book.volume].filter(Boolean).join(' · ')}）` : ''}` }))]}
+          value={selectedTextbookId}
+        />
         <div>
           <Button disabled={textbookBusy || !selectedTextbookId || (textbookMatch.locked && selectedTextbookId === textbookMatch.textbook?.id)} onClick={() => void updateTextbookMatch(selectedTextbookId, true)} variant="secondary">{textbookMatch.locked ? '更换教材' : '确认教材'}</Button>
           {textbookMatch.textbook && <Button disabled={textbookBusy} onClick={() => void updateTextbookMatch(null, false)} variant="ghost">清除匹配</Button>}
@@ -157,7 +160,7 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
     <Dialog onClose={() => setPicker(null)} open={Boolean(picker)} title={picker?.tag ? `确认${labels[picker.type]}对应关系` : `添加${picker ? labels[picker.type] : '标签'}`}>
       <div className="problem-tag-picker">
         <p>{picker?.tag ? `“${picker.tag.canonicalName}”需要对应到当前科目中的一个标签。` : `选择一个已确认的${picker ? labels[picker.type] : '标签'}。`}</p>
-        <label>选择标签<select onChange={(event) => setSelectedDefinitionId(event.target.value)} value={selectedDefinitionId}><option value="">请选择</option>{pickerOptions.map((item) => <option key={item.id} value={item.id}>{item.canonicalName}</option>)}</select></label>
+        <ListboxSelect label="选择标签" onValueChange={setSelectedDefinitionId} options={[{ value: '', label: '请选择' }, ...pickerOptions.map((item) => ({ value: item.id, label: item.canonicalName }))]} value={selectedDefinitionId} />
         {!pickerOptions.length && <p className="problem-tag-picker__empty">{picker?.type === 'knowledge' && !textbookMatch?.textbook ? '本题尚未匹配教材，知识点候选会保留为待确认。' : '当前科目还没有可选标签，请先在课程中创建或确认标签。'}</p>}
         <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button><Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button></div>
       </div>

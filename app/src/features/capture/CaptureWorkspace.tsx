@@ -34,6 +34,7 @@ import {
   saveSourceDocument,
 } from '../../platform/database'
 import { DocumentEditor } from './DocumentEditor'
+import { ListboxSelect } from '../../components/ui'
 
 type CaptureMode = 'camera' | 'import'
 
@@ -377,17 +378,12 @@ export function CaptureWorkspace() {
                   {isContinuityCamera ? ' · iPhone' : ''}
                 </div>
                 {devices.length > 0 && (
-                  <select
-                    aria-label="选择摄像头"
-                    onChange={(event) => void switchCamera(event.target.value)}
+                  <ListboxSelect
+                    ariaLabel="选择摄像头"
+                    onValueChange={(value) => void switchCamera(value)}
+                    options={devices.map((device) => ({ value: device.id, label: device.label }))}
                     value={selectedDeviceId}
-                  >
-                    {devices.map((device) => (
-                      <option key={device.id} value={device.id}>
-                        {device.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 )}
                 {stream && (
                   <>
