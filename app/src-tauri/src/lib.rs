@@ -172,6 +172,12 @@ pub fn run() {
             sql: include_str!("../migrations/0024_flatten_curriculum_tree.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 25,
+            description: "relabel_claims",
+            sql: include_str!("../migrations/0025_relabel_claims.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
@@ -240,6 +246,9 @@ pub fn run() {
             keystore::recover_legacy_api_keys,
             horizon::merge_tag_definitions,
             horizon::merge_knowledge_nodes,
+            horizon::claim_relabel_batch_item,
+            horizon::bind_relabel_batch_item_model_run,
+            horizon::recover_relabel_batch_items,
             horizon::bulk_review_curriculum_tags,
             horizon::create_curriculum_import_attempt,
             horizon::update_curriculum_import_progress,

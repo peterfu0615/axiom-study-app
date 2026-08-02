@@ -68,6 +68,7 @@ import {
   persistAIProviderProfiles,
   recoverLegacyProviderApiKeys,
   removeProblemImage,
+  recoverRelabelBatchItems as recoverNativeRelabelBatchItems,
   type PersistedProblemImage,
 } from './native'
 import { applyControlledProblemAnalysis } from './horizonDatabase'
@@ -228,7 +229,7 @@ async function inDatabaseTransaction<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   return withTransactionLock(async () => {
-    await db.execute('BEGIN')
+    await db.execute('BEGIN IMMEDIATE')
     try {
       const result = await operation()
       await db.execute('COMMIT')
@@ -2481,9 +2482,15 @@ export async function failExplainModelRun(run: ExplainModelRun, error: unknown) 
   )
 }
 
-export async function queueProblemAI(
+export interface QueuedProblemAI {
+  problem: SavedProblem
+  modelRunId: string
+  created: boolean
+}
+
+export async function queueProblemAIWithRun(
   problemId: string,
-): Promise<SavedProblem> {
+): Promise<QueuedProblemAI> {
   if (!isDesktopRuntime()) {
     throw new Error('AI Task 需要在 Axiom 桌面 App 中运行')
   }
@@ -2493,6 +2500,8 @@ export async function queueProblemAI(
   const db = await database()
   const run = createAIModelRun(current)
   const now = Date.now()
+  let modelRunId = run.id
+  let created = false
   await inDatabaseTransaction(db, async () => {
     const activeRuns = await db.select<Array<{ id: string }>>(
       `SELECT mr.id
@@ -2508,6 +2517,7 @@ export async function queueProblemAI(
     if (activeRuns[0]) {
       // A repeated start signal (including two relabel workers racing after a
       // resume) must reuse the durable run instead of creating a duplicate.
+      modelRunId = activeRuns[0].id
       return
     }
     await insertAIModelRuns(db, [run])
@@ -2524,10 +2534,44 @@ export async function queueProblemAI(
     if (result.rowsAffected !== 1) {
       throw new Error('错题不存在或状态已发生变化')
     }
+    created = true
   })
   const updated = await getSavedProblem(problemId)
   if (!updated) throw new Error('AI Task 已创建，但无法重新读取错题')
-  return updated
+  if (!updated.aiActiveModelRunId) {
+    throw new Error('AI Task 已创建，但没有可绑定的 ModelRun')
+  }
+  modelRunId = updated.aiActiveModelRunId
+  return { problem: updated, modelRunId, created }
+}
+
+export async function queueProblemAI(
+  problemId: string,
+): Promise<SavedProblem> {
+  return (await queueProblemAIWithRun(problemId)).problem
+}
+
+export async function cancelUnboundProblemAIModelRun(
+  problemId: string,
+  modelRunId: string,
+) {
+  if (!isDesktopRuntime()) return
+  const db = await database()
+  await inDatabaseTransaction(db, async () => {
+    const runUpdate = await db.execute(
+      `UPDATE model_runs
+       SET status = 'cancelled', error_message = '旧错题任务未能绑定批次项目'
+       WHERE id = $1 AND problem_id = $2 AND status IN ('pending', 'processing')`,
+      [modelRunId, problemId],
+    )
+    if (runUpdate.rowsAffected !== 1) return
+    await db.execute(
+      `UPDATE problems
+       SET ai_status = 'failed', ai_active_model_run_id = NULL, updated_at = $1
+       WHERE id = $2 AND ai_active_model_run_id = $3`,
+      [Date.now(), problemId, modelRunId],
+    )
+  })
 }
 
 async function ensurePendingProblemAITasks() {
@@ -2570,6 +2614,10 @@ export async function recoverProblemAITasks() {
        AND status = 'saved'
        AND deleted_at IS NULL`,
   )
+  // Relabel claims live in the Rust single-connection database.  Clear the
+  // previous process' claim tokens only after ModelRun recovery has changed
+  // processing runs back to pending, so a resumed worker can reuse them.
+  await recoverNativeRelabelBatchItems()
   await ensurePendingProblemAITasks()
 }
 

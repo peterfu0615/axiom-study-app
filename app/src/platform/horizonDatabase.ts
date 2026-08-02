@@ -44,6 +44,8 @@ import {
 } from '../features/curriculum/curriculumStructure'
 import {
   completeCurriculumImportAttempt,
+  bindRelabelBatchItemModelRun,
+  claimRelabelBatchItem,
   createCurriculumImportAttempt,
   bulkReviewCurriculumTags,
   failCurriculumImportAttempt,
@@ -53,6 +55,7 @@ import {
   mergeKnowledgeNodes,
   mergeTagDefinitions,
   promoteTextbookSource,
+  recoverRelabelBatchItems,
   removeTextbookSource,
   verifyTextbookSource,
   type ImportedTextbookSource,
@@ -171,16 +174,25 @@ async function inputHash(value: unknown) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+let transactionChain = Promise.resolve()
+
 async function transaction<T>(operation: () => Promise<T>): Promise<T> {
-  await execute('BEGIN IMMEDIATE')
-  try {
-    const value = await operation()
-    await execute('COMMIT')
-    return value
-  } catch (error) {
-    await execute('ROLLBACK').catch(() => {})
-    throw error
-  }
+  // db_execute is serialized per IPC call in Rust, not for the lifetime of a
+  // SQLite transaction.  Queue every Horizon transaction in this module so a
+  // second BEGIN cannot land between the first transaction's statements.
+  const next = transactionChain.then(async () => {
+    await execute('BEGIN IMMEDIATE')
+    try {
+      const value = await operation()
+      await execute('COMMIT')
+      return value
+    } catch (error) {
+      await execute('ROLLBACK').catch(() => {})
+      throw error
+    }
+  })
+  transactionChain = next.then(() => undefined, () => undefined)
+  return next
 }
 
 async function ensureTaxonomyVersion(subject: string): Promise<number> {
@@ -1942,10 +1954,57 @@ export async function listRelabelItems(batchId: string) {
   )
 }
 
+export interface RelabelBatchItemClaim {
+  problemId: string
+  modelRunId: string | null
+  claimToken: string
+}
+
+export async function recoverRelabelBatchItemsAfterRestart() {
+  await recoverRelabelBatchItems()
+}
+
+export async function claimRelabelItem(
+  batchId: string,
+  claimToken: string,
+): Promise<RelabelBatchItemClaim | null> {
+  return claimRelabelBatchItem(batchId, claimToken)
+}
+
+export async function bindRelabelItemModelRun(input: {
+  batchId: string
+  problemId: string
+  claimToken: string
+  modelRunId: string
+}) {
+  return bindRelabelBatchItemModelRun(input)
+}
+
+export async function releaseRelabelItemClaim(input: {
+  batchId: string
+  problemId: string
+  claimToken: string
+  modelRunId: string | null
+}) {
+  const now = Date.now()
+  return transaction(async () => {
+    const result = await execute(
+      `UPDATE tag_relabel_items
+       SET status = CASE WHEN $4 IS NULL THEN 'pending' ELSE 'queued' END,
+           model_run_id = $4, claim_token = NULL, claimed_at = NULL,
+           error_message = NULL, updated_at = $5
+       WHERE batch_id = $1 AND problem_id = $2 AND claim_token = $3
+         AND status = 'processing'`,
+      [input.batchId, input.problemId, input.claimToken, input.modelRunId, now],
+    )
+    return result.rowsAffected === 1
+  })
+}
+
 export async function markRelabelItemQueued(batchId: string, problemId: string, modelRunId: string) {
   const now = Date.now()
-  await transaction(async () => {
-    await execute(
+  return transaction(async () => {
+    const itemUpdate = await execute(
       `UPDATE tag_relabel_items SET status = 'queued', model_run_id = $1, updated_at = $2
        WHERE batch_id = $3 AND problem_id = $4 AND status = 'pending'
          AND EXISTS (SELECT 1 FROM tag_relabel_batches batch
@@ -1953,11 +2012,13 @@ export async function markRelabelItemQueued(batchId: string, problemId: string, 
                        AND batch.status NOT IN ('cancelled', 'completed'))`,
       [modelRunId, now, batchId, problemId],
     )
+    if (itemUpdate.rowsAffected !== 1) return false
     await execute(
       `UPDATE tag_relabel_batches SET status = 'processing', updated_at = $1
        WHERE id = $2 AND status = 'pending' AND paused_at IS NULL`,
       [now, batchId],
     )
+    return true
   })
 }
 
@@ -1965,11 +2026,19 @@ export async function refreshRelabelBatch(batchId: string): Promise<RelabelBatch
   const now = Date.now()
   await transaction(async () => {
     await execute(
-      `UPDATE tag_relabel_items SET status = (
-        SELECT CASE mr.status WHEN 'completed' THEN 'completed' WHEN 'failed' THEN 'failed'
-          WHEN 'cancelled' THEN 'cancelled' ELSE tag_relabel_items.status END
-        FROM model_runs mr WHERE mr.id = tag_relabel_items.model_run_id
-       ), updated_at = $1
+      `UPDATE tag_relabel_items SET
+       status = (
+         SELECT CASE mr.status WHEN 'completed' THEN 'completed' WHEN 'failed' THEN 'failed'
+           WHEN 'cancelled' THEN 'cancelled' ELSE tag_relabel_items.status END
+         FROM model_runs mr WHERE mr.id = tag_relabel_items.model_run_id
+       ),
+       claim_token = CASE (SELECT mr.status FROM model_runs mr WHERE mr.id = tag_relabel_items.model_run_id)
+         WHEN 'completed' THEN NULL WHEN 'failed' THEN NULL WHEN 'cancelled' THEN NULL
+         ELSE claim_token END,
+       claimed_at = CASE (SELECT mr.status FROM model_runs mr WHERE mr.id = tag_relabel_items.model_run_id)
+         WHEN 'completed' THEN NULL WHEN 'failed' THEN NULL WHEN 'cancelled' THEN NULL
+         ELSE claimed_at END,
+       updated_at = $1
        WHERE batch_id = $2 AND model_run_id IS NOT NULL`,
       [now, batchId],
     )
@@ -2051,10 +2120,17 @@ export async function nextPendingRelabelItem(batchId: string) {
   return rows[0]?.problem_id ?? null
 }
 
-export async function failRelabelItem(batchId: string, problemId: string, error: unknown) {
+export async function failRelabelItem(
+  batchId: string,
+  problemId: string,
+  error: unknown,
+  claimToken?: string,
+) {
   await execute(
-    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1, updated_at = $2
-     WHERE batch_id = $3 AND problem_id = $4 AND status IN ('pending', 'queued', 'processing')`,
+    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1,
+       claim_token = NULL, claimed_at = NULL, updated_at = $2
+     WHERE batch_id = $3 AND problem_id = $4 AND status IN ('pending', 'queued', 'processing')
+       AND ($5 IS NULL OR claim_token = $5)`,
     [JSON.stringify({
       problem_id: problemId,
       model_run_id: null,
@@ -2062,7 +2138,7 @@ export async function failRelabelItem(batchId: string, problemId: string, error:
       model: null,
       repairStrategy: null,
       error_summary: redactRelabelError(error),
-    }), Date.now(), batchId, problemId],
+    }), Date.now(), batchId, problemId, claimToken ?? null],
   )
 }
 
@@ -2093,7 +2169,8 @@ export async function recordRelabelModelRunFailure(
   summary: RelabelModelRunSummary,
 ) {
   await execute(
-    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1, updated_at = $2
+    `UPDATE tag_relabel_items SET status = 'failed', error_message = $1,
+       claim_token = NULL, claimed_at = NULL, updated_at = $2
      WHERE batch_id = $3 AND problem_id = $4 AND model_run_id = $5
        AND status IN ('queued', 'processing', 'failed')`,
     [JSON.stringify({
@@ -2116,7 +2193,8 @@ export async function retryFailedRelabelItems(batchId: string) {
     if (!batch[0] || batch[0].status === 'cancelled') return
     const reset = await execute(
       `UPDATE tag_relabel_items
-       SET status = 'pending', model_run_id = NULL, error_message = NULL, updated_at = $1
+       SET status = 'pending', model_run_id = NULL, error_message = NULL,
+           claim_token = NULL, claimed_at = NULL, updated_at = $1
        WHERE batch_id = $2 AND status = 'failed'`,
       [now, batchId],
     )
@@ -2149,7 +2227,8 @@ export async function cancelRelabelBatch(batchId: string) {
       [now, batchId],
     )
     await execute(
-      `UPDATE tag_relabel_items SET status = 'cancelled', updated_at = $1
+      `UPDATE tag_relabel_items SET status = 'cancelled', claim_token = NULL,
+       claimed_at = NULL, updated_at = $1
        WHERE batch_id = $2 AND status IN ('pending', 'queued', 'processing')`,
       [now, batchId],
     )

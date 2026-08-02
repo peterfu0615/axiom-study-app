@@ -292,6 +292,34 @@ export async function mergeKnowledgeNodes(
   })
 }
 
+export interface RelabelBatchItemClaim {
+  problemId: string
+  modelRunId: string | null
+  claimToken: string
+}
+
+export async function claimRelabelBatchItem(
+  batchId: string,
+  claimToken: string,
+) {
+  return invoke<RelabelBatchItemClaim | null>('claim_relabel_batch_item', {
+    request: { batchId, claimToken },
+  })
+}
+
+export async function bindRelabelBatchItemModelRun(request: {
+  batchId: string
+  problemId: string
+  claimToken: string
+  modelRunId: string
+}) {
+  return invoke<boolean>('bind_relabel_batch_item_model_run', { request })
+}
+
+export async function recoverRelabelBatchItems() {
+  return invoke<void>('recover_relabel_batch_items')
+}
+
 export interface BulkReviewCurriculumTagsResult {
   approvedDefinitions: number
   rejectedDefinitions: number
