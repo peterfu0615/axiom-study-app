@@ -35,7 +35,7 @@ npm run tauri dev
 - 使用 `cargo fmt` 统一格式。
 - 使用 `cargo clippy -- -D warnings`，零告警。
 - SQLite 迁移只追加，不修改已发布迁移文件。
-- API Key 等敏感数据严禁入库或写入数据库，必须存 Keychain（参见 [PHASE1_STABILITY_REPORT.md](./PHASE1_STABILITY_REPORT.md) §1.4）。
+- API Key 持久化于本地 SQLite（`ai_provider_profiles.api_key`），仅在 Rust 端内部使用：不回传前端、日志不落密钥；Keychain 只用于旧版本数据的一次性恢复（`keystore.rs`）。
 - 受控文件操作必须走 Rust 命令，前端不直接读写文件系统。
 
 ## 3. 提交信息规范

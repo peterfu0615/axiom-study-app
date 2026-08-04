@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > 本文档为 AI Agent / 新接手开发者提供项目背景、架构概览、协作规范与发布流程。
-> 最后更新：2026-07-30，对应版本 v0.1.1。
+> 最后更新：2026-08-05，对应版本 v0.4.5。
 
 ---
 
@@ -42,11 +42,12 @@ Axiom/
 │   │   │   ├── ai.rs             # AI 请求处理（OpenAI Compatible / CLI）
 │   │   │   ├── commands.rs       # 媒体管理、数据库命令
 │   │   │   ├── db.rs             # SQLite 连接与初始化
-│   │   │   ├── keystore.rs       # macOS Keychain API Key 存储
+│   │   │   ├── horizon.rs        # 课标/教材图谱与批改批处理命令
+│   │   │   ├── keystore.rs       # 旧 Keychain API Key 一次性恢复
 │   │   │   ├── updater.rs        # 自动更新模块（GitHub Release 检查/下载/替换）
 │   │   │   ├── lib.rs            # 应用入口与插件注册
 │   │   │   └── models.rs         # 数据模型
-│   │   ├── migrations/           # SQLite 迁移脚本（0001-0015）
+│   │   ├── migrations/           # SQLite 迁移脚本（0001-0025）
 │   │   ├── Cargo.toml            # Rust 依赖
 │   │   └── tauri.conf.json        # Tauri 配置
 │   ├── scripts/
@@ -382,7 +383,7 @@ cd app/src-tauri && cargo clippy -- -D warnings && cargo fmt -- --check && cargo
 ### 数据库迁移
 
 - 迁移脚本位于 `app/src-tauri/migrations/`，命名 `XXXX_description.sql`
-- 新增迁移时递增编号（当前最大 0015）
+- 新增迁移时递增编号（当前最大 0025）
 - 迁移在应用启动时自动执行（`lib.rs` setup）
 
 ### Tauri 命令注册
@@ -392,7 +393,7 @@ cd app/src-tauri && cargo clippy -- -D warnings && cargo fmt -- --check && cargo
 1. `lib.rs` 的 `invoke_handler` 中添加
 2. 前端 `platform/native.ts` 中添加 wrapper
 
-**注意**：Tauri v2 命令参数默认不转换命名风格。如果 Rust 用 snake_case（`download_url`），前端传 camelCase（`downloadUrl`），必须加 `#[tauri::command(rename_all = "camelCase")]`，否则参数 missing。同理，返回给前端的 struct 字段如果用 snake_case，需加 `#[serde(rename_all = "camelCase")]`。
+**注意**：Tauri 2 命令宏默认将 snake_case 参数转为 camelCase IPC 键（tauri-macros `ArgumentCase::Camel`），即 Rust 端写 `download_url`、前端传 `downloadUrl` 默认可用；显式 `rename_all` 仅在需要其他命名风格时必要。返回给前端的 struct 字段不走该转换，如果用 snake_case，需加 `#[serde(rename_all = "camelCase")]`。
 
 ### 日志查看
 
@@ -410,7 +411,7 @@ cat /tmp/axiom-update/install.log
 
 ## 8. 关键约束（交接时必读）
 
-1. **Keychain 优先**：API Key 必须存入 macOS Keychain，不允许明文存数据库。AI 请求由 Rust 内部读取，不回传前端。
+1. **API Key 本地 SQLite 存储**：API Key 持久化于本地 SQLite（`ai_provider_profiles.api_key`，migration 0021 起为唯一事实源），不回传前端、日志不落密钥。Keychain 仅用于旧数据一次性恢复（`keystore.rs` 的 `recover_legacy_api_keys`）。
 2. **Logger 显式目录**：日志目录必须显式设置为 `app_data_dir` 下的 `logs/` 子目录，不接受默认路径。
 3. **GitHub Actions 架构检测**：不假设 runner 架构，必须 `uname -m` 检测 arm64 / x86_64。
 4. **Acceptance Test**：发布前必须执行真实用户 Acceptance Test（参照 `app/docs/ACCEPTANCE_TEST.md`）。
@@ -424,7 +425,7 @@ cat /tmp/axiom-update/install.log
 
 ### Q: 自动更新报 `missing required key downloadUrl`
 
-A: Tauri 命令参数命名不匹配。Rust 端加 `#[tauri::command(rename_all = "camelCase")]`，返回的 struct 加 `#[serde(rename_all = "camelCase")]`。
+A: 命令参数命名不匹配。Tauri 2 默认已将 snake_case 参数转为 camelCase IPC 键；若仍报错，检查前端传参拼写，或显式加 `#[tauri::command(rename_all = "camelCase")]`。返回前端的 struct 需 `#[serde(rename_all = "camelCase")]`。
 
 ### Q: 更新源仓库返回 404
 
@@ -434,9 +435,9 @@ A: 检查仓库是否 PUBLIC。Private 仓库未认证请求返回 404。
 
 A: 自动更新只能在通过 `.app` 安装的版本上运行，不能在 `npm run tauri dev` 开发模式下测试。
 
-### Q: Keychain 迁移失败「no such column: credential_ref」
+### Q: 报「no such column: credential_ref」或 API Key 丢失
 
-A: 数据库未执行 migration 0015。确认 `migrations/0015_api_key_credential_ref.sql` 存在且 `lib.rs` 中已注册。
+A: 先确认全部迁移（0001-0025）已在 `lib.rs` 注册并执行。注意：migration 0021 起 API Key 以 SQLite `ai_provider_profiles.api_key` 为唯一事实源；Keychain 只是旧版本数据的一次性恢复来源（`recover_legacy_api_keys`），不再作为存储位置。
 
 ### Q: 日志文件找不到
 
