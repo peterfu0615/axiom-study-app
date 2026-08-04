@@ -42,14 +42,17 @@ jobs:
       - name: Detect runner architecture
         id: arch
         run: |
-          arch=$(uname -m)
-          echo "Detected runner architecture: $arch"
-          echo "arch=$arch" >> "$GITHUB_OUTPUT"
-          case "$arch" in
-            arm64) triple=aarch64-apple-darwin ;;
-            x86_64) triple=x86_64-apple-darwin ;;
-            *) echo "::error::Unsupported architecture: $arch"; exit 1 ;;
+          raw=$(uname -m)
+          echo "Detected runner architecture: $raw"
+          # arch 输出映射为 Rust triple 风格，与 Tauri 产物命名
+          # （Axiom_<v>_aarch64.dmg）及 updater.rs 的 std::env::consts::ARCH
+          # （"aarch64" / "x86_64"）保持一致。
+          case "$raw" in
+            arm64) arch=aarch64; triple=aarch64-apple-darwin ;;
+            x86_64) arch=x86_64; triple=x86_64-apple-darwin ;;
+            *) echo "::error::Unsupported architecture: $raw"; exit 1 ;;
           esac
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
 
       - name: Verify vision binary for detected architecture
@@ -80,6 +83,7 @@ jobs:
         id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          RUNNER_TEMP_PASSWORD: ${{ secrets.RUNNER_TEMP_PASSWORD }}
         if: ${{ env.APPLE_CERTIFICATE != '' }}
         run: |
           echo "signing=enabled" >> "$GITHUB_OUTPUT"
@@ -95,8 +99,6 @@ jobs:
             -A -t cert -f pkcs12 -k "$keychain"
           security list-keychains -d user -s "$keychain" login.keychain
           echo "APPLE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-        env:
-          RUNNER_TEMP_PASSWORD: ${{ secrets.RUNNER_TEMP_PASSWORD }}
 
       - name: Build release bundle (signed)
         if: ${{ steps.signing.outputs.signing == 'enabled' }}

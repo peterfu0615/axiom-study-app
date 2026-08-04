@@ -264,7 +264,14 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {
                 if let Err(e) = db::init_db(&handle).await {
+                    // 数据库是全部命令的前置依赖，初始化失败属于启动期致命错误：
+                    // 记录日志后直接退出，避免应用以半残状态继续运行产生大面积报错。
                     log::error!("初始化数据库连接失败：{e}");
+                    eprintln!("致命错误：初始化数据库连接失败：{e}");
+                    eprintln!(
+                        "详情见日志：~/Library/Application Support/com.axiom.study/logs/axiom.log"
+                    );
+                    std::process::exit(1);
                 }
             });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制
