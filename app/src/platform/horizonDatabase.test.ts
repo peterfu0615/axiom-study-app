@@ -118,13 +118,20 @@ describe('cancelRelabelBatch', () => {
   })
 })
 describe('knowledge node import dedupe contract', () => {
-  it('checks for an active sibling before inserting so re-imports merge instead of failing', () => {
+  it('preloads active siblings once and reuses them instead of inserting duplicates', () => {
     const source = readFileSync(new URL('./horizonDatabase.ts', import.meta.url), 'utf8')
-    expect(source).toContain('findActiveSiblingNodeId')
-    expect(source).toContain('lower(trim(canonical_name)) = lower(trim($3))')
+    // 一次往返装载整本教材的活跃节点，而不是每节点一次 SELECT
+    expect(source).toContain('loadActiveKnowledgeSiblings')
+    expect(source).toContain('SELECT id, parent_id, canonical_name, created_at FROM knowledge_nodes')
     expect(source).toContain('AND archived_at IS NULL AND merged_into_id IS NULL')
-    // 章节与知识点都必须先查重再插入
-    expect(source).toContain('findActiveSiblingNodeId(input.textbookId, null, chapter.title)')
-    expect(source).toContain('findActiveSiblingNodeId(input.textbookId, chapterId, point.name)')
+    // JS 端键与 migration 0026 部分唯一索引的 lower(trim()) 口径一致
+    expect(source).toContain("canonicalName.trim().toLowerCase()")
+    // 章节与知识点都从 sibling 映射中解析复用节点
+    expect(source).toContain('siblingKey(null, chapter.title)')
+    expect(source).toContain('siblingKey(chapterId, point.name)')
+    // 节点与页都走多行批量插入，减少 IPC 往返
+    expect(source).toContain('executeBatchedInsert')
+    expect(source).toContain('INSERT_BATCH_ROWS')
+    expect(source).not.toContain('findActiveSiblingNodeId')
   })
 })
