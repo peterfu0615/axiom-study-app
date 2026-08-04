@@ -74,14 +74,10 @@ function KnowledgeTree({
           <li key={item.node.id} role="treeitem">
             <div className={`curriculum-tree-row ${selectedId === item.node.id ? 'is-selected' : ''}`}>
               {hasChildren
-                ? <IconButton className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
+                ? <IconButton aria-expanded={isExpanded} className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
                 : <span className="curriculum-tree-toggle-placeholder" />}
               <button
-                aria-expanded={hasChildren ? isExpanded : undefined}
-                onClick={() => {
-                  onSelect(item.node)
-                  if (hasChildren) onToggle(item.node.id)
-                }}
+                onClick={() => onSelect(item.node)}
                 type="button"
               ><span>{item.node.canonicalName}</span></button>
             </div>

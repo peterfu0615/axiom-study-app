@@ -102,11 +102,16 @@ export function TagOverview({
   }, [onReviewDataChanged, subject, textbook?.id, type])
 
   useEffect(() => { void refresh() }, [refresh])
+  const relabelBatchId = batch?.id ?? null
+  const relabelBatchStatus = batch?.status ?? null
   useEffect(() => {
-    if (!batch || !['processing', 'paused', 'pending'].includes(batch.status)) return undefined
-    const timer = window.setInterval(() => { void refreshRelabelBatch(batch.id).then((next) => next && setBatch(next)) }, 1200)
+    if (!relabelBatchId || !['processing', 'paused', 'pending'].includes(relabelBatchStatus ?? '')) return undefined
+    // Depend only on the batch identity, not the whole object: progress ticks
+    // replace `batch` every poll without changing id/status and must not
+    // tear down and recreate the interval on each tick.
+    const timer = window.setInterval(() => { void refreshRelabelBatch(relabelBatchId).then((next) => next && setBatch(next)) }, 1200)
     return () => window.clearInterval(timer)
-  }, [batch])
+  }, [relabelBatchId, relabelBatchStatus])
 
   const filtered = useMemo(() => tags.filter((tag) => {
     const queryMatches = !query.trim() || tag.canonicalName.toLocaleLowerCase('zh-CN').includes(query.trim().toLocaleLowerCase('zh-CN')) || tag.aliases.some((item) => item.includes(query.trim()))

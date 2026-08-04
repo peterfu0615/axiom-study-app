@@ -28,6 +28,12 @@ function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
   void getCurrentWindow().startDragging()
 }
 
+// StrictMode mounts the runtime twice; each startup action (database check,
+// provider configuration, pipeline resume, update check) must run exactly
+// once per process.  The first effect run owns the boot sequence and later
+// mounts simply reuse its state updates.
+let appBootStarted = false
+
 function AppRuntimeShell({
   section,
   setSection,
@@ -69,6 +75,8 @@ function AppRuntime() {
   const { toast, notify } = useToast()
 
   useEffect(() => {
+    if (appBootStarted) return
+    appBootStarted = true
     void (async () => {
       // 先确保数据库就绪并校验路径一致性
       const { check } = await ensureDatabaseReady()

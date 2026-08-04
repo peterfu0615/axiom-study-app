@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Toast } from '../../components/Toast'
 import { useToast } from '../../platform/useToast'
 import type {
+  DocumentProcessingResult,
   NormalizedRect,
   ProblemBlock,
   SourceDocument,
 } from '../../domain/models'
+import {
+  isDocumentAutoProcessingCompleted,
+  shareDocumentAutoProcessing,
+} from './documentAutoProcessing'
 import {
   allProblemBlockIds,
   replaceProblemBlockSelection,
@@ -84,6 +89,23 @@ export function DocumentEditor({
   const [saving, setSaving] = useState(false)
   const { toast, notify, dismiss } = useToast()
 
+  const applyProcessingResult = useCallback(
+    (result: DocumentProcessingResult) => {
+      setCorrectedPath(result.correctedPath)
+      setBlocks(result.blocks)
+      setSelectedIds(new Set())
+      setSaveSelectedIds(allProblemBlockIds(result.blocks))
+      setRegionSelections({})
+      setActiveId(result.blocks[0]?.id ?? null)
+      setActiveRegionId(result.blocks[0]?.id ?? null)
+      setWarnings(result.warnings)
+      setPageDetected(result.pageDetected)
+      setDurationMs(result.durationMs)
+      setPreviewMode('corrected')
+    },
+    [],
+  )
+
   const runProcessing = useCallback(
     async (nextMode: EnhancementMode) => {
       setMode(nextMode)
@@ -96,17 +118,7 @@ export function DocumentEditor({
           nextMode,
         )
         await saveDocumentProcessing(document.id, result)
-        setCorrectedPath(result.correctedPath)
-        setBlocks(result.blocks)
-        setSelectedIds(new Set())
-        setSaveSelectedIds(allProblemBlockIds(result.blocks))
-        setRegionSelections({})
-        setActiveId(result.blocks[0]?.id ?? null)
-        setActiveRegionId(result.blocks[0]?.id ?? null)
-        setWarnings(result.warnings)
-        setPageDetected(result.pageDetected)
-        setDurationMs(result.durationMs)
-        setPreviewMode('corrected')
+        applyProcessingResult(result)
         await onSaved()
       } catch (error) {
         notify(`页面处理失败：${String(error)}`, 'error')
@@ -114,16 +126,12 @@ export function DocumentEditor({
         setProcessing(false)
       }
     },
-    [document.id, document.originalImagePath, onSaved],
+    [applyProcessingResult, document.id, document.originalImagePath, onSaved],
   )
 
   useEffect(() => {
     let cancelled = false
-    async function initialize() {
-      if (!document.correctedImagePath) {
-        await runProcessing('color')
-        return
-      }
+    async function loadExistingBlocks() {
       const existing = await loadCandidateBlocks(document.id)
       if (cancelled) return
       setBlocks(existing)
@@ -135,11 +143,58 @@ export function DocumentEditor({
         notify('本页没有待确认题块；已保存内容可在错题库查看', 'info')
       }
     }
+    async function initialize() {
+      // Automatic processing must happen once per source document per
+      // session.  StrictMode remounts share the in-flight run, and a
+      // completed document loads its persisted blocks instead of
+      // re-dispatching `process_document`.
+      if (
+        !document.correctedImagePath &&
+        !isDocumentAutoProcessingCompleted(document.id)
+      ) {
+        setMode('color')
+        setProcessing(true)
+        dismiss()
+        try {
+          const result = await shareDocumentAutoProcessing(
+            document.id,
+            async () => {
+              const processed = await processDocument(
+                document.id,
+                document.originalImagePath,
+                'color',
+              )
+              await saveDocumentProcessing(document.id, processed)
+              return processed
+            },
+          )
+          if (cancelled) return
+          if (result) {
+            applyProcessingResult(result)
+            await onSaved()
+          } else {
+            await loadExistingBlocks()
+          }
+        } catch (error) {
+          if (!cancelled) notify(`页面处理失败：${String(error)}`, 'error')
+        } finally {
+          if (!cancelled) setProcessing(false)
+        }
+        return
+      }
+      await loadExistingBlocks()
+    }
     void initialize()
     return () => {
       cancelled = true
     }
-  }, [document.correctedImagePath, document.id, runProcessing])
+  }, [
+    applyProcessingResult,
+    document.correctedImagePath,
+    document.id,
+    document.originalImagePath,
+    onSaved,
+  ])
 
   const updateBlockRect = (id: string, rect: NormalizedRect) => {
     setBlocks((current) =>
