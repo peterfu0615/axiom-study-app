@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { AIProblemAnalysis, ModelRun } from '../domain/models'
 import {
   REFERENCED_MEDIA_PATHS_SQL,
   assertAIProviderKeySaveStatuses,
   classifyMediaPaths,
+  completeProblemAIModelRun,
   extractReferencedMediaPaths,
   isSameDatabasePath,
   parseJSON,
@@ -27,7 +29,33 @@ const fakeDb = vi.hoisted(() => {
       repairStrategy: string | null
     }
   >()
-  return { statements, modelRuns }
+  // Test hooks: extra select handlers, per-statement rowsAffected overrides
+  // and a failure trigger, used by the completeProblemAIModelRun contract.
+  const selectHandlers: Array<{
+    match: (sql: string) => boolean
+    rows: () => unknown[]
+  }> = []
+  const affectedOverrides: Array<{
+    match: (sql: string) => boolean
+    affected: () => number
+  }> = []
+  let failOn: ((sql: string) => boolean) | null = null
+  return {
+    statements,
+    modelRuns,
+    selectHandlers,
+    affectedOverrides,
+    setFailOn: (predicate: ((sql: string) => boolean) | null) => {
+      failOn = predicate
+    },
+    shouldFail: (sql: string) => (failOn ? failOn(sql) : false),
+    reset() {
+      statements.length = 0
+      selectHandlers.length = 0
+      affectedOverrides.length = 0
+      failOn = null
+    },
+  }
 })
 
 vi.mock('@tauri-apps/plugin-sql', () => ({
@@ -44,16 +72,27 @@ vi.mock('@tauri-apps/api/core', () => ({
     const sql = (args?.sql ?? '').trim()
     const params = args?.params ?? []
     fakeDb.statements.push(sql)
+    if (fakeDb.shouldFail(sql)) {
+      throw new Error(`injected statement failure: ${sql.slice(0, 80)}`)
+    }
     if (command === 'db_select') {
       if (sql.includes('SELECT provider_attempts_json FROM model_runs')) {
         const row = fakeDb.modelRuns.get(String(params[0]))
         return row ? [{ provider_attempts_json: row.providerAttemptsJson }] : []
       }
+      for (const handler of fakeDb.selectHandlers) {
+        if (handler.match(sql)) return handler.rows()
+      }
       return []
     }
     if (command === 'db_execute') {
-      if (sql === 'BEGIN IMMEDIATE' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+      if (sql === 'BEGIN' || sql === 'BEGIN IMMEDIATE' || sql === 'COMMIT' || sql === 'ROLLBACK') {
         return { rowsAffected: 0, lastInsertId: 0 }
+      }
+      for (const override of fakeDb.affectedOverrides) {
+        if (override.match(sql)) {
+          return { rowsAffected: override.affected(), lastInsertId: 0 }
+        }
       }
       if (sql.includes('UPDATE model_runs') && sql.includes('provider_attempts_json = $3')) {
         const [rawOutput, repairStrategy, attemptsJson, runId] = params as [
@@ -80,11 +119,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('./native', () => ({
   canonicalizePath: vi.fn(async (p: string) => p),
   cropProblemImage: vi.fn(),
+  deleteAIProviderApiKey: vi.fn(async () => undefined),
   deleteMediaFile: vi.fn(async () => undefined),
   getDatabasePath: vi.fn(async () => '/app/axiom.db'),
   isDesktopRuntime: () => true,
   listMediaDirectory: vi.fn(async (_subdir: string) => []),
   migrateDatabase: vi.fn(async () => undefined),
+  persistAIProviderProfiles: vi.fn(async () => undefined),
   recoverLegacyProviderApiKeys: vi.fn(async () => undefined),
   removeProblemImage: vi.fn(async () => undefined),
 }))
@@ -489,5 +530,147 @@ describe('recordProcessingModelRunOutput', () => {
         null,
       ),
     ).rejects.toThrow('AI Task 已不再处于处理中状态')
+  })
+})
+
+describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
+  const run: ModelRun = {
+    id: 'run-1',
+    problemId: 'problem-1',
+    taskType: 'analyze_problem_image',
+    provider: 'test',
+    model: 'test-v1',
+    input: {
+      problemId: 'problem-1',
+      cropImagePath: '/tmp/problem.jpg',
+      sourceDocumentCorrectedImagePath: '/tmp/page.jpg',
+      cropRect: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+    },
+    output: null,
+    rawOutput: '',
+    repairStrategy: null,
+    status: 'processing',
+    errorMessage: null,
+    createdAt: 1,
+  }
+
+  const analysis: AIProblemAnalysis = {
+    title: '分式-选择题-化简',
+    subject: '数学',
+    problemType: '选择题',
+    stemMarkdown: '化简 $\\frac{x}{2}$。',
+    choices: [],
+    subQuestions: [],
+    hasDiagram: false,
+    diagramKind: 'unknown',
+    diagramBBox: { x: 0, y: 0, width: 0, height: 0 },
+    knowledgePoints: [],
+    knowledgeTags: [{
+      name: '分式化简',
+      role: 'primary',
+      confidence: 0.9,
+      evidence: '题干要求化简分式',
+      source: 'problem',
+    }],
+    methodTags: [],
+    modelTags: [],
+    difficulty: null,
+    errorCategories: [],
+    textbookHint: null,
+    confidence: 0.9,
+    warnings: [],
+  }
+
+  const isTaxonomyWrite = (sql: string) =>
+    sql.startsWith('UPDATE problems') && sql.includes('matched_textbook_id')
+
+  const seedCompletion = (effectiveSubject = '数学') => {
+    fakeDb.reset()
+    fakeDb.selectHandlers.push(
+      {
+        match: (sql) => sql.includes('SELECT ai_diagram_image_path'),
+        rows: () => [{ ai_diagram_image_path: null }],
+      },
+      {
+        match: (sql) => sql.includes('effective_subject'),
+        rows: () => [{
+          effective_subject: effectiveSubject,
+          matched_textbook_id: null,
+          textbook_match_locked: 0,
+        }],
+      },
+      {
+        match: (sql) => sql.includes('SELECT version FROM taxonomy_versions'),
+        rows: () => [{ version: 3 }],
+      },
+    )
+    fakeDb.affectedOverrides.push(
+      {
+        match: (sql) => sql.startsWith('UPDATE model_runs') && sql.includes("status = 'completed'"),
+        affected: () => 1,
+      },
+      {
+        match: (sql) => sql.startsWith('UPDATE problems') && sql.includes("ai_status = 'completed'"),
+        affected: () => 1,
+      },
+    )
+  }
+
+  it('writes structured result and taxonomy mapping inside one atomic transaction', async () => {
+    seedCompletion()
+    const previous = await completeProblemAIModelRun(run, analysis)
+    expect(previous).toBeNull()
+    const sequence = fakeDb.statements
+    const beginIndex = sequence.findIndex((sql) => sql === 'BEGIN')
+    const commitIndex = sequence.lastIndexOf('COMMIT')
+    expect(beginIndex).toBeGreaterThan(-1)
+    expect(commitIndex).toBeGreaterThan(beginIndex)
+    expect(sequence).not.toContain('ROLLBACK')
+    // 事务只开启一次：run 完成、题目 ai_* 列与受控标签映射全部在其中
+    expect(sequence.filter((sql) => sql === 'BEGIN')).toHaveLength(1)
+    const runComplete = sequence.findIndex(
+      (sql) => sql.startsWith('UPDATE model_runs') && sql.includes("status = 'completed'"),
+    )
+    const problemComplete = sequence.findIndex(
+      (sql) => sql.startsWith('UPDATE problems') && sql.includes("ai_status = 'completed'"),
+    )
+    const taxonomyWrite = sequence.findIndex(isTaxonomyWrite)
+    const tagInsert = sequence.findIndex((sql) => sql.startsWith('INSERT OR IGNORE INTO problem_tags'))
+    expect(runComplete).toBeGreaterThan(beginIndex)
+    expect(problemComplete).toBeGreaterThan(runComplete)
+    expect(taxonomyWrite).toBeGreaterThan(problemComplete)
+    expect(tagInsert).toBeGreaterThan(taxonomyWrite)
+    expect(commitIndex).toBeGreaterThan(tagInsert)
+    // prepare 阶段的只读查询必须发生在 BEGIN 之前（事务不包网络式长读）
+    const prepareRead = sequence.findIndex((sql) => sql.includes('effective_subject'))
+    expect(prepareRead).toBeGreaterThan(-1)
+    expect(prepareRead).toBeLessThan(beginIndex)
+  })
+
+  it('rolls back the whole completion and surfaces the error when taxonomy apply fails', async () => {
+    seedCompletion()
+    fakeDb.setFailOn(isTaxonomyWrite)
+    await expect(
+      completeProblemAIModelRun(run, analysis),
+    ).rejects.toThrow('injected statement failure')
+    const sequence = fakeDb.statements
+    // 绝不能出现「completed 已提交」的假成功：COMMIT 未落，ROLLBACK 必须执行
+    expect(sequence).not.toContain('COMMIT')
+    expect(sequence).toContain('ROLLBACK')
+    const rollbackIndex = sequence.lastIndexOf('ROLLBACK')
+    const taxonomyWrite = sequence.findIndex(isTaxonomyWrite)
+    expect(taxonomyWrite).toBeGreaterThan(-1)
+    expect(rollbackIndex).toBeGreaterThan(taxonomyWrite)
+  })
+
+  it('skips taxonomy writes entirely for problems without a subject (no-op keeps semantics)', async () => {
+    seedCompletion('')
+    await completeProblemAIModelRun(run, analysis)
+    const sequence = fakeDb.statements
+    expect(sequence).toContain('COMMIT')
+    expect(sequence.some(isTaxonomyWrite)).toBe(false)
+    expect(
+      sequence.some((sql) => sql.startsWith('INSERT OR IGNORE INTO problem_tags')),
+    ).toBe(false)
   })
 })

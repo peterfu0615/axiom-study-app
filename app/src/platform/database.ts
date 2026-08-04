@@ -71,7 +71,11 @@ import {
   recoverRelabelBatchItems as recoverNativeRelabelBatchItems,
   type PersistedProblemImage,
 } from './native'
-import { applyControlledProblemAnalysis } from './horizonDatabase'
+import {
+  prepareControlledProblemAnalysis,
+  writeControlledProblemAnalysis,
+} from './horizonDatabase'
+import { withTransactionLock } from './transactionLock'
 
 const browserDocuments: SourceDocument[] = []
 const browserProblemRegions = new Map<string, ProblemRegion[]>()
@@ -211,19 +215,8 @@ export async function ensureDatabaseReady(): Promise<{ check: DatabasePathCheck 
 // tauri-plugin-sql 的每个 db.execute() 都是独立 IPC 调用，SQLite 实际为单连接。
 // 当后台 worker 的事务跨多个 await 点时，事件循环可能切到另一处也开启事务的代码，
 // 触发 "cannot start a transaction within a transaction"。
-// 用一个 JS 端的异步互斥锁序列化所有事务，从根上消除交错。
-let transactionChain: Promise<unknown> = Promise.resolve()
-
-function withTransactionLock<T>(operation: () => Promise<T>): Promise<T> {
-  const run = transactionChain.then(operation, operation)
-  // 链式等待，但隔离错误，避免单次失败阻塞后续所有事务
-  transactionChain = run.then(
-    () => undefined,
-    () => undefined,
-  )
-  return run
-}
-
+// 事务序列化锁与 horizonDatabase 共享（见 ./transactionLock），保证跨模块
+// 事务不会在同一 sqlx 连接上交错。
 async function inDatabaseTransaction<T>(
   db: DatabaseLike,
   operation: () => Promise<T>,
@@ -2677,6 +2670,14 @@ export async function completeProblemAIModelRun(
   const now = Date.now()
   const outputJSON = analysisOutputJSON(analysis)
   let previousDiagramImagePath: string | null = null
+  // 受控标签映射的只读准备在事务外完成；写入阶段并入下方同一事务。
+  // 映射失败将导致整体回滚并向 worker 抛错 → run 落 failed，题目保持
+  // 可重试状态，杜绝「completed 但无标签/知识映射」的静默假成功。
+  const taxonomyPlan = await prepareControlledProblemAnalysis(
+    run.problemId,
+    run.id,
+    analysis,
+  )
   await withTransactionLock(async () => {
     await db.execute('BEGIN')
     try {
@@ -2785,6 +2786,9 @@ export async function completeProblemAIModelRun(
           [`ai-diagram-${run.problemId}`],
         )
       }
+      if (taxonomyPlan) {
+        await writeControlledProblemAnalysis(taxonomyPlan)
+      }
       await db.execute('COMMIT')
     } catch (error) {
       try {
@@ -2799,14 +2803,6 @@ export async function completeProblemAIModelRun(
       throw error
     }
   })
-  try {
-    await applyControlledProblemAnalysis(run.problemId, run.id, analysis)
-  } catch (error) {
-    // The structured result and ModelRun are already durable. Keep them for
-    // traceability and let the user rerun/confirm tags instead of rolling back
-    // the entire problem analysis after a taxonomy-only failure.
-    console.error('受控标签映射失败', error)
-  }
   return previousDiagramImagePath
 }
 

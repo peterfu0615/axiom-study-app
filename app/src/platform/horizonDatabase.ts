@@ -67,6 +67,7 @@ import {
   resolveProblemTextbook,
   type ProblemTextbookMatch,
 } from '../domain/problemTextbook'
+import { withTransactionLock } from './transactionLock'
 
 interface ExecuteResult {
   rowsAffected: number
@@ -287,13 +288,13 @@ async function inputHash(value: unknown) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-let transactionChain = Promise.resolve()
-
 async function transaction<T>(operation: () => Promise<T>): Promise<T> {
   // db_execute is serialized per IPC call in Rust, not for the lifetime of a
-  // SQLite transaction.  Queue every Horizon transaction in this module so a
-  // second BEGIN cannot land between the first transaction's statements.
-  const next = transactionChain.then(async () => {
+  // SQLite transaction.  Queue every Horizon transaction on the lock shared
+  // with database.ts (see ./transactionLock) so a second BEGIN cannot land
+  // between the first transaction's statements — including BEGINs opened by
+  // the other module on the same single sqlx connection.
+  return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
       const value = await operation()
@@ -304,8 +305,6 @@ async function transaction<T>(operation: () => Promise<T>): Promise<T> {
       throw error
     }
   })
-  transactionChain = next.then(() => undefined, () => undefined)
-  return next
 }
 
 async function ensureTaxonomyVersion(subject: string): Promise<number> {
@@ -1865,11 +1864,28 @@ export async function confirmProblemDifficulty(
   )
 }
 
-export async function applyControlledProblemAnalysis(
+// 受控标签映射拆成两个阶段：
+// - prepare：只读（题目科目、教材、标签定义），可在事务外安全执行；
+//   科目缺失或 AI 科目与题目不符时返回 null（沿用历史 no-op 语义）。
+// - write：纯 SQL 写入，不自行开启事务，由调用方决定事务边界。
+// 这样 completeProblemAIModelRun 能把映射并入同一事务：映射失败时整体回滚，
+// 题目回到可重试状态，而不是「completed 但无标签」的静默假成功。
+export interface ControlledProblemAnalysisPlan {
+  problemId: string
+  modelRunId: string
+  subject: string
+  now: number
+  textbookMatch: ProblemTextbookMatch
+  definitions: TagDefinition[]
+  candidateGroups: Array<[HorizonTagType, AIProblemAnalysis['knowledgeTags']]>
+  difficulty: AIProblemAnalysis['difficulty']
+}
+
+export async function prepareControlledProblemAnalysis(
   problemId: string,
   modelRunId: string,
   analysis: AIProblemAnalysis,
-) {
+): Promise<ControlledProblemAnalysisPlan | null> {
   const problems = await select<Array<{
     effective_subject: string
     matched_textbook_id: string | null
@@ -1881,9 +1897,9 @@ export async function applyControlledProblemAnalysis(
     [problemId],
   )
   const subject = String(problems[0]?.effective_subject || '')
-  if (!subject) return
+  if (!subject) return null
   if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
-    return
+    return null
   }
   const textbooks = (await select<Record<string, unknown>[]>(
     `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
@@ -1899,83 +1915,110 @@ export async function applyControlledProblemAnalysis(
     legacyCurrentTextbookId,
   })
   const definitions = await listTagDefinitions(subject)
-  const taxonomyVersion = await ensureTaxonomyVersion(subject)
-  const candidateGroups: Array<[HorizonTagType, typeof analysis.knowledgeTags]> = [
-    ['knowledge', analysis.knowledgeTags ?? []],
-    ['method', analysis.methodTags ?? []],
-    ['model', analysis.modelTags ?? []],
-    ['error', analysis.errorCategories ?? []],
-  ]
-  const now = Date.now()
-  await transaction(async () => {
-    if (Number(problems[0]?.textbook_match_locked ?? 0) !== 1) {
-      await execute(
-        `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
-         textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
-         textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
-        [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
-          textbookMatch.source, now, problemId],
-      )
-    }
+  return {
+    problemId,
+    modelRunId,
+    subject,
+    now: Date.now(),
+    textbookMatch,
+    definitions,
+    candidateGroups: [
+      ['knowledge', analysis.knowledgeTags ?? []],
+      ['method', analysis.methodTags ?? []],
+      ['model', analysis.modelTags ?? []],
+      ['error', analysis.errorCategories ?? []],
+    ],
+    difficulty: analysis.difficulty ?? null,
+  }
+}
+
+// 必须在调用方已开启的事务内执行（本函数不 BEGIN/COMMIT）。
+export async function writeControlledProblemAnalysis(
+  plan: ControlledProblemAnalysisPlan,
+) {
+  const { problemId, modelRunId, subject, now, textbookMatch, definitions } = plan
+  const locked = await select<Array<{ textbook_match_locked: number }>>(
+    `SELECT textbook_match_locked FROM problems WHERE id = $1`,
+    [problemId],
+  )
+  if (Number(locked[0]?.textbook_match_locked ?? 0) !== 1) {
     await execute(
-      `UPDATE problem_tags SET superseded_at = $1, updated_at = $1
-       WHERE problem_id = $2 AND superseded_at IS NULL AND source = 'model'
-         AND is_locked = 0 AND verification_status != 'user_verified'`,
-      [now, problemId],
+      `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
+       textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
+       textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
+      [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
+        textbookMatch.source, now, problemId],
     )
-    for (const [tagType, candidates = []] of candidateGroups) {
-      const mappings = mapCandidatesToControlledTags(
-        subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
-      )
-      for (const mapping of mappings) {
-        if (!mapping.definition) {
-          await execute(
-            `INSERT OR IGNORE INTO tag_definitions (
-              id, subject, tag_type, canonical_name, source, verification_status,
-              lifecycle_status, method_class, taxonomy_version, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, 'model', 'needs_review', 'candidate', $5, $6, $7, $7)`,
-            [id(), subject, tagType, mapping.candidate.name,
-              tagType === 'method' ? (mapping.candidate.role === 'primary' ? 'core' : 'optional') : null,
-              taxonomyVersion, now],
-          )
-        }
+  }
+  await execute(
+    `UPDATE problem_tags SET superseded_at = $1, updated_at = $1
+     WHERE problem_id = $2 AND superseded_at IS NULL AND source = 'model'
+       AND is_locked = 0 AND verification_status != 'user_verified'`,
+    [now, problemId],
+  )
+  const taxonomyVersion = await ensureTaxonomyVersion(subject)
+  for (const [tagType, candidates = []] of plan.candidateGroups) {
+    const mappings = mapCandidatesToControlledTags(
+      subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
+    )
+    for (const mapping of mappings) {
+      if (!mapping.definition) {
         await execute(
-          `INSERT OR IGNORE INTO problem_tags (
-            id, problem_id, subject, tag_type, tag_id, candidate_name, role,
-            mapping_status, confidence, evidence, source, taxonomy_version,
-            model_run_id, verification_status, is_locked, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'model', $11,
-            $12, $13, 0, $14, $14)`,
-          [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
-            mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
-            mapping.mappingStatus, mapping.candidate.confidence, mapping.candidate.evidence,
-            mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,
-            mapping.verificationStatus, now],
+          `INSERT OR IGNORE INTO tag_definitions (
+            id, subject, tag_type, canonical_name, source, verification_status,
+            lifecycle_status, method_class, taxonomy_version, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, 'model', 'needs_review', 'candidate', $5, $6, $7, $7)`,
+          [id(), subject, tagType, mapping.candidate.name,
+            tagType === 'method' ? (mapping.candidate.role === 'primary' ? 'core' : 'optional') : null,
+            taxonomyVersion, now],
         )
       }
-    }
-    const existingLockedDifficulty = await select<Array<{ id: string }>>(
-      `SELECT id FROM problem_difficulties WHERE problem_id = $1
-       AND superseded_at IS NULL AND (is_locked = 1 OR verification_status = 'user_verified')`,
-      [problemId],
-    )
-    if (analysis.difficulty && existingLockedDifficulty.length === 0) {
       await execute(
-        `UPDATE problem_difficulties SET superseded_at = $1, updated_at = $1
-         WHERE problem_id = $2 AND superseded_at IS NULL`,
-        [now, problemId],
-      )
-      await execute(
-        `INSERT INTO problem_difficulties (
-          id, problem_id, subject, level, score, reason, confidence, source,
+        `INSERT OR IGNORE INTO problem_tags (
+          id, problem_id, subject, tag_type, tag_id, candidate_name, role,
+          mapping_status, confidence, evidence, source, taxonomy_version,
           model_run_id, verification_status, is_locked, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'model', $8, $9, 0, $10, $10)`,
-        [id(), problemId, subject, analysis.difficulty.level, analysis.difficulty.score,
-          analysis.difficulty.reason, analysis.difficulty.confidence, modelRunId,
-          analysis.difficulty.confidence >= 0.72 ? 'ai_verified' : 'needs_review', now],
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'model', $11,
+          $12, $13, 0, $14, $14)`,
+        [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
+          mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
+          mapping.mappingStatus, mapping.candidate.confidence, mapping.candidate.evidence,
+          mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,
+          mapping.verificationStatus, now],
       )
     }
-  })
+  }
+  const existingLockedDifficulty = await select<Array<{ id: string }>>(
+    `SELECT id FROM problem_difficulties WHERE problem_id = $1
+     AND superseded_at IS NULL AND (is_locked = 1 OR verification_status = 'user_verified')`,
+    [problemId],
+  )
+  if (plan.difficulty && existingLockedDifficulty.length === 0) {
+    await execute(
+      `UPDATE problem_difficulties SET superseded_at = $1, updated_at = $1
+       WHERE problem_id = $2 AND superseded_at IS NULL`,
+      [now, problemId],
+    )
+    await execute(
+      `INSERT INTO problem_difficulties (
+        id, problem_id, subject, level, score, reason, confidence, source,
+        model_run_id, verification_status, is_locked, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'model', $8, $9, 0, $10, $10)`,
+      [id(), problemId, subject, plan.difficulty.level, plan.difficulty.score,
+        plan.difficulty.reason, plan.difficulty.confidence, modelRunId,
+        plan.difficulty.confidence >= 0.72 ? 'ai_verified' : 'needs_review', now],
+    )
+  }
+}
+
+export async function applyControlledProblemAnalysis(
+  problemId: string,
+  modelRunId: string,
+  analysis: AIProblemAnalysis,
+) {
+  const plan = await prepareControlledProblemAnalysis(problemId, modelRunId, analysis)
+  if (!plan) return
+  await transaction(() => writeControlledProblemAnalysis(plan))
 }
 
 export interface RelabelBatch {
