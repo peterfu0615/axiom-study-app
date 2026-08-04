@@ -94,3 +94,19 @@ textarea:focus-visible {
   color: var(--brand-ink);
   background: var(--brand-soft);
 }
+
+/*
+ * Global reduced-motion fallback.  Individual components keep their own
+ * targeted rules; this blanket override guarantees no animation or smooth
+ * scroll survives when the system requests reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

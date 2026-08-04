@@ -19,6 +19,7 @@ import { useToast, type ToastState } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
 import './components/ui/ui.css'
 import './App.css'
+import './workspaceLayout.css'
 
 function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
   if (event.button !== 0) return
