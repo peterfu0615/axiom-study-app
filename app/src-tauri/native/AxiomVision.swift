@@ -122,6 +122,7 @@ private func emitTextbookProgress(
     totalPages: Int,
     pdfTextPages: Int,
     ocrPages: Int,
+    failedPages: Int,
     phase: String
 ) {
     let payload: [String: Any] = [
@@ -129,6 +130,7 @@ private func emitTextbookProgress(
         "totalPages": totalPages,
         "pdfTextPages": pdfTextPages,
         "ocrPages": ocrPages,
+        "failedPages": failedPages,
         "phase": phase,
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -206,10 +208,30 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
     var warnings: [String] = []
     var textPageCount = 0
     var ocrPageCount = 0
+    var failedPageCount = 0
     let maximumPages = document.pageCount
-    emitTextbookProgress(currentPage: 0, totalPages: maximumPages, pdfTextPages: 0, ocrPages: 0, phase: "reading")
+    emitTextbookProgress(currentPage: 0, totalPages: maximumPages, pdfTextPages: 0, ocrPages: 0, failedPages: 0, phase: "reading")
+
+    // A page whose rendering or OCR fails must not silently disappear from the
+    // output: downstream consumers rely on page numbers staying contiguous.
+    // Emit an explicit placeholder entry instead.
+    func appendFailedPage(pageNumber: Int, reason: String) {
+        failedPageCount += 1
+        warnings.append("第 \(pageNumber) 页\(reason)，已保留占位条目")
+        pages.append(TextbookExtractedPage(
+            pageNumber: pageNumber,
+            evidenceText: "",
+            extractionMethod: "failed",
+            confidence: 0
+        ))
+        emitTextbookProgress(currentPage: pageNumber, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, failedPages: failedPageCount, phase: "failed")
+    }
+
     for index in 0..<maximumPages {
-        guard let page = document.page(at: index) else { continue }
+        guard let page = document.page(at: index) else {
+            appendFailedPage(pageNumber: index + 1, reason: "无法读取")
+            continue
+        }
         let embedded = (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if embedded.count >= 20 {
             textPageCount += 1
@@ -219,7 +241,7 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
                 extractionMethod: "pdf_text",
                 confidence: 0.99
             ))
-            emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, phase: "pdf_text")
+            emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, failedPages: failedPageCount, phase: "pdf_text")
             continue
         }
         let bounds = page.bounds(for: .mediaBox)
@@ -229,10 +251,16 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
         )
         var proposed = NSRect(origin: .zero, size: thumbnail.size)
         guard let image = thumbnail.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
-            warnings.append("第 \(index + 1) 页无法渲染，已跳过 OCR")
+            appendFailedPage(pageNumber: index + 1, reason: "无法渲染")
             continue
         }
-        let recognized = try recognizeText(in: image)
+        let recognized: (text: String, confidence: Double)
+        do {
+            recognized = try recognizeText(in: image)
+        } catch {
+            appendFailedPage(pageNumber: index + 1, reason: "OCR 失败")
+            continue
+        }
         ocrPageCount += 1
         pages.append(TextbookExtractedPage(
             pageNumber: index + 1,
@@ -240,7 +268,10 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
             extractionMethod: "vision_ocr",
             confidence: recognized.confidence
         ))
-        emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, phase: "vision_ocr")
+        emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, failedPages: failedPageCount, phase: "vision_ocr")
+    }
+    if maximumPages > 0 && textPageCount == 0 && ocrPageCount == 0 {
+        throw ProcessorError.noExtractablePages
     }
     let extractionMethod: String
     if textPageCount > 0 && ocrPageCount > 0 {
@@ -260,7 +291,7 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
 }
 
 private func extractTextbookImage(inputPath: String) throws -> TextbookExtractionResult {
-    emitTextbookProgress(currentPage: 0, totalPages: 1, pdfTextPages: 0, ocrPages: 0, phase: "vision_ocr")
+    emitTextbookProgress(currentPage: 0, totalPages: 1, pdfTextPages: 0, ocrPages: 0, failedPages: 0, phase: "vision_ocr")
     guard
         let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: inputPath) as CFURL, nil),
         let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -274,7 +305,7 @@ private func extractTextbookImage(inputPath: String) throws -> TextbookExtractio
         extractionMethod: "vision_ocr",
         confidence: recognized.confidence
     )
-    emitTextbookProgress(currentPage: 1, totalPages: 1, pdfTextPages: 0, ocrPages: 1, phase: "vision_ocr")
+    emitTextbookProgress(currentPage: 1, totalPages: 1, pdfTextPages: 0, ocrPages: 1, failedPages: 0, phase: "vision_ocr")
     return TextbookExtractionResult(
         pageCount: 1,
         extractionMethod: "vision_ocr",
@@ -289,6 +320,7 @@ private enum ProcessorError: LocalizedError {
     case invalidCrop
     case unreadableImage
     case renderFailed
+    case noExtractablePages
     case cameraNotFound
 
     var errorDescription: String? {
@@ -297,6 +329,7 @@ private enum ProcessorError: LocalizedError {
         case .invalidCrop: return "题块裁剪区域无效"
         case .unreadableImage: return "无法读取图片"
         case .renderFailed: return "无法生成矫正图片"
+        case .noExtractablePages: return "教材中没有任何可提取文字的页面"
         case .cameraNotFound: return "找不到对应的相机设备"
         }
     }

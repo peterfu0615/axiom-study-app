@@ -101,7 +101,7 @@ export interface CurriculumImportJob {
     pages: Array<{
       pageNumber: number
       evidenceText: string
-      extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual'
+      extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual' | 'failed'
       confidence: number
     }>
     outline: Array<{

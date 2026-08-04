@@ -283,7 +283,7 @@ export function CurriculumImportFlow({
         <FlowingTaskSurface
           actions={<Button onClick={() => setCancelConfirmOpen(true)} variant="ghost">取消</Button>}
           detail={extractionProgress
-            ? `第 ${extractionProgress.currentPage}/${extractionProgress.totalPages} 页 · PDF 文字 ${extractionProgress.pdfTextPages} 页 · OCR ${extractionProgress.ocrPages} 页`
+            ? `第 ${extractionProgress.currentPage}/${extractionProgress.totalPages} 页 · PDF 文字 ${extractionProgress.pdfTextPages} 页 · OCR ${extractionProgress.ocrPages} 页${extractionProgress.failedPages > 0 ? ` · 失败 ${extractionProgress.failedPages} 页` : ''}`
             : '正在流式复制、校验文件并启动提取器'}
           progress={extractionProgress?.totalPages
             ? extractionProgress.currentPage / extractionProgress.totalPages
@@ -353,6 +353,7 @@ export function CurriculumImportFlow({
             ))}
             {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" title="目录需要手动建立" />}
           </div>
+          {job.extraction.warnings.length > 0 && <p className="curriculum-form-warning">{job.extraction.warnings.join(' ')}</p>}
           {saving
             ? <FlowingTaskSurface compact detail="正在保存教材、知识结构和候选标签" state="running" title="正在保存课程" widthMode="full" />
             : <div className="curriculum-import-card__actions"><Button loading={saving} onClick={() => void confirmStructure()} variant="primary">使用此课程结构</Button><Button onClick={() => setPhase('confirm')}>返回教材信息</Button></div>}

@@ -184,6 +184,12 @@ pub fn run() {
             sql: include_str!("../migrations/0026_knowledge_sibling_unique_guard.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            description: "failed_textbook_pages",
+            sql: include_str!("../migrations/0027_failed_textbook_pages.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。
