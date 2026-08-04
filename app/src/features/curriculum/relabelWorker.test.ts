@@ -69,6 +69,29 @@ describe('relabel worker contract', () => {
     expect(mocks.runProblemAIWorker).not.toHaveBeenCalled()
   })
 
+  it('stops without claiming when the batch has been cancelled', async () => {
+    mocks.refreshRelabelBatch.mockResolvedValueOnce({ ...running, status: 'cancelled' })
+    await startRelabelBatchWorker('batch-1')
+    expect(mocks.claimRelabelItem).not.toHaveBeenCalled()
+    expect(mocks.queueProblemAIWithRun).not.toHaveBeenCalled()
+    expect(mocks.runProblemAIWorker).not.toHaveBeenCalled()
+  })
+
+  it('stops after the current item when cancellation lands mid-batch', async () => {
+    mocks.refreshRelabelBatch
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce({ ...running, status: 'cancelled' })
+    mocks.claimRelabelItem.mockResolvedValueOnce({
+      problemId: 'problem-1',
+      modelRunId: 'run-1',
+      claimToken: 'claim-1',
+    })
+    await startRelabelBatchWorker('batch-1')
+    // 当前已领取的项目跑完即止，不再领取下一项
+    expect(mocks.runProblemAIWorker).toHaveBeenCalledTimes(1)
+    expect(mocks.claimRelabelItem).toHaveBeenCalledTimes(1)
+  })
+
   it('does not run an unbound ModelRun when binding loses the claim', async () => {
     mocks.refreshRelabelBatch.mockResolvedValueOnce(running).mockResolvedValueOnce(completed)
     mocks.claimRelabelItem.mockResolvedValueOnce({ problemId: 'problem-1', modelRunId: null, claimToken: 'claim-1' }).mockResolvedValueOnce(null)

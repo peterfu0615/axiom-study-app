@@ -124,6 +124,27 @@ function findPersistedKnowledgeReference(
   return inChapter ?? references.find((reference) => names.includes(normalizeTagName(reference.name))) ?? null
 }
 
+// Re-importing the same textbook must merge into the existing tree instead of
+// failing on the sibling unique index (migration 0026).  Find an active
+// sibling whose normalized name matches before inserting.
+async function findActiveSiblingNodeId(
+  textbookId: string,
+  parentId: string | null,
+  canonicalName: string,
+): Promise<string | null> {
+  const rows = await select<Array<{ id: string }>>(
+    `SELECT id FROM knowledge_nodes
+     WHERE textbook_id = $1
+       AND (($2 IS NULL AND parent_id IS NULL) OR parent_id = $2)
+       AND archived_at IS NULL AND merged_into_id IS NULL
+       AND lower(trim(canonical_name)) = lower(trim($3))
+     ORDER BY created_at, id
+     LIMIT 1`,
+    [textbookId, parentId, canonicalName],
+  )
+  return rows[0]?.id ?? null
+}
+
 async function persistNormalizedKnowledgeNodes(input: {
   textbookId: string
   subject: string
@@ -134,22 +155,30 @@ async function persistNormalizedKnowledgeNodes(input: {
 }) {
   const references: PersistedKnowledgeReference[] = []
   for (const [chapterIndex, chapter] of input.structure.entries()) {
-    const chapterId = id()
-    await execute(
-      `INSERT INTO knowledge_nodes (
-        id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-        sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
-        extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, 'chapter', NULL, $4, $5, NULL, $6, $7, $8, $9, $10,
-        $11, 'needs_review', $12, $13, $13)`,
-      [chapterId, input.textbookId, input.subject, chapter.title, chapterIndex,
-        chapter.pageStart, chapter.pageEnd, chapter.evidenceText, input.sourcePath,
-        input.extractionMethod, chapter.confidence, chapter.isUnclassified ? 1 : 0, input.now],
-    )
+    const existingChapterId = await findActiveSiblingNodeId(input.textbookId, null, chapter.title)
+    const chapterId = existingChapterId ?? id()
+    if (!existingChapterId) {
+      await execute(
+        `INSERT INTO knowledge_nodes (
+          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
+          sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
+          extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, 'chapter', NULL, $4, $5, NULL, $6, $7, $8, $9, $10,
+          $11, 'needs_review', $12, $13, $13)`,
+        [chapterId, input.textbookId, input.subject, chapter.title, chapterIndex,
+          chapter.pageStart, chapter.pageEnd, chapter.evidenceText, input.sourcePath,
+          input.extractionMethod, chapter.confidence, chapter.isUnclassified ? 1 : 0, input.now],
+      )
+    }
     for (const [sortOrder, point] of chapter.knowledgePoints.entries()) {
-      const nodeId = id()
       const pageStart = point.pageNumbers[0] ?? null
       const pageEnd = point.pageNumbers.at(-1) ?? null
+      const existingNodeId = await findActiveSiblingNodeId(input.textbookId, chapterId, point.name)
+      if (existingNodeId) {
+        references.push({ id: existingNodeId, chapterIndex, name: point.name, pageNumbers: point.pageNumbers })
+        continue
+      }
+      const nodeId = id()
       await execute(
         `INSERT INTO knowledge_nodes (
           id, textbook_id, subject, canonical_name, node_type, parent_id, path,
@@ -2219,11 +2248,34 @@ export async function cancelRelabelBatch(batchId: string) {
          AND status IN ('pending', 'processing')`,
       [batchId],
     )
+    // relabel 与主管线共享 problems/model_runs：取消只应撤回 relabel 引入的
+    // pending/processing 状态，绝不能把错题标记为 AI 分析失败。恢复规则：
+    // 该错题仍有已完成的分析 run → 'completed'（活跃 run 指回最近完成的一条，
+    // 保证后续重跑/展示链路一致）；否则回到 'not_started'。
     await execute(
-      `UPDATE problems SET ai_status = 'failed', ai_active_model_run_id = NULL, updated_at = $1
-       WHERE ai_active_model_run_id IN (
-         SELECT model_run_id FROM tag_relabel_items WHERE batch_id = $2
-       )`,
+      `UPDATE problems
+       SET ai_status = CASE
+             WHEN EXISTS (
+               SELECT 1 FROM model_runs run
+               WHERE run.problem_id = problems.id
+                 AND run.task_type = 'analyze_problem_image'
+                 AND run.status = 'completed'
+             ) THEN 'completed'
+             ELSE 'not_started' END,
+           ai_active_model_run_id = (
+             SELECT run.id FROM model_runs run
+             WHERE run.problem_id = problems.id
+               AND run.task_type = 'analyze_problem_image'
+               AND run.status = 'completed'
+             ORDER BY run.created_at DESC, run.id DESC
+             LIMIT 1
+           ),
+           updated_at = $1
+       WHERE ai_status IN ('pending', 'processing')
+         AND ai_active_model_run_id IN (
+           SELECT model_run_id FROM tag_relabel_items
+           WHERE batch_id = $2 AND model_run_id IS NOT NULL
+         )`,
       [now, batchId],
     )
     await execute(

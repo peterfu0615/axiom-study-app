@@ -218,17 +218,12 @@ pub async fn bind_relabel_batch_item_model_run(
     }
 }
 
-#[tauri::command]
-pub async fn recover_relabel_batch_items(state: State<'_, DbState>) -> Result<(), String> {
-    let mut guard = state.connection.lock().await;
-    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
-    let now = chrono_millis()?;
-    conn.execute("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| format!("无法开始恢复旧错题事务：{error}"))?;
-    let result = async {
-        sqlx::query(
-            "UPDATE tag_relabel_items
+async fn recover_relabel_batch_items_in_transaction(
+    conn: &mut SqliteConnection,
+    now: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE tag_relabel_items
              SET status = CASE
                WHEN run.status = 'completed' THEN 'completed'
                WHEN run.status = 'failed' THEN 'failed'
@@ -243,13 +238,13 @@ pub async fn recover_relabel_batch_items(state: State<'_, DbState>) -> Result<()
                  WHERE batch.id = tag_relabel_items.batch_id
                    AND batch.status NOT IN ('cancelled', 'completed')
                )",
-        )
-        .bind(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(|error| format!("恢复旧错题 ModelRun 失败：{error}"))?;
-        sqlx::query(
-            "UPDATE tag_relabel_items
+    )
+    .bind(now)
+    .execute(&mut *conn)
+    .await
+    .map_err(|error| format!("恢复旧错题 ModelRun 失败：{error}"))?;
+    sqlx::query(
+        "UPDATE tag_relabel_items
              SET status = 'pending', claim_token = NULL, claimed_at = NULL,
                  updated_at = $1
              WHERE status IN ('queued', 'processing') AND model_run_id IS NULL
@@ -258,14 +253,23 @@ pub async fn recover_relabel_batch_items(state: State<'_, DbState>) -> Result<()
                  WHERE batch.id = tag_relabel_items.batch_id
                    AND batch.status NOT IN ('cancelled', 'completed')
                )",
-        )
-        .bind(now)
-        .execute(&mut *conn)
+    )
+    .bind(now)
+    .execute(&mut *conn)
+    .await
+    .map_err(|error| format!("恢复无 ModelRun 的旧错题失败：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn recover_relabel_batch_items(state: State<'_, DbState>) -> Result<(), String> {
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    let now = chrono_millis()?;
+    conn.execute("BEGIN IMMEDIATE")
         .await
-        .map_err(|error| format!("恢复无 ModelRun 的旧错题失败：{error}"))?;
-        Ok::<_, String>(())
-    }
-    .await;
+        .map_err(|error| format!("无法开始恢复旧错题事务：{error}"))?;
+    let result = recover_relabel_batch_items_in_transaction(conn, now).await;
     match result {
         Ok(()) => conn
             .execute("COMMIT")
@@ -2039,6 +2043,153 @@ mod relabel_claim_tests {
             conn.execute("ROLLBACK").await.unwrap();
             assert_eq!(first.problem_id, repeated.problem_id);
             assert_eq!(first.claim_token, repeated.claim_token);
+        });
+    }
+}
+
+#[cfg(test)]
+mod relabel_recovery_tests {
+    use super::*;
+    use sqlx::Connection;
+
+    async fn test_connection() -> SqliteConnection {
+        let mut conn = SqliteConnection::connect(":memory:").await.unwrap();
+        for statement in [
+            "CREATE TABLE tag_relabel_batches (id TEXT PRIMARY KEY, status TEXT NOT NULL, paused_at INTEGER, updated_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE model_runs (id TEXT PRIMARY KEY, problem_id TEXT NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE tag_relabel_items (batch_id TEXT NOT NULL, problem_id TEXT NOT NULL, status TEXT NOT NULL, model_run_id TEXT, claim_token TEXT, claimed_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(batch_id, problem_id))",
+        ] {
+            conn.execute(statement).await.unwrap();
+        }
+        for (batch_id, status) in [("batch", "processing"), ("done", "cancelled")] {
+            sqlx::query(
+                "INSERT INTO tag_relabel_batches (id, status, paused_at) VALUES ($1, $2, NULL)",
+            )
+            .bind(batch_id)
+            .bind(status)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        for (run_id, status) in [
+            ("run-completed", "completed"),
+            ("run-failed", "failed"),
+            ("run-cancelled", "cancelled"),
+            ("run-pending", "pending"),
+        ] {
+            sqlx::query("INSERT INTO model_runs (id, problem_id, status) VALUES ($1, $2, $3)")
+                .bind(run_id)
+                .bind(format!("problem-{run_id}"))
+                .bind(status)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (batch_id, problem_id, status, run_id, claimed) in [
+            (
+                "batch",
+                "p-completed",
+                "queued",
+                Some("run-completed"),
+                true,
+            ),
+            ("batch", "p-failed", "processing", Some("run-failed"), true),
+            (
+                "batch",
+                "p-cancelled",
+                "processing",
+                Some("run-cancelled"),
+                true,
+            ),
+            (
+                "batch",
+                "p-pending",
+                "processing",
+                Some("run-pending"),
+                true,
+            ),
+            ("batch", "p-unbound", "processing", None, true),
+            (
+                "batch",
+                "p-already-done",
+                "completed",
+                Some("run-completed"),
+                false,
+            ),
+            (
+                "done",
+                "p-stale-batch",
+                "processing",
+                Some("run-pending"),
+                true,
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO tag_relabel_items (batch_id, problem_id, status, model_run_id, claim_token, claimed_at, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 1, 1)",
+            )
+            .bind(batch_id)
+            .bind(problem_id)
+            .bind(status)
+            .bind(run_id)
+            .bind(if claimed { Some("old-worker") } else { None })
+            .bind(claimed.then_some(1_i64))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        conn
+    }
+
+    async fn item_status(
+        conn: &mut SqliteConnection,
+        problem_id: &str,
+    ) -> (String, Option<String>, Option<i64>) {
+        let row = sqlx::query(
+            "SELECT status, claim_token, claimed_at FROM tag_relabel_items WHERE problem_id = $1",
+        )
+        .bind(problem_id)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        (
+            row.get("status"),
+            row.get("claim_token"),
+            row.get("claimed_at"),
+        )
+    }
+
+    #[test]
+    fn restart_recovery_maps_items_to_their_model_run_outcome() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = test_connection().await;
+            conn.execute("BEGIN IMMEDIATE").await.unwrap();
+            recover_relabel_batch_items_in_transaction(&mut conn, 42)
+                .await
+                .unwrap();
+
+            // Run outcomes win: completed / failed / cancelled stay terminal.
+            assert_eq!(item_status(&mut conn, "p-completed").await.0, "completed");
+            assert_eq!(item_status(&mut conn, "p-failed").await.0, "failed");
+            assert_eq!(item_status(&mut conn, "p-cancelled").await.0, "cancelled");
+
+            // Still-active runs and unbound claims go back to pending with the
+            // dead worker's claim token cleared.
+            let pending = item_status(&mut conn, "p-pending").await;
+            assert_eq!(pending.0, "pending");
+            assert!(pending.1.is_none());
+            assert!(pending.2.is_none());
+            let unbound = item_status(&mut conn, "p-unbound").await;
+            assert_eq!(unbound.0, "pending");
+            assert!(unbound.1.is_none());
+
+            // Terminal items and items inside cancelled batches are untouched.
+            let done = item_status(&mut conn, "p-already-done").await;
+            assert_eq!(done.0, "completed");
+            let stale = item_status(&mut conn, "p-stale-batch").await;
+            assert_eq!(stale.0, "processing");
+            assert_eq!(stale.1.as_deref(), Some("old-worker"));
+            conn.execute("ROLLBACK").await.unwrap();
         });
     }
 }

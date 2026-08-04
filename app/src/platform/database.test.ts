@@ -8,9 +8,72 @@ import {
   parseJSON,
   parseNullableSQLiteBoolean,
   parseSQLiteBoolean,
+  recordProcessingModelRunOutput,
   scanOrphanedMedia,
   deleteOrphanedMedia,
 } from './database'
+
+// Fake single-connection database used by recordProcessingModelRunOutput tests.
+// The real app funnels every statement through db_execute / db_select, so a
+// statement-aware stub faithfully reproduces the transaction contract.
+const fakeDb = vi.hoisted(() => {
+  const statements: string[] = []
+  const modelRuns = new Map<
+    string,
+    {
+      status: string
+      providerAttemptsJson: string | null
+      rawOutput: string | null
+      repairStrategy: string | null
+    }
+  >()
+  return { statements, modelRuns }
+})
+
+vi.mock('@tauri-apps/plugin-sql', () => ({
+  default: {
+    load: vi.fn(async () => ({
+      execute: vi.fn(async () => ({ rowsAffected: 0, lastInsertId: 0 })),
+      select: vi.fn(async () => [{ name: 'main', file: '/app/axiom.db' }]),
+    })),
+  },
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (command: string, args?: { sql?: string; params?: unknown[] }) => {
+    const sql = (args?.sql ?? '').trim()
+    const params = args?.params ?? []
+    fakeDb.statements.push(sql)
+    if (command === 'db_select') {
+      if (sql.includes('SELECT provider_attempts_json FROM model_runs')) {
+        const row = fakeDb.modelRuns.get(String(params[0]))
+        return row ? [{ provider_attempts_json: row.providerAttemptsJson }] : []
+      }
+      return []
+    }
+    if (command === 'db_execute') {
+      if (sql === 'BEGIN IMMEDIATE' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return { rowsAffected: 0, lastInsertId: 0 }
+      }
+      if (sql.includes('UPDATE model_runs') && sql.includes('provider_attempts_json = $3')) {
+        const [rawOutput, repairStrategy, attemptsJson, runId] = params as [
+          string,
+          string | null,
+          string,
+          string,
+        ]
+        const row = fakeDb.modelRuns.get(runId)
+        if (!row || row.status !== 'processing') return { rowsAffected: 0, lastInsertId: 0 }
+        row.rawOutput = rawOutput
+        row.repairStrategy = repairStrategy
+        row.providerAttemptsJson = attemptsJson
+        return { rowsAffected: 1, lastInsertId: 0 }
+      }
+      return { rowsAffected: 0, lastInsertId: 0 }
+    }
+    throw new Error(`unexpected invoke: ${command}`)
+  }),
+}))
 
 // Mock native IPC calls so we can test scanOrphanedMedia / deleteOrphanedMedia
 // without a running Tauri backend.
@@ -345,5 +408,86 @@ describe('deleteOrphanedMedia', () => {
     } finally {
       ;(native as { isDesktopRuntime: () => boolean }).isDesktopRuntime = origIsDesktop
     }
+  })
+})
+
+describe('recordProcessingModelRunOutput', () => {
+  const seedRun = () => {
+    fakeDb.statements.length = 0
+    fakeDb.modelRuns.clear()
+    fakeDb.modelRuns.set('run-1', {
+      status: 'processing',
+      providerAttemptsJson: '[]',
+      rawOutput: null,
+      repairStrategy: null,
+    })
+  }
+
+  it('appends every attempt so two consecutive records keep both entries', async () => {
+    seedRun()
+    await recordProcessingModelRunOutput(
+      { id: 'run-1', provider: 'gemini', model: 'gemini-flash' },
+      'first-output',
+      null,
+    )
+    await recordProcessingModelRunOutput(
+      { id: 'run-1', provider: 'openai-compatible', model: 'gpt-vision' },
+      'second-output',
+      'repair-json',
+      'Bearer sk-secret leaked',
+    )
+    const stored = fakeDb.modelRuns.get('run-1')
+    expect(stored).toBeDefined()
+    const attempts = JSON.parse(stored!.providerAttemptsJson ?? '[]') as Array<
+      Record<string, unknown>
+    >
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]).toMatchObject({
+      provider: 'gemini',
+      model: 'gemini-flash',
+      rawOutput: 'first-output',
+      repairStrategy: null,
+      errorMessage: null,
+    })
+    expect(attempts[1]).toMatchObject({
+      provider: 'openai-compatible',
+      model: 'gpt-vision',
+      rawOutput: 'second-output',
+      repairStrategy: 'repair-json',
+    })
+    // 错误信息必须脱敏后再落库
+    expect(attempts[1].errorMessage).toBe('Bearer [已隐藏] leaked')
+    expect(stored!.rawOutput).toBe('second-output')
+  })
+
+  it('wraps the read-modify-write in a single transaction', async () => {
+    seedRun()
+    await recordProcessingModelRunOutput(
+      { id: 'run-1', provider: 'gemini', model: 'gemini-flash' },
+      'output',
+      null,
+    )
+    const sequence = fakeDb.statements
+    expect(sequence[0]).toBe('BEGIN IMMEDIATE')
+    expect(sequence.some((sql) => sql.includes('SELECT provider_attempts_json'))).toBe(true)
+    expect(sequence.some((sql) => sql.includes('UPDATE model_runs'))).toBe(true)
+    expect(sequence.at(-1)).toBe('COMMIT')
+    // SELECT 必须先于 UPDATE，否则读改写退化为盲写
+    const selectIndex = sequence.findIndex((sql) => sql.includes('SELECT provider_attempts_json'))
+    const updateIndex = sequence.findIndex((sql) => sql.includes('UPDATE model_runs'))
+    expect(selectIndex).toBeGreaterThan(0)
+    expect(updateIndex).toBeGreaterThan(selectIndex)
+  })
+
+  it('surfaces a conflict when the run is no longer processing', async () => {
+    seedRun()
+    fakeDb.modelRuns.get('run-1')!.status = 'cancelled'
+    await expect(
+      recordProcessingModelRunOutput(
+        { id: 'run-1', provider: 'gemini', model: 'gemini-flash' },
+        'output',
+        null,
+      ),
+    ).rejects.toThrow('AI Task 已不再处于处理中状态')
   })
 })

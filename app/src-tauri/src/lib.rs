@@ -178,6 +178,12 @@ pub fn run() {
             sql: include_str!("../migrations/0025_relabel_claims.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 26,
+            description: "knowledge_sibling_unique_guard",
+            sql: include_str!("../migrations/0026_knowledge_sibling_unique_guard.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     // 显式计算日志目录，确保与 app_data_dir 对齐。

@@ -2817,40 +2817,45 @@ export async function recordProcessingModelRunOutput(
   errorMessage: string | null = null,
 ) {
   const db = await database()
-  const rows = await db.select<Record<string, unknown>[]>(
-    'SELECT provider_attempts_json FROM model_runs WHERE id = $1 LIMIT 1',
-    [run.id],
-  )
-  const attempts = parseJSON<Array<Record<string, unknown>>>(
-    rows[0]?.provider_attempts_json,
-    [],
-    `model_runs.provider_attempts_json#${run.id}`,
-  )
-  attempts.push({
-    provider: run.provider,
-    model: run.model,
-    rawOutput: rawOutput.slice(0, 128 * 1024),
-    repairStrategy,
-    errorMessage: errorMessage == null ? null : redactAIError(errorMessage),
-    recordedAt: Date.now(),
-  })
-  const retainedAttempts = attempts.slice(-12)
-  const result = await db.execute(
-    `UPDATE model_runs
-     SET raw_output = $1,
-         repair_strategy = $2,
-         provider_attempts_json = $3
-     WHERE id = $4 AND status = 'processing'`,
-    [
-      rawOutput.slice(0, 2 * 1024 * 1024),
+  // 读改写必须原子：SELECT provider_attempts_json → JS 追加 → UPDATE。
+  // 若无事务包裹，两个并发 worker 会基于同一旧快照各自追加，先提交者的
+  // attempt 记录被后提交者整体覆盖丢失。事务锁保证串行化。
+  await inDatabaseTransaction(db, async () => {
+    const rows = await db.select<Record<string, unknown>[]>(
+      'SELECT provider_attempts_json FROM model_runs WHERE id = $1 LIMIT 1',
+      [run.id],
+    )
+    const attempts = parseJSON<Array<Record<string, unknown>>>(
+      rows[0]?.provider_attempts_json,
+      [],
+      `model_runs.provider_attempts_json#${run.id}`,
+    )
+    attempts.push({
+      provider: run.provider,
+      model: run.model,
+      rawOutput: rawOutput.slice(0, 128 * 1024),
       repairStrategy,
-      JSON.stringify(retainedAttempts),
-      run.id,
-    ],
-  )
-  if (result.rowsAffected !== 1) {
-    throw new Error('无法保存模型原始输出：AI Task 已不再处于处理中状态')
-  }
+      errorMessage: errorMessage == null ? null : redactAIError(errorMessage),
+      recordedAt: Date.now(),
+    })
+    const retainedAttempts = attempts.slice(-12)
+    const result = await db.execute(
+      `UPDATE model_runs
+       SET raw_output = $1,
+           repair_strategy = $2,
+           provider_attempts_json = $3
+       WHERE id = $4 AND status = 'processing'`,
+      [
+        rawOutput.slice(0, 2 * 1024 * 1024),
+        repairStrategy,
+        JSON.stringify(retainedAttempts),
+        run.id,
+      ],
+    )
+    if (result.rowsAffected !== 1) {
+      throw new Error('无法保存模型原始输出：AI Task 已不再处于处理中状态')
+    }
+  })
 }
 
 export async function failProblemAIModelRun(
