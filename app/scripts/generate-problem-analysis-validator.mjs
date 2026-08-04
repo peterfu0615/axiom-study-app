@@ -1,18 +1,25 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import Ajv from 'ajv'
+import Ajv2020 from 'ajv/dist/2020.js'
 import standaloneCode from 'ajv/dist/standalone/index.js'
 
 const validators = [
   ['problemAnalysis.schema.json', 'problemAnalysisValidator.js'],
   ['solution.schema.json', 'solutionValidator.js'],
+  ['textbookRecognition.schema.json', 'textbookRecognitionValidator.js'],
 ]
 
 for (const [schemaName, outputName] of validators) {
   const schemaUrl = new URL(`../src/ai/${schemaName}`, import.meta.url)
   const outputUrl = new URL(`../src/ai/generated/${outputName}`, import.meta.url)
   const schema = JSON.parse(await readFile(schemaUrl, 'utf8'))
-  const ajv = new Ajv({
+  // Draft 2020-12 schemas (for example textbookRecognition) need the matching
+  // Ajv class; the default Ajv only understands draft-07.
+  const validatorClass = typeof schema.$schema === 'string' && schema.$schema.includes('2020-12')
+    ? Ajv2020
+    : Ajv
+  const ajv = new validatorClass({
     allErrors: true,
     code: { esm: true, source: true },
     strict: false,

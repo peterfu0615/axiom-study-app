@@ -12,6 +12,7 @@ const response = JSON.stringify({
   volume: { value: '上册', confidence: 0.88, evidence: '上册' },
   publisher: { value: '人民教育出版社', confidence: 0.85, evidence: '人民教育出版社' },
   edition: { value: '2024 年版', confidence: 0.61, evidence: '版权页 OCR 不完整' },
+  chapters: [],
   overall_confidence: 0.86,
   warnings: ['版本字段建议确认。'],
 })
@@ -39,31 +40,6 @@ describe('textbook recognition parser', () => {
     expect(result.chapters.flatMap((chapter) => chapter.knowledgePoints).every((point) => point.chapterName)).toBe(true)
   })
 
-  it('maps legacy level two and three entries to the nearest chapter', () => {
-    const result = parseTextbookRecognition(JSON.stringify({
-      ...JSON.parse(response),
-      chapters: [
-        { title: '第一章 有理数', level: 1, page_number: 1 },
-        { title: '1.1 正数和负数', level: 2, page_number: 2 },
-        { title: '相反数', level: 3, page_number: 4 },
-      ],
-    }))
-    expect(result.chapters).toHaveLength(1)
-    expect(result.chapters[0].knowledgePoints.map((point) => point.name)).toEqual(['1.1 正数和负数', '相反数'])
-    expect(result.chapters[0].knowledgePoints.every((point) => point.chapterName === '第一章 有理数')).toBe(true)
-    expect(result.chapters.some((chapter) => chapter.title === '节')).toBe(false)
-  })
-
-  it('puts legacy knowledge before a chapter in one review-only chapter', () => {
-    const result = parseTextbookRecognition(JSON.stringify({
-      ...JSON.parse(response),
-      chapters: [{ title: '相反数', level: 2, page_number: 4 }],
-    }))
-    expect(result.chapters).toHaveLength(1)
-    expect(result.chapters[0]).toMatchObject({ title: '待归类知识点', isUnclassified: true })
-    expect(result.chapters[0].knowledgePoints[0].name).toBe('相反数')
-  })
-
   it('normalizes camelCase stored checkpoint chapters before persistence', () => {
     const chapters = normalizeTextbookRecognitionChapters({
       chapters: [
@@ -75,18 +51,61 @@ describe('textbook recognition parser', () => {
     expect(chapters[0].knowledgePoints[0].name).toBe('1.1 正数和负数')
   })
 
-  it('normalizes unavailable fields instead of inventing a value', () => {
+  it('normalizes schema-valid null metadata fields instead of inventing a value', () => {
     const result = parseTextbookRecognition(JSON.stringify({
-      title: {}, subject: {}, grade: {}, volume: {}, publisher: {}, edition: {},
-      overall_confidence: 2, warnings: 'bad',
+      title: { value: null, confidence: 0, evidence: '' },
+      subject: { value: null, confidence: 0, evidence: '' },
+      grade: { value: null, confidence: 0, evidence: '' },
+      volume: { value: null, confidence: 0, evidence: '' },
+      publisher: { value: null, confidence: 0, evidence: '' },
+      edition: { value: null, confidence: 0, evidence: '' },
+      chapters: [],
+      overall_confidence: 0.2,
+      warnings: [],
     }))
     expect(result.subject.value).toBeNull()
     expect(result.subject.confidence).toBe(0)
-    expect(result.overallConfidence).toBe(1)
+    expect(result.overallConfidence).toBe(0.2)
     expect(result.warnings).toEqual([])
   })
 
   it('rejects a response without a JSON object', () => {
     expect(() => parseTextbookRecognition('无法识别')).toThrow(TextbookRecognitionParseError)
+  })
+})
+
+describe('textbook recognition schema validation', () => {
+  it('accepts a fully valid payload', () => {
+    expect(() => parseTextbookRecognition(response)).not.toThrow()
+  })
+
+  it('rejects a payload missing required fields with an explicit parse error', () => {
+    const missing = JSON.parse(response)
+    delete missing.chapters
+    delete missing.overall_confidence
+    expect(() => parseTextbookRecognition(JSON.stringify(missing)))
+      .toThrowError(/教材识别 JSON 不符合 Schema/u)
+    expect(() => parseTextbookRecognition(JSON.stringify(missing)))
+      .toThrow(TextbookRecognitionParseError)
+  })
+
+  it('rejects a payload whose chapter omits knowledge_points', () => {
+    const invalid = {
+      ...JSON.parse(response),
+      chapters: [{ title: '第一章 有理数', level: 1, page_number: 1 }],
+    }
+    expect(() => parseTextbookRecognition(JSON.stringify(invalid)))
+      .toThrow(TextbookRecognitionParseError)
+  })
+
+  it('rejects a payload with wrong field types instead of degrading to dirty data', () => {
+    const invalid = {
+      ...JSON.parse(response),
+      subject: { value: '数学', confidence: 'high', evidence: '数学' },
+      overall_confidence: 2,
+      warnings: 'bad',
+    }
+    expect(() => parseTextbookRecognition(JSON.stringify(invalid)))
+      .toThrowError(/教材识别 JSON 不符合 Schema/u)
   })
 })

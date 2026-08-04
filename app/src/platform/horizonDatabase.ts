@@ -663,7 +663,6 @@ async function failCurriculumAttempt(
 async function runStructureStage(
   jobId: string,
   options: {
-    inFlightRequest?: ReturnType<ReturnType<typeof getTextbookRecognitionProvider>['recognizeTextbook']>
     restartActiveAttempt?: boolean
   } = {},
 ): Promise<CurriculumImportJob | null> {
@@ -687,7 +686,7 @@ async function runStructureStage(
       pages: initial.extraction?.pages ?? [],
     }
     const provider = getTextbookRecognitionProvider()
-    const result = await (options.inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
+    const result = await provider.recognizeTextbook(recognitionInput)
     const recognition = inferMissingTextbookRecognition(result.recognition, recognitionInput)
     if (!recognition.subject.value) {
       throw new Error('AI 未能识别教材科目，请在重试前检查 PDF 文字提取结果。')
@@ -845,9 +844,10 @@ export async function createCurriculumImportJob(
   }
   const now = Date.now()
   const jobId = id()
-  // Calling the provider creates the native/network request before the durable
-  // slot is inserted. Thus a crash during extraction never leaves a checkpoint.
-  const inFlightRequest = provider.recognizeTextbook(recognitionInput)
+  // The checkpoint is persisted as soon as the extraction result is durable on
+  // the job row — before any AI request leaves the process. A crash between
+  // OCR completion and AI dispatch therefore keeps the whole-book extraction;
+  // recovery reads extractionJSON from this row and never re-extracts.
   try {
     await execute(
       `INSERT INTO curriculum_import_jobs (
@@ -866,7 +866,6 @@ export async function createCurriculumImportJob(
         TEXTBOOK_RECOGNITION_SCHEMA_VERSION, await inputHash(recognitionInput), now],
     )
   } catch (error) {
-    void inFlightRequest.catch(() => {})
     await removeTextbookSource(imported.sourcePath).catch(() => {})
     throw error
   }
@@ -874,7 +873,7 @@ export async function createCurriculumImportJob(
   // durable row is already present and the stage runner owns all attempt and
   // late-result checks, so the UI can poll the single slot while this pipeline
   // advances through structure, tags, and audit in the background.
-  void runStructureStage(jobId, { inFlightRequest }).catch(async (error) => {
+  void runStructureStage(jobId).catch(async (error) => {
     await execute(
       `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
        resume_stage = 'waiting_for_review', error_message = $1,

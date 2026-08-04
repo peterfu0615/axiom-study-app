@@ -1,3 +1,5 @@
+import type { ErrorObject } from 'ajv'
+import validateTextbookRecognition from './generated/textbookRecognitionValidator.js'
 import {
   normalizeTagName,
   type TextbookChapterRecognition,
@@ -11,6 +13,13 @@ export class TextbookRecognitionParseError extends Error {
     super(message)
     this.name = 'TextbookRecognitionParseError'
   }
+}
+
+function schemaErrorMessage(errors: ErrorObject[] | null | undefined) {
+  return (errors ?? [])
+    .slice(0, 4)
+    .map((error) => `${error.instancePath || '/'} ${error.message ?? '无效'}`)
+    .join('；')
 }
 
 function extractJSONObject(value: string) {
@@ -246,6 +255,14 @@ export function parseTextbookRecognition(rawOutput: string): TextbookRecognition
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new TextbookRecognitionParseError('教材识别结果必须是对象')
+  }
+  // Enforce the same schema the provider was asked to follow. Invalid output
+  // must surface as an explicit parse failure (entering the retry path)
+  // instead of being silently degraded into dirty checkpoint data.
+  if (!validateTextbookRecognition(parsed)) {
+    throw new TextbookRecognitionParseError(
+      `教材识别 JSON 不符合 Schema：${schemaErrorMessage(validateTextbookRecognition.errors)}`,
+    )
   }
   const value = parsed as Record<string, unknown>
   const overallConfidence = typeof value.overall_confidence === 'number' && Number.isFinite(value.overall_confidence)
