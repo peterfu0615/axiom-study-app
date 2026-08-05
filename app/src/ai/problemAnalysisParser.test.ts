@@ -6,7 +6,11 @@ import {
   parseProblemAnalysis,
   ProblemAnalysisParseError,
 } from './problemAnalysisParser'
-import { PROBLEM_ANALYSIS_PROMPT } from './problemAnalysisContract'
+import {
+  PROBLEM_ANALYSIS_PROMPT,
+  PROBLEM_ANALYSIS_PROMPT_VERSION,
+  buildLockedTextbookPromptSection,
+} from './problemAnalysisContract'
 
 const valid = {
   title: '分式-选择题-化简',
@@ -162,6 +166,34 @@ describe('parseProblemAnalysis', () => {
     })()))
     expect(parsed.analysis.textbookHint).toBeNull()
     expect(parsed.repairStrategy).toBeNull()
+  })
+
+  it('declares the locked-textbook alignment rule and bumps the prompt version', () => {
+    expect(PROBLEM_ANALYSIS_PROMPT_VERSION).toBe(
+      'problem-understanding-v7-locked-textbook-context',
+    )
+    // 锁定教材对齐规则必须存在于 prompt，且 textbook_hint 可缺省语义保持不变
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('locked_textbook_json')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('用户已确认并锁定的教材')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('textbook_hint 是可选字段')
+  })
+
+  it('serializes locked textbook context as an additive prompt section', () => {
+    const section = buildLockedTextbookPromptSection({
+      title: '义务教育教科书·数学八年级下册',
+      subject: '数学',
+      grade: '八年级',
+      volume: '下册',
+      publisher: '人民教育出版社',
+      edition: null,
+    })
+    expect(section).toContain('<locked_textbook_json>')
+    expect(section).toContain('</locked_textbook_json>')
+    expect(section).toContain('"title":"义务教育教科书·数学八年级下册"')
+    expect(section).toContain('"grade":"八年级"')
+    expect(section).toContain('"volume":"下册"')
+    // 附加段以换行开头，纯附加式拼接，不改变基础 prompt 正文
+    expect(section.startsWith('\n\n<locked_textbook_json>')).toBe(true)
   })
 
   it('fills nullable textbook hint fields when a provider returns a partial object', () => {

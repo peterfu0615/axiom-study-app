@@ -15,6 +15,7 @@ import type {
 import type { TextbookRecognition } from '../domain/horizon'
 import {
   PROBLEM_ANALYSIS_PROMPT,
+  buildLockedTextbookPromptSection,
   problemAnalysisAntigravityJSONSchema,
 } from './problemAnalysisContract'
 import {
@@ -408,7 +409,11 @@ export class OpenAICompatibleProvider implements AIProvider {
         regionIds: input.regionIds,
         diagramImagePaths: input.diagramImagePaths,
         answerImagePaths: input.answerImagePaths,
-      })}\n</regions_json>`,
+      })}\n</regions_json>${
+        input.lockedTextbookContext
+          ? buildLockedTextbookPromptSection(input.lockedTextbookContext)
+          : ''
+      }`,
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
     if (response.errorMessage) {
@@ -694,7 +699,11 @@ export class AntigravityCLIProvider implements AIProvider {
         regionIds: input.regionIds,
         diagramImagePaths: input.diagramImagePaths,
         answerImagePaths: input.answerImagePaths,
-      })}\n</regions_json>`,
+      })}\n</regions_json>${
+        input.lockedTextbookContext
+          ? buildLockedTextbookPromptSection(input.lockedTextbookContext)
+          : ''
+      }`,
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
     if (response.errorMessage) {
