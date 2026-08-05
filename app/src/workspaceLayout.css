@@ -1,0 +1,48 @@
+/*
+ * Viewport-fit layout overrides for full-height workspaces.
+ *
+ * App.css gives `.workspace` a page-scrolling contract (min-height: 100vh +
+ * vertical padding + overflow: auto) while `.capture-workspace`,
+ * `.editor-workspace`, `.library-workspace` and `.settings-workspace` each
+ * declare `height: 100vh` and manage their own internal scrolling.  Nesting a
+ * 100vh child inside a padded scroller produces ~76px of redundant outer
+ * scroll at the 820x620 minimum window size.
+ *
+ * Curriculum.css already solves this with an `.app-shell:has(...)` contract;
+ * the same pattern is extended here so no App.css edit is required.  The
+ * `:has()` selectors carry higher specificity than the original class rules,
+ * so load order does not matter.
+ */
+
+.app-shell:has(> .capture-workspace),
+.app-shell:has(> .editor-workspace),
+.app-shell:has(> .library-workspace),
+.app-shell:has(> .settings-workspace) {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell:has(> .capture-workspace) > .capture-workspace,
+.app-shell:has(> .editor-workspace) > .editor-workspace,
+.app-shell:has(> .library-workspace) > .library-workspace,
+.app-shell:has(> .settings-workspace) > .settings-workspace {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * Status pill readability: 7px text and a 6px dot were illegible on the
+ * problem cards.  Keep the pill shape but raise both to a readable size.
+ */
+
+.problem-status,
+.problem-ai-status {
+  font-size: 10px;
+}
+
+.problem-ai-dot {
+  width: 8px;
+  height: 8px;
+}

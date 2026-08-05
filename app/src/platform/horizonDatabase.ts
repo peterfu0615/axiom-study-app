@@ -67,6 +67,7 @@ import {
   resolveProblemTextbook,
   type ProblemTextbookMatch,
 } from '../domain/problemTextbook'
+import { withTransactionLock } from './transactionLock'
 
 interface ExecuteResult {
   rowsAffected: number
@@ -124,6 +125,101 @@ function findPersistedKnowledgeReference(
   return inChapter ?? references.find((reference) => names.includes(normalizeTagName(reference.name))) ?? null
 }
 
+// Re-importing the same textbook must merge into the existing tree instead of
+// failing on the sibling unique index (migration 0028).  One round trip loads
+// every active node of the textbook and the JS map resolves siblings with the
+// same lower(trim()) contract as the partial unique index, so a large import
+// no longer pays one SELECT per chapter/point.  Loading more folded forms in
+// JS than SQLite lower() folds only increases reuse, and a reuse never
+// inserts, so the direction is safe.
+async function loadActiveKnowledgeSiblings(textbookId: string) {
+  const rows = await select<Array<{
+    id: string
+    parent_id: string | null
+    canonical_name: string
+    created_at: number
+  }>>(
+    `SELECT id, parent_id, canonical_name, created_at FROM knowledge_nodes
+     WHERE textbook_id = $1 AND archived_at IS NULL AND merged_into_id IS NULL
+     ORDER BY created_at, id`,
+    [textbookId],
+  )
+  const siblingKey = (parentId: string | null, canonicalName: string) =>
+    `${parentId ?? ''}\u0000${canonicalName.trim().toLowerCase()}`
+  const siblings = new Map<string, string>()
+  for (const row of rows) {
+    const key = siblingKey(nullableString(row.parent_id), String(row.canonical_name))
+    // ORDER BY created_at, id mirrors the legacy per-node LIMIT 1 keeper rule.
+    if (!siblings.has(key)) siblings.set(key, String(row.id))
+  }
+  return { siblings, siblingKey }
+}
+
+// SQLite's default variable limit is generous on bundled builds, but chunking
+// keeps every statement small enough for any historical 999-parameter build.
+const INSERT_BATCH_ROWS = 50
+
+async function executeBatchedInsert(
+  prefix: string,
+  tuple: string,
+  paramCount: number,
+  rows: unknown[][],
+) {
+  for (let start = 0; start < rows.length; start += INSERT_BATCH_ROWS) {
+    const chunk = rows.slice(start, start + INSERT_BATCH_ROWS)
+    const tuples = chunk.map((_, index) => rebaseTuple(tuple, index * paramCount)).join(', ')
+    await execute(`${prefix} VALUES ${tuples}`, chunk.flat())
+  }
+}
+
+const KNOWLEDGE_NODE_INSERT_COLUMNS =
+  `INSERT INTO knowledge_nodes (
+    id, textbook_id, subject, canonical_name, node_type, parent_id, path,
+    sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
+    extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
+  )`
+// Tuple parameter order matches the row arrays assembled below.  Chapter rows
+// pass the title twice (canonical_name + path) and now twice to avoid reusing
+// positional placeholders inside multi-row statements.
+const CHAPTER_INSERT_PARAM_COUNT = 15
+const POINT_INSERT_PARAM_COUNT = 16
+const CHAPTER_INSERT_TUPLE =
+  `($1, $2, $3, $4, 'chapter', NULL, $5, $6, NULL, $7, $8, $9, $10, $11, $12,
+    'needs_review', $13, $14, $15)`
+const POINT_INSERT_TUPLE =
+  `($1, $2, $3, $4, 'knowledge', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    'needs_review', 0, $15, $16)`
+
+function rebaseTuple(tuple: string, offset: number) {
+  return tuple.replace(/\$(\d+)/gu, (_, index: string) => `$${Number(index) + offset}`)
+}
+
+const TEXTBOOK_PAGE_INSERT_COLUMNS =
+  `INSERT INTO textbook_pages (
+    id, textbook_id, subject, page_number, evidence_text, source_path,
+    extraction_method, confidence, verification_status, created_at, updated_at
+  )`
+const PAGE_INSERT_PARAM_COUNT = 10
+const PAGE_INSERT_TUPLE = `($1, $2, $3, $4, $5, $6, $7, $8, 'needs_review', $9, $10)`
+
+async function insertTextbookPages(input: {
+  textbookId: string
+  subject: string
+  sourcePath: string
+  now: number
+  pages: ImportedTextbookSource['extraction']['pages']
+}) {
+  await executeBatchedInsert(
+    TEXTBOOK_PAGE_INSERT_COLUMNS,
+    PAGE_INSERT_TUPLE,
+    PAGE_INSERT_PARAM_COUNT,
+    input.pages.map((page) => [
+      id(), input.textbookId, input.subject, page.pageNumber, page.evidenceText,
+      input.sourcePath, page.extractionMethod, page.confidence, input.now, input.now,
+    ]),
+  )
+}
+
 async function persistNormalizedKnowledgeNodes(input: {
   textbookId: string
   subject: string
@@ -133,38 +229,56 @@ async function persistNormalizedKnowledgeNodes(input: {
   structure: NormalizedCurriculumChapter[]
 }) {
   const references: PersistedKnowledgeReference[] = []
+  const { siblings, siblingKey } = await loadActiveKnowledgeSiblings(input.textbookId)
+  const chapterRows: unknown[][] = []
+  const pointRows: unknown[][] = []
   for (const [chapterIndex, chapter] of input.structure.entries()) {
-    const chapterId = id()
-    await execute(
-      `INSERT INTO knowledge_nodes (
-        id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-        sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
-        extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, 'chapter', NULL, $4, $5, NULL, $6, $7, $8, $9, $10,
-        $11, 'needs_review', $12, $13, $13)`,
-      [chapterId, input.textbookId, input.subject, chapter.title, chapterIndex,
-        chapter.pageStart, chapter.pageEnd, chapter.evidenceText, input.sourcePath,
-        input.extractionMethod, chapter.confidence, chapter.isUnclassified ? 1 : 0, input.now],
-    )
+    const chapterKey = siblingKey(null, chapter.title)
+    let chapterId = siblings.get(chapterKey)
+    if (!chapterId) {
+      chapterId = id()
+      // Register immediately so a later sibling in the same import resolves to
+      // this row instead of colliding with it on the unique index.
+      siblings.set(chapterKey, chapterId)
+      chapterRows.push([
+        chapterId, input.textbookId, input.subject, chapter.title, chapter.title,
+        chapterIndex, chapter.pageStart, chapter.pageEnd, chapter.evidenceText,
+        input.sourcePath, input.extractionMethod, chapter.confidence,
+        chapter.isUnclassified ? 1 : 0, input.now, input.now,
+      ])
+    }
     for (const [sortOrder, point] of chapter.knowledgePoints.entries()) {
-      const nodeId = id()
       const pageStart = point.pageNumbers[0] ?? null
       const pageEnd = point.pageNumbers.at(-1) ?? null
-      await execute(
-        `INSERT INTO knowledge_nodes (
-          id, textbook_id, subject, canonical_name, node_type, parent_id, path,
-          sort_order, description, source_page_start, source_page_end, evidence_text, source_path,
-          extraction_method, confidence, verification_status, is_unclassified, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, 'knowledge', $5, $6, $7, $8, $9, $10, $11, $12,
-          $13, $14, 'needs_review', 0, $15, $15)`,
-        [nodeId, input.textbookId, input.subject, point.name, chapterId,
-          `${chapter.title}/${point.name}`, sortOrder, point.description, pageStart,
-          pageEnd, point.evidenceText, input.sourcePath, input.extractionMethod,
-          point.confidence, input.now],
-      )
+      const pointKey = siblingKey(chapterId, point.name)
+      const existingNodeId = siblings.get(pointKey)
+      if (existingNodeId) {
+        references.push({ id: existingNodeId, chapterIndex, name: point.name, pageNumbers: point.pageNumbers })
+        continue
+      }
+      const nodeId = id()
+      siblings.set(pointKey, nodeId)
+      pointRows.push([
+        nodeId, input.textbookId, input.subject, point.name, chapterId,
+        `${chapter.title}/${point.name}`, sortOrder, point.description, pageStart,
+        pageEnd, point.evidenceText, input.sourcePath, input.extractionMethod,
+        point.confidence, input.now, input.now,
+      ])
       references.push({ id: nodeId, chapterIndex, name: point.name, pageNumbers: point.pageNumbers })
     }
   }
+  await executeBatchedInsert(
+    KNOWLEDGE_NODE_INSERT_COLUMNS,
+    CHAPTER_INSERT_TUPLE,
+    CHAPTER_INSERT_PARAM_COUNT,
+    chapterRows,
+  )
+  await executeBatchedInsert(
+    KNOWLEDGE_NODE_INSERT_COLUMNS,
+    POINT_INSERT_TUPLE,
+    POINT_INSERT_PARAM_COUNT,
+    pointRows,
+  )
   return references
 }
 
@@ -174,13 +288,13 @@ async function inputHash(value: unknown) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-let transactionChain = Promise.resolve()
-
 async function transaction<T>(operation: () => Promise<T>): Promise<T> {
   // db_execute is serialized per IPC call in Rust, not for the lifetime of a
-  // SQLite transaction.  Queue every Horizon transaction in this module so a
-  // second BEGIN cannot land between the first transaction's statements.
-  const next = transactionChain.then(async () => {
+  // SQLite transaction.  Queue every Horizon transaction on the lock shared
+  // with database.ts (see ./transactionLock) so a second BEGIN cannot land
+  // between the first transaction's statements — including BEGINs opened by
+  // the other module on the same single sqlx connection.
+  return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
       const value = await operation()
@@ -191,8 +305,6 @@ async function transaction<T>(operation: () => Promise<T>): Promise<T> {
       throw error
     }
   })
-  transactionChain = next.then(() => undefined, () => undefined)
-  return next
 }
 
 async function ensureTaxonomyVersion(subject: string): Promise<number> {
@@ -493,19 +605,10 @@ export async function importTextbook(
         now,
       ],
     )
-    for (const page of imported.extraction.pages) {
-      await execute(
-        `INSERT INTO textbook_pages (
-          id, textbook_id, subject, page_number, evidence_text, source_path,
-          extraction_method, confidence, verification_status, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'needs_review', $9, $9)`,
-        [
-          id(), textbookId, subject.trim(), page.pageNumber,
-          page.evidenceText, imported.sourcePath, page.extractionMethod,
-          page.confidence, now,
-        ],
-      )
-    }
+    await insertTextbookPages({
+      textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
+      now, pages: imported.extraction.pages,
+    })
     await persistNormalizedKnowledgeNodes({
       textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
       extractionMethod: imported.extraction.extractionMethod, now,
@@ -634,7 +737,6 @@ async function failCurriculumAttempt(
 async function runStructureStage(
   jobId: string,
   options: {
-    inFlightRequest?: ReturnType<ReturnType<typeof getTextbookRecognitionProvider>['recognizeTextbook']>
     restartActiveAttempt?: boolean
   } = {},
 ): Promise<CurriculumImportJob | null> {
@@ -658,7 +760,7 @@ async function runStructureStage(
       pages: initial.extraction?.pages ?? [],
     }
     const provider = getTextbookRecognitionProvider()
-    const result = await (options.inFlightRequest ?? provider.recognizeTextbook(recognitionInput))
+    const result = await provider.recognizeTextbook(recognitionInput)
     const recognition = inferMissingTextbookRecognition(result.recognition, recognitionInput)
     if (!recognition.subject.value) {
       throw new Error('AI 未能识别教材科目，请在重试前检查 PDF 文字提取结果。')
@@ -816,9 +918,10 @@ export async function createCurriculumImportJob(
   }
   const now = Date.now()
   const jobId = id()
-  // Calling the provider creates the native/network request before the durable
-  // slot is inserted. Thus a crash during extraction never leaves a checkpoint.
-  const inFlightRequest = provider.recognizeTextbook(recognitionInput)
+  // The checkpoint is persisted as soon as the extraction result is durable on
+  // the job row — before any AI request leaves the process. A crash between
+  // OCR completion and AI dispatch therefore keeps the whole-book extraction;
+  // recovery reads extractionJSON from this row and never re-extracts.
   try {
     await execute(
       `INSERT INTO curriculum_import_jobs (
@@ -837,7 +940,6 @@ export async function createCurriculumImportJob(
         TEXTBOOK_RECOGNITION_SCHEMA_VERSION, await inputHash(recognitionInput), now],
     )
   } catch (error) {
-    void inFlightRequest.catch(() => {})
     await removeTextbookSource(imported.sourcePath).catch(() => {})
     throw error
   }
@@ -845,7 +947,7 @@ export async function createCurriculumImportJob(
   // durable row is already present and the stage runner owns all attempt and
   // late-result checks, so the UI can poll the single slot while this pipeline
   // advances through structure, tags, and audit in the background.
-  void runStructureStage(jobId, { inFlightRequest }).catch(async (error) => {
+  void runStructureStage(jobId).catch(async (error) => {
     await execute(
       `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
        resume_stage = 'waiting_for_review', error_message = $1,
@@ -958,20 +1060,31 @@ async function persistImportedTextbook(
         imported.contentHash, imported.extraction.extractionMethod, now,
       ],
     )
-    for (const page of imported.extraction.pages) {
-      await execute(
-        `INSERT INTO textbook_pages (
-          id, textbook_id, subject, page_number, evidence_text, source_path,
-          extraction_method, confidence, verification_status, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'needs_review', $9, $9)`,
-        [id(), textbookId, subject, page.pageNumber, page.evidenceText, imported.sourcePath,
-          page.extractionMethod, page.confidence, now],
-      )
-    }
+    await insertTextbookPages({
+      textbookId, subject, sourcePath: imported.sourcePath,
+      now, pages: imported.extraction.pages,
+    })
     const references = await persistNormalizedKnowledgeNodes({
       textbookId, subject, sourcePath: imported.sourcePath,
       extractionMethod: imported.extraction.extractionMethod, now, structure,
     })
+    // One round trip loads the subject's tag namespace so new candidates can
+    // skip both the INSERT OR IGNORE and the per-candidate SELECT-back that a
+    // large import would otherwise pay for every candidate.  Keys mirror the
+    // legacy `canonical_name = ? COLLATE NOCASE` lookup.  Everything runs
+    // inside this BEGIN IMMEDIATE single-connection transaction, so no other
+    // writer can insert between the lookup and the insert.
+    const existingTagRows = await select<Array<{ id: string; tag_type: string; canonical_name: string }>>(
+      `SELECT id, tag_type, canonical_name FROM tag_definitions WHERE subject = $1`,
+      [subject],
+    )
+    const existingTags = new Map<string, string>()
+    const tagKey = (tagType: string, canonicalName: string) =>
+      `${tagType}\u0000${canonicalName.toLowerCase()}`
+    for (const row of existingTagRows) {
+      const key = tagKey(String(row.tag_type), String(row.canonical_name))
+      if (!existingTags.has(key)) existingTags.set(key, String(row.id))
+    }
     for (const candidate of acceptedCandidates) {
       const reference = findPersistedKnowledgeReference(candidate, structure, references)
       const knowledgeNodeId = candidate.tagType === 'knowledge' ? reference?.id ?? null : null
@@ -998,26 +1111,23 @@ async function persistImportedTextbook(
         }
         continue
       }
-      const tagId = id()
-      const legacySource = candidate.origin === 'textbook_extracted' ? 'textbook' : 'model'
-      await execute(
-        `INSERT OR IGNORE INTO tag_definitions (
-          id, subject, tag_type, canonical_name, description, knowledge_node_id,
-          source, origin_kind, taxonomy_version, verification_status, lifecycle_status,
-          method_class, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'needs_review', 'candidate',
-          $9, $10, $10)`,
-        [tagId, subject, candidate.tagType, candidate.canonicalName, candidate.description,
-          knowledgeNodeId, legacySource, candidate.origin,
-          candidate.tagType === 'method' ? 'optional' : null, now],
-      )
-      const tagRows = await select<Array<{ id: string }>>(
-        `SELECT id FROM tag_definitions WHERE subject = $1 AND tag_type = $2
-         AND canonical_name = $3 COLLATE NOCASE LIMIT 1`,
-        [subject, candidate.tagType, candidate.canonicalName],
-      )
-      const persistedTagId = tagRows[0]?.id
-      if (!persistedTagId) continue
+      let persistedTagId = existingTags.get(tagKey(candidate.tagType, candidate.canonicalName))
+      if (!persistedTagId) {
+        persistedTagId = id()
+        existingTags.set(tagKey(candidate.tagType, candidate.canonicalName), persistedTagId)
+        const legacySource = candidate.origin === 'textbook_extracted' ? 'textbook' : 'model'
+        await execute(
+          `INSERT OR IGNORE INTO tag_definitions (
+            id, subject, tag_type, canonical_name, description, knowledge_node_id,
+            source, origin_kind, taxonomy_version, verification_status, lifecycle_status,
+            method_class, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'needs_review', 'candidate',
+            $9, $10, $10)`,
+          [persistedTagId, subject, candidate.tagType, candidate.canonicalName, candidate.description,
+            knowledgeNodeId, legacySource, candidate.origin,
+            candidate.tagType === 'method' ? 'optional' : null, now],
+        )
+      }
       for (const alias of candidate.aliases) await execute(
         `INSERT OR IGNORE INTO tag_aliases (id, subject, tag_id, alias, source, created_at)
          VALUES ($1, $2, $3, $4, 'model', $5)`,
@@ -1281,6 +1391,76 @@ export async function archiveKnowledgeNode(node: KnowledgeNode) {
      WHERE id = $2 AND subject = $3`,
     [Date.now(), node.id, node.subject],
   )
+}
+
+export interface TextbookDeletionImpact {
+  chapterCount: number
+  knowledgeCount: number
+  pageCount: number
+  matchedProblemCount: number
+}
+
+// Mirrors the knowledge-point filter used by CurriculumWorkspace so the
+// deletion impact preview matches what the user sees in the summary panel.
+const KNOWLEDGE_POINT_NODE_TYPES = ['knowledge', 'definition', 'formula', 'theorem', 'property']
+
+export async function getTextbookDeletionImpact(textbookId: string): Promise<TextbookDeletionImpact> {
+  const [nodeRows, pageRows, problemRows] = await Promise.all([
+    select<Array<{ node_type: string; count: number }>>(
+      `SELECT node_type, COUNT(*) AS count FROM knowledge_nodes
+       WHERE textbook_id = $1 AND archived_at IS NULL
+       GROUP BY node_type`,
+      [textbookId],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT COUNT(*) AS count FROM textbook_pages WHERE textbook_id = $1`,
+      [textbookId],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT COUNT(*) AS count FROM problems
+       WHERE matched_textbook_id = $1 AND deleted_at IS NULL`,
+      [textbookId],
+    ),
+  ])
+  let chapterCount = 0
+  let knowledgeCount = 0
+  for (const row of nodeRows) {
+    const count = Number(row.count)
+    if (row.node_type === 'chapter') chapterCount += count
+    else if (KNOWLEDGE_POINT_NODE_TYPES.includes(String(row.node_type))) knowledgeCount += count
+  }
+  return {
+    chapterCount,
+    knowledgeCount,
+    pageCount: Number(pageRows[0]?.count ?? 0),
+    matchedProblemCount: Number(problemRows[0]?.count ?? 0),
+  }
+}
+
+export async function archiveTextbook(textbookId: string): Promise<boolean> {
+  const now = Date.now()
+  return transaction(async () => {
+    // Soft delete keeps every row intact, so FK references and audit history
+    // survive; all list queries already filter archived_at IS NULL.
+    const archived = await execute(
+      `UPDATE textbooks SET archived_at = $1, is_current = 0, updated_at = $1
+       WHERE id = $2 AND archived_at IS NULL`,
+      [now, textbookId],
+    )
+    if (archived.rowsAffected === 0) return false
+    // Locked matches are the user's explicit choice and survive the deletion;
+    // unlocked matches point at a course that no longer exists, so release
+    // them back to unresolved.  NEW.matched_textbook_id is NULL here, so the
+    // subject consistency trigger never fires.
+    await execute(
+      `UPDATE problems SET matched_textbook_id = NULL, textbook_match_confidence = 0,
+       textbook_match_reason = '教材已删除', textbook_match_source = 'unresolved',
+       textbook_match_locked = 0, textbook_match_updated_at = $1, updated_at = $1
+       WHERE matched_textbook_id = $2 AND textbook_match_locked = 0`,
+      [now, textbookId],
+    )
+    return true
+  })
 }
 
 export { mergeKnowledgeNodes }
@@ -1754,11 +1934,28 @@ export async function confirmProblemDifficulty(
   )
 }
 
-export async function applyControlledProblemAnalysis(
+// 受控标签映射拆成两个阶段：
+// - prepare：只读（题目科目、教材、标签定义），可在事务外安全执行；
+//   科目缺失或 AI 科目与题目不符时返回 null（沿用历史 no-op 语义）。
+// - write：纯 SQL 写入，不自行开启事务，由调用方决定事务边界。
+// 这样 completeProblemAIModelRun 能把映射并入同一事务：映射失败时整体回滚，
+// 题目回到可重试状态，而不是「completed 但无标签」的静默假成功。
+export interface ControlledProblemAnalysisPlan {
+  problemId: string
+  modelRunId: string
+  subject: string
+  now: number
+  textbookMatch: ProblemTextbookMatch
+  definitions: TagDefinition[]
+  candidateGroups: Array<[HorizonTagType, AIProblemAnalysis['knowledgeTags']]>
+  difficulty: AIProblemAnalysis['difficulty']
+}
+
+export async function prepareControlledProblemAnalysis(
   problemId: string,
   modelRunId: string,
   analysis: AIProblemAnalysis,
-) {
+): Promise<ControlledProblemAnalysisPlan | null> {
   const problems = await select<Array<{
     effective_subject: string
     matched_textbook_id: string | null
@@ -1770,9 +1967,9 @@ export async function applyControlledProblemAnalysis(
     [problemId],
   )
   const subject = String(problems[0]?.effective_subject || '')
-  if (!subject) return
+  if (!subject) return null
   if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
-    return
+    return null
   }
   const textbooks = (await select<Record<string, unknown>[]>(
     `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
@@ -1788,83 +1985,110 @@ export async function applyControlledProblemAnalysis(
     legacyCurrentTextbookId,
   })
   const definitions = await listTagDefinitions(subject)
-  const taxonomyVersion = await ensureTaxonomyVersion(subject)
-  const candidateGroups: Array<[HorizonTagType, typeof analysis.knowledgeTags]> = [
-    ['knowledge', analysis.knowledgeTags ?? []],
-    ['method', analysis.methodTags ?? []],
-    ['model', analysis.modelTags ?? []],
-    ['error', analysis.errorCategories ?? []],
-  ]
-  const now = Date.now()
-  await transaction(async () => {
-    if (Number(problems[0]?.textbook_match_locked ?? 0) !== 1) {
-      await execute(
-        `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
-         textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
-         textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
-        [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
-          textbookMatch.source, now, problemId],
-      )
-    }
+  return {
+    problemId,
+    modelRunId,
+    subject,
+    now: Date.now(),
+    textbookMatch,
+    definitions,
+    candidateGroups: [
+      ['knowledge', analysis.knowledgeTags ?? []],
+      ['method', analysis.methodTags ?? []],
+      ['model', analysis.modelTags ?? []],
+      ['error', analysis.errorCategories ?? []],
+    ],
+    difficulty: analysis.difficulty ?? null,
+  }
+}
+
+// 必须在调用方已开启的事务内执行（本函数不 BEGIN/COMMIT）。
+export async function writeControlledProblemAnalysis(
+  plan: ControlledProblemAnalysisPlan,
+) {
+  const { problemId, modelRunId, subject, now, textbookMatch, definitions } = plan
+  const locked = await select<Array<{ textbook_match_locked: number }>>(
+    `SELECT textbook_match_locked FROM problems WHERE id = $1`,
+    [problemId],
+  )
+  if (Number(locked[0]?.textbook_match_locked ?? 0) !== 1) {
     await execute(
-      `UPDATE problem_tags SET superseded_at = $1, updated_at = $1
-       WHERE problem_id = $2 AND superseded_at IS NULL AND source = 'model'
-         AND is_locked = 0 AND verification_status != 'user_verified'`,
-      [now, problemId],
+      `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
+       textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
+       textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
+      [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
+        textbookMatch.source, now, problemId],
     )
-    for (const [tagType, candidates = []] of candidateGroups) {
-      const mappings = mapCandidatesToControlledTags(
-        subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
-      )
-      for (const mapping of mappings) {
-        if (!mapping.definition) {
-          await execute(
-            `INSERT OR IGNORE INTO tag_definitions (
-              id, subject, tag_type, canonical_name, source, verification_status,
-              lifecycle_status, method_class, taxonomy_version, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, 'model', 'needs_review', 'candidate', $5, $6, $7, $7)`,
-            [id(), subject, tagType, mapping.candidate.name,
-              tagType === 'method' ? (mapping.candidate.role === 'primary' ? 'core' : 'optional') : null,
-              taxonomyVersion, now],
-          )
-        }
+  }
+  await execute(
+    `UPDATE problem_tags SET superseded_at = $1, updated_at = $1
+     WHERE problem_id = $2 AND superseded_at IS NULL AND source = 'model'
+       AND is_locked = 0 AND verification_status != 'user_verified'`,
+    [now, problemId],
+  )
+  const taxonomyVersion = await ensureTaxonomyVersion(subject)
+  for (const [tagType, candidates = []] of plan.candidateGroups) {
+    const mappings = mapCandidatesToControlledTags(
+      subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
+    )
+    for (const mapping of mappings) {
+      if (!mapping.definition) {
         await execute(
-          `INSERT OR IGNORE INTO problem_tags (
-            id, problem_id, subject, tag_type, tag_id, candidate_name, role,
-            mapping_status, confidence, evidence, source, taxonomy_version,
-            model_run_id, verification_status, is_locked, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'model', $11,
-            $12, $13, 0, $14, $14)`,
-          [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
-            mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
-            mapping.mappingStatus, mapping.candidate.confidence, mapping.candidate.evidence,
-            mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,
-            mapping.verificationStatus, now],
+          `INSERT OR IGNORE INTO tag_definitions (
+            id, subject, tag_type, canonical_name, source, verification_status,
+            lifecycle_status, method_class, taxonomy_version, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, 'model', 'needs_review', 'candidate', $5, $6, $7, $7)`,
+          [id(), subject, tagType, mapping.candidate.name,
+            tagType === 'method' ? (mapping.candidate.role === 'primary' ? 'core' : 'optional') : null,
+            taxonomyVersion, now],
         )
       }
-    }
-    const existingLockedDifficulty = await select<Array<{ id: string }>>(
-      `SELECT id FROM problem_difficulties WHERE problem_id = $1
-       AND superseded_at IS NULL AND (is_locked = 1 OR verification_status = 'user_verified')`,
-      [problemId],
-    )
-    if (analysis.difficulty && existingLockedDifficulty.length === 0) {
       await execute(
-        `UPDATE problem_difficulties SET superseded_at = $1, updated_at = $1
-         WHERE problem_id = $2 AND superseded_at IS NULL`,
-        [now, problemId],
-      )
-      await execute(
-        `INSERT INTO problem_difficulties (
-          id, problem_id, subject, level, score, reason, confidence, source,
+        `INSERT OR IGNORE INTO problem_tags (
+          id, problem_id, subject, tag_type, tag_id, candidate_name, role,
+          mapping_status, confidence, evidence, source, taxonomy_version,
           model_run_id, verification_status, is_locked, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'model', $8, $9, 0, $10, $10)`,
-        [id(), problemId, subject, analysis.difficulty.level, analysis.difficulty.score,
-          analysis.difficulty.reason, analysis.difficulty.confidence, modelRunId,
-          analysis.difficulty.confidence >= 0.72 ? 'ai_verified' : 'needs_review', now],
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'model', $11,
+          $12, $13, 0, $14, $14)`,
+        [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
+          mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
+          mapping.mappingStatus, mapping.candidate.confidence, mapping.candidate.evidence,
+          mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,
+          mapping.verificationStatus, now],
       )
     }
-  })
+  }
+  const existingLockedDifficulty = await select<Array<{ id: string }>>(
+    `SELECT id FROM problem_difficulties WHERE problem_id = $1
+     AND superseded_at IS NULL AND (is_locked = 1 OR verification_status = 'user_verified')`,
+    [problemId],
+  )
+  if (plan.difficulty && existingLockedDifficulty.length === 0) {
+    await execute(
+      `UPDATE problem_difficulties SET superseded_at = $1, updated_at = $1
+       WHERE problem_id = $2 AND superseded_at IS NULL`,
+      [now, problemId],
+    )
+    await execute(
+      `INSERT INTO problem_difficulties (
+        id, problem_id, subject, level, score, reason, confidence, source,
+        model_run_id, verification_status, is_locked, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'model', $8, $9, 0, $10, $10)`,
+      [id(), problemId, subject, plan.difficulty.level, plan.difficulty.score,
+        plan.difficulty.reason, plan.difficulty.confidence, modelRunId,
+        plan.difficulty.confidence >= 0.72 ? 'ai_verified' : 'needs_review', now],
+    )
+  }
+}
+
+export async function applyControlledProblemAnalysis(
+  problemId: string,
+  modelRunId: string,
+  analysis: AIProblemAnalysis,
+) {
+  const plan = await prepareControlledProblemAnalysis(problemId, modelRunId, analysis)
+  if (!plan) return
+  await transaction(() => writeControlledProblemAnalysis(plan))
 }
 
 export interface RelabelBatch {
@@ -2219,11 +2443,34 @@ export async function cancelRelabelBatch(batchId: string) {
          AND status IN ('pending', 'processing')`,
       [batchId],
     )
+    // relabel 与主管线共享 problems/model_runs：取消只应撤回 relabel 引入的
+    // pending/processing 状态，绝不能把错题标记为 AI 分析失败。恢复规则：
+    // 该错题仍有已完成的分析 run → 'completed'（活跃 run 指回最近完成的一条，
+    // 保证后续重跑/展示链路一致）；否则回到 'not_started'。
     await execute(
-      `UPDATE problems SET ai_status = 'failed', ai_active_model_run_id = NULL, updated_at = $1
-       WHERE ai_active_model_run_id IN (
-         SELECT model_run_id FROM tag_relabel_items WHERE batch_id = $2
-       )`,
+      `UPDATE problems
+       SET ai_status = CASE
+             WHEN EXISTS (
+               SELECT 1 FROM model_runs run
+               WHERE run.problem_id = problems.id
+                 AND run.task_type = 'analyze_problem_image'
+                 AND run.status = 'completed'
+             ) THEN 'completed'
+             ELSE 'not_started' END,
+           ai_active_model_run_id = (
+             SELECT run.id FROM model_runs run
+             WHERE run.problem_id = problems.id
+               AND run.task_type = 'analyze_problem_image'
+               AND run.status = 'completed'
+             ORDER BY run.created_at DESC, run.id DESC
+             LIMIT 1
+           ),
+           updated_at = $1
+       WHERE ai_status IN ('pending', 'processing')
+         AND ai_active_model_run_id IN (
+           SELECT model_run_id FROM tag_relabel_items
+           WHERE batch_id = $2 AND model_run_id IS NOT NULL
+         )`,
       [now, batchId],
     )
     await execute(

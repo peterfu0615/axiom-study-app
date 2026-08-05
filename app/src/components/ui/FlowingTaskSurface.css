@@ -2,6 +2,10 @@
   position: relative;
   width: min(100%, 620px);
   min-width: 0;
+  /* Self-contained centering fallback: parents may rely on justify-self
+     conventions, but the surface must center itself in any block or grid
+     container.  The is-full-width stretch variant resolves margins to 0. */
+  margin-inline: auto;
   display: grid;
   gap: 16px;
   overflow: hidden;

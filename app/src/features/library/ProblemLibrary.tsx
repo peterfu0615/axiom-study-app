@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ModelRun,
   NormalizedRect,
@@ -215,6 +215,20 @@ export function ProblemLibrary() {
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss } = useToast()
+  // Event listeners must not be re-armed on every selection change, so they
+  // read the current selection/view through refs instead of closing over them.
+  const selectedIdRef = useRef<string | null>(null)
+  const viewRef = useRef<LibraryView>('active')
+  // A quiet refresh failure leaves the list potentially stale.  Remember it so
+  // the next event-driven refresh becomes a visible (non-quiet) one.
+  const dirtyRef = useRef(false)
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId
+  }, [selectedId])
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
 
   const refresh = useCallback(async (
     nextView: LibraryView,
@@ -227,6 +241,7 @@ export function ProblemLibrary() {
     try {
       const next = await listSavedProblems(nextView === 'archived')
       setProblems(next)
+      dirtyRef.current = false
       setSelectedId((current) =>
         current && next.some((problem) => problem.id === current)
           ? current
@@ -237,6 +252,12 @@ export function ProblemLibrary() {
         setProblems([])
         setSelectedId(null)
         notify(`读取错题库失败：${String(error)}`, 'error')
+      } else {
+        dirtyRef.current = true
+        console.warn(
+          '错题库静默刷新失败，将在下次交互时强制刷新：',
+          error,
+        )
       }
     } finally {
       if (!quietly) setLoading(false)
@@ -251,36 +272,59 @@ export function ProblemLibrary() {
     const handleSolutionStatus = (event: Event) => {
       const problemId = (event as CustomEvent<{ problemId?: string }>).detail
         ?.problemId
-      if (!problemId || problemId !== selectedId) return
-      void getProblemSolution(problemId).then(setSolution)
+      if (!problemId) return
+      if (problemId === selectedIdRef.current) {
+        void getProblemSolution(problemId)
+          .then(setSolution)
+          .catch((error) => {
+            dirtyRef.current = true
+            console.warn(
+              `同步题目 ${problemId} 的解答失败，列表将强制刷新：`,
+              error,
+            )
+          })
+      }
+      void refresh(viewRef.current, !dirtyRef.current)
     }
     window.addEventListener(SOLUTION_STATUS_EVENT, handleSolutionStatus)
     return () =>
       window.removeEventListener(SOLUTION_STATUS_EVENT, handleSolutionStatus)
-  }, [selectedId])
+  }, [refresh])
 
   useEffect(() => {
     const handleIntelligenceStatus = (event: Event) => {
       const problemId = (event as CustomEvent<{ problemId?: string }>).detail
         ?.problemId
-      if (!problemId || problemId !== selectedId) return
-      void Promise.all([
-        getStudentAttempt(problemId),
-        getReasoningAnalysis(problemId),
-      ]).then(([attempt, analysis]) => {
-        setStudentAttempt(attempt)
-        setReasoning(analysis)
-      })
+      if (!problemId) return
+      if (problemId === selectedIdRef.current) {
+        void Promise.all([
+          getStudentAttempt(problemId),
+          getReasoningAnalysis(problemId),
+        ])
+          .then(([attempt, analysis]) => {
+            setStudentAttempt(attempt)
+            setReasoning(analysis)
+          })
+          .catch((error) => {
+            dirtyRef.current = true
+            console.warn(
+              `同步题目 ${problemId} 的作答/解析失败，列表将强制刷新：`,
+              error,
+            )
+          })
+      }
+      void refresh(viewRef.current, !dirtyRef.current)
     }
     window.addEventListener(INTELLIGENCE_STATUS_EVENT, handleIntelligenceStatus)
     return () => window.removeEventListener(INTELLIGENCE_STATUS_EVENT, handleIntelligenceStatus)
-  }, [selectedId])
+  }, [refresh])
 
   useEffect(() => {
-    const handleAIStatus = () => void refresh(view, true)
+    const handleAIStatus = () =>
+      void refresh(viewRef.current, !dirtyRef.current)
     window.addEventListener(AI_STATUS_EVENT, handleAIStatus)
     return () => window.removeEventListener(AI_STATUS_EVENT, handleAIStatus)
-  }, [refresh, view])
+  }, [refresh])
 
   const selected = useMemo(
     () => problems.find((problem) => problem.id === selectedId) ?? null,
@@ -358,7 +402,11 @@ export function ProblemLibrary() {
         setStudentAttempt(attempt)
         setReasoning(analysis)
       }
-    }).catch(() => {})
+    }).catch((error) => {
+      if (!cancelled) {
+        console.warn(`读取题目 ${selectedId} 的作答/解析失败：`, error)
+      }
+    })
     return () => {
       cancelled = true
     }

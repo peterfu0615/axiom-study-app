@@ -3,7 +3,7 @@
 Axiom 是一款 macOS 桌面应用，用于智能整理与复习学生错题（错题本）。基于 Tauri 2、React 19、TypeScript、Rust 和 SQLite 构建，集成 Apple Vision OCR、Core Image 透视矫正与多 AI 服务商智能分析。
 
 - Bundle ID：`com.axiom.study`
-- 当前版本：0.1.0（Beta）
+- 当前版本：0.4.5（Beta）
 - 架构：仅 Apple Silicon（arm64）
 
 ## 截图
@@ -21,7 +21,7 @@ UI 截图位于 `app/docs/screenshots/`，包括题目库主界面、Antigravity
 - 暗色模式、KaTeX 数学公式渲染
 - 媒体垃圾回收（original / corrected / problems / diagrams 四类目录）
 - AIJob 状态机与启动恢复
-- API Key 安全存储于 macOS Keychain
+- API Key 持久化于本地 SQLite（不回传前端，日志不落密钥）
 
 ## 环境要求
 
@@ -49,7 +49,7 @@ npm run tauri -- build
 
 产物位于 `app/src-tauri/target/release/bundle/`：
 - `macos/Axiom.app`
-- `dmg/Axiom_0.1.0_aarch64.dmg`
+- `dmg/Axiom_0.4.5_aarch64.dmg`
 
 ## 测试与检查
 
@@ -82,8 +82,8 @@ app/
   src-tauri/
     native/          Apple Vision / Core Image Swift 处理器（编译为 sidecar）
     binaries/        构建时生成的 sidecar 二进制
-    migrations/      追加式 SQLite 迁移（0001–0015）
-    src/             Rust 命令、数据库、AI 编排、Keychain
+    migrations/      追加式 SQLite 迁移（0001–0029）
+    src/             Rust 命令、数据库、AI 编排、自动更新
     Info.plist        macOS 隐私声明（NSCameraUsageDescription）
     Entitlements.plist
   docs/              架构与设计文档（见下）
@@ -106,7 +106,7 @@ app/
     diagrams/        提取的图示
 ```
 
-API Key 不存于数据库，存放于 macOS Keychain，由 Rust 通过 `keyring` 直接读取。
+API Key 持久化于本地 SQLite `ai_provider_profiles.api_key` 列，仅在 Rust 端内部使用，不回传前端、日志不落密钥；Keychain 只用于旧版本数据的一次性恢复。
 
 ## 文档索引
 

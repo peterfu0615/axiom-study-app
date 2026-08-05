@@ -48,16 +48,22 @@ describe('single curriculum resume slot', () => {
     expect(nextSafeCurriculumStage('waiting_for_review')).toBe('waiting_for_review')
   })
 
-  it('does not recover when the app closes during OCR', () => {
+  it('does not checkpoint while OCR is still running', () => {
     expect(shouldPersistCurriculumCheckpoint('vision_ocr', false)).toBe(false)
   })
 
-  it('does not recover after extraction but before AI dispatch', () => {
+  it('does not checkpoint before the extraction is written to the job', () => {
     expect(shouldPersistCurriculumCheckpoint('assembling_text', false)).toBe(false)
   })
 
-  it('shows one resume entry after an AI request is dispatched', () => {
+  it('checkpoints right after extraction completes, before any AI dispatch', () => {
+    // A crash between OCR completion and the first AI request must keep the
+    // whole-book extraction result recoverable.
     expect(shouldPersistCurriculumCheckpoint('ai_analyzing_structure', true)).toBe(true)
+  })
+
+  it('keeps the checkpoint after an AI request is dispatched', () => {
+    expect(shouldPersistCurriculumCheckpoint('ai_generating_tags', true)).toBe(true)
   })
 
   it('requires confirmation before a new import replaces the slot', () => {

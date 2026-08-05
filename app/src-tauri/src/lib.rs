@@ -3,6 +3,8 @@ mod commands;
 mod db;
 mod horizon;
 mod keystore;
+#[cfg(test)]
+mod migration_integrity;
 mod models;
 mod updater;
 
@@ -25,9 +27,18 @@ fn compute_log_dir() -> std::path::PathBuf {
         .join("logs")
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let migrations = vec![
+/// 全部 SQLite 迁移（版本号只增不复用：跨分支共享同一版本号空间，
+/// 复用已被占用的版本号会与既有库的 checksum 冲突）。
+///
+/// 24–27 来自 codex/horizon-quality-upgrade 分支，用户真实库已在其下应用过
+/// 这四个版本；必须逐字节原样保留（启动时按原文 SHA-384 与 _sqlx_migrations
+/// 记录比对，任何改动都会触发校验失败），也不得从列表中移除。
+/// 24/25/26 含裸 BEGIN IMMEDIATE/COMMIT，只能由 db::migrate_embedded_schema
+/// 剥离最外层事务后执行；绝不能交给 sqlx Migrator/tauri-plugin-sql 直接跑。
+///
+/// 独立成函数以便集成测试在同一份迁移列表上验证全新数据库的完整升级路径。
+pub fn axiom_migrations() -> Vec<Migration> {
+    vec![
         Migration {
             version: 1,
             description: "create_initial_schema",
@@ -178,8 +189,35 @@ pub fn run() {
             sql: include_str!("../migrations/0025_relabel_claims.sql"),
             kind: MigrationKind::Up,
         },
-    ];
+        Migration {
+            version: 26,
+            description: "curriculum_audit_and_constraints",
+            sql: include_str!("../migrations/0026_curriculum_audit_and_constraints.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 27,
+            description: "axiom_050_learning_loop",
+            sql: include_str!("../migrations/0027_axiom_050_learning_loop.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 28,
+            description: "knowledge_sibling_unique_guard",
+            sql: include_str!("../migrations/0028_knowledge_sibling_unique_guard.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 29,
+            description: "failed_textbook_pages",
+            sql: include_str!("../migrations/0029_failed_textbook_pages.sql"),
+            kind: MigrationKind::Up,
+        },
+    ]
+}
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
     // 显式计算日志目录，确保与 app_data_dir 对齐。
     // 约束：不接受 tauri-plugin-log 的默认 LogDir 路径。
     let log_dir = compute_log_dir();
@@ -212,9 +250,12 @@ pub fn run() {
                 .build(),
         )
         .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:axiom.db", migrations)
-                .build(),
+            // 不向 tauri-plugin-sql 注册任何迁移：历史迁移（24–26）含裸
+            // BEGIN IMMEDIATE/COMMIT，plugin 的 sqlx Migrator 会用外层事务
+            // 包裹导致 "cannot start a transaction within a transaction"。
+            // 全部迁移改由 db::init_db 里的 migrate_embedded_schema 在 setup
+            // 阶段（早于前端 Database.load）执行，见 db.rs 说明。
+            tauri_plugin_sql::Builder::default().build(),
         )
         .invoke_handler(tauri::generate_handler![
             commands::platform_capabilities,
@@ -258,13 +299,34 @@ pub fn run() {
             updater::check_for_updates,
             updater::download_and_install_update,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            // tauri-plugin-log 在 Builder::run 阶段完成初始化，setup 是其后第一个
+            // 可记录日志的时机。Release 构建下 statement 日志被关闭，若不在此处
+            // 主动写入一条启动日志，正常启动不会在 axiom.log 留下任何条目，
+            // 用户无法确认进程是否真的以新版本启动过。
+            log::info!(
+                "Axiom {} 启动（日志目录：{}）",
+                env!("CARGO_PKG_VERSION"),
+                log_dir.display()
+            );
             // 初始化单连接 SQLite 事务池，确保所有数据操作走同一连接，
             // 避免 tauri-plugin-sql 多连接池导致的事务嵌套与锁竞争。
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {
-                if let Err(e) = db::init_db(&handle).await {
-                    log::error!("初始化数据库连接失败：{e}");
+                match db::init_db(&handle, axiom_migrations()).await {
+                    Ok(()) => {
+                        log::info!("数据库连接初始化成功");
+                    }
+                    Err(e) => {
+                        // 数据库是全部命令的前置依赖，初始化失败属于启动期致命错误：
+                        // 记录日志后直接退出，避免应用以半残状态继续运行产生大面积报错。
+                        log::error!("初始化数据库连接失败：{e}");
+                        eprintln!("致命错误：初始化数据库连接失败：{e}");
+                        eprintln!(
+                            "详情见日志：~/Library/Application Support/com.axiom.study/logs/axiom.log"
+                        );
+                        std::process::exit(1);
+                    }
                 }
             });
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制

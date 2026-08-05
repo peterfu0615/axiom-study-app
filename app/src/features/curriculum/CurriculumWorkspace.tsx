@@ -17,15 +17,18 @@ import type { KnowledgeNode, Textbook } from '../../domain/horizon'
 import {
   addKnowledgeEdge,
   archiveKnowledgeNode,
+  archiveTextbook,
   confirmKnowledgeNode,
   createManualTextbook,
   getCurriculumReviewCount,
+  getTextbookDeletionImpact,
   listHorizonSubjects,
   listKnowledgeEdges,
   listKnowledgeNodes,
   listTextbooks,
   mergeKnowledgeNodes,
   saveKnowledgeNode,
+  type TextbookDeletionImpact,
 } from '../../platform/horizonDatabase'
 import { CurriculumImportFlow } from './CurriculumImportFlow'
 import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
@@ -74,14 +77,10 @@ function KnowledgeTree({
           <li key={item.node.id} role="treeitem">
             <div className={`curriculum-tree-row ${selectedId === item.node.id ? 'is-selected' : ''}`}>
               {hasChildren
-                ? <IconButton className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
+                ? <IconButton aria-expanded={isExpanded} className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
                 : <span className="curriculum-tree-toggle-placeholder" />}
               <button
-                aria-expanded={hasChildren ? isExpanded : undefined}
-                onClick={() => {
-                  onSelect(item.node)
-                  if (hasChildren) onToggle(item.node.id)
-                }}
+                onClick={() => onSelect(item.node)}
                 type="button"
               ><span>{item.node.canonicalName}</span></button>
             </div>
@@ -126,6 +125,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [mergeTargetId, setMergeTargetId] = useState('')
   const [relation, setRelation] = useState<NodeRelation>(null)
   const [busy, setBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Textbook | null>(null)
+  const [deleteImpact, setDeleteImpact] = useState<TextbookDeletionImpact | null>(null)
   const [pendingReviewCount, setPendingReviewCount] = useState(0)
 
   const selectedTextbook = textbooks.find((book) => book.id === textbookId) ?? null
@@ -281,6 +282,41 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
+  const openDeleteTextbookDialog = async (textbook: Textbook) => {
+    setDeleteTarget(textbook)
+    setDeleteImpact(null)
+    try {
+      setDeleteImpact(await getTextbookDeletionImpact(textbook.id))
+    } catch (reason) {
+      setDeleteTarget(null)
+      setError(String(reason))
+    }
+  }
+
+  const closeDeleteTextbookDialog = () => {
+    if (busy) return
+    setDeleteTarget(null)
+    setDeleteImpact(null)
+  }
+
+  const confirmDeleteTextbook = async () => {
+    if (!deleteTarget || !deleteImpact) return
+    setBusy(true)
+    try {
+      await archiveTextbook(deleteTarget.id)
+      setDeleteTarget(null)
+      setDeleteImpact(null)
+      const nextTextbooks = await listTextbooks(subject)
+      setTextbooks(nextTextbooks)
+      setTextbookId(nextTextbooks[0]?.id ?? null)
+      await refreshSubjects()
+    } catch (reason) {
+      setError(String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
   const visibleNodeIds = useMemo(() => matchingKnowledgeNodeIds(nodes, query), [nodes, query])
   const chapterCount = nodes.filter((node) => node.nodeType === 'chapter' && !node.isUnclassified).length
@@ -362,7 +398,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
           ) : (
             <div className="curriculum-structure-view">
               <section className="curriculum-book-summary">
-                <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2></div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
+                <div><div className="curriculum-book-summary__title"><h2>{selectedTextbook.title}</h2><Menu label="教材操作"><MenuItem className="is-danger" disabled={busy} onClick={() => void openDeleteTextbookDialog(selectedTextbook)}>删除课程</MenuItem></Menu></div><p>{[selectedTextbook.grade, selectedTextbook.volume, selectedTextbook.publisher, selectedTextbook.edition].filter(Boolean).join(' · ') || '教材信息待确认'}</p></div>
                 <dl><div><dt>章节</dt><dd>{chapterCount}</dd></div><div><dt>知识点</dt><dd>{knowledgeCount}</dd></div><div><dt>待确认</dt><dd>{reviewCount}</dd></div></dl>
               </section>
               <Surface className="curriculum-structure-shell">
@@ -400,6 +436,10 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Dialog onClose={() => setRelation(null)} open={Boolean(relation)} title="添加课程关联">
         <div className="curriculum-dialog-form"><ListboxSelect label="关联类型" onValueChange={(value) => setRelation((current) => current ? { ...current, relation: value as NonNullable<NodeRelation>['relation'] } : current)} options={[{ value: 'prerequisite_of', label: '前置知识' }, { value: 'derived_from', label: '由此推导' }, { value: 'similar_to', label: '相似知识' }, { value: 'confusable_with', label: '易混淆' }, { value: 'used_by', label: '被用于' }, { value: 'appears_in', label: '出现于' }, { value: 'contains', label: '包含' }]} value={relation?.relation ?? 'prerequisite_of'} /><ListboxSelect label="关联到" onValueChange={(value) => setRelation((current) => current ? { ...current, targetId: value } : current)} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== relation?.node.id).map((node) => ({ value: node.id, label: node.path }))]} value={relation?.targetId ?? ''} /><div className="curriculum-dialog-actions"><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加关联</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={closeDeleteTextbookDialog} open={Boolean(deleteTarget)} title="删除课程">
+        <div className="curriculum-dialog-form"><p>删除后“{deleteTarget?.title}”将从课程与教材列表中移除，已锁定的题目教材匹配将保留。</p>{deleteImpact ? <><dl className="curriculum-delete-impact"><div><dt>章节</dt><dd>{deleteImpact.chapterCount} 个</dd></div><div><dt>知识点</dt><dd>{deleteImpact.knowledgeCount} 个</dd></div><div><dt>教材页</dt><dd>{deleteImpact.pageCount} 页</dd></div><div><dt>关联题目</dt><dd>{deleteImpact.matchedProblemCount} 道</dd></div></dl>{deleteImpact.matchedProblemCount > 0 && <p>关联题目中未锁定的教材匹配将被清除，已锁定的匹配保持不变。</p>}</> : <p role="status">正在统计删除影响…</p>}<div className="curriculum-dialog-actions"><Button disabled={busy} onClick={closeDeleteTextbookDialog} variant="ghost">取消</Button><Button disabled={!deleteImpact} loading={busy} onClick={() => void confirmDeleteTextbook()} variant="danger">删除课程</Button></div></div>
       </Dialog>
     </main>
   )

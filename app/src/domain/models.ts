@@ -303,11 +303,26 @@ export interface ExplainProviderResult {
   repairStrategy: string | null
 }
 
+/**
+ * 用户已确认并锁定的教材上下文，仅用于附加到分析 prompt，
+ * 帮助 AI 将 textbook_hint 与知识点命名对齐到该教材。
+ */
+export interface LockedTextbookContext {
+  title: string
+  subject: string
+  grade: string | null
+  volume: string | null
+  publisher: string | null
+  edition: string | null
+}
+
 export interface ProblemAnalysisInput extends AIProblemInput {
   questionImagePath: string
   diagramImagePaths: string[]
   answerImagePaths: string[]
   regionIds: string[]
+  /** 仅在题目教材匹配被用户锁定且教材存在时提供；缺省表示不注入。 */
+  lockedTextbookContext?: LockedTextbookContext
 }
 
 export interface StudentAttemptInput {

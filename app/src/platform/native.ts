@@ -29,7 +29,7 @@ export interface AIProviderSaveStatus {
 export interface TextbookExtractedPage {
   pageNumber: number
   evidenceText: string
-  extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual'
+  extractionMethod: 'pdf_text' | 'vision_ocr' | 'manual' | 'failed'
   confidence: number
 }
 
@@ -60,7 +60,8 @@ export interface TextbookExtractionProgress {
   totalPages: number
   pdfTextPages: number
   ocrPages: number
-  phase: 'reading' | 'pdf_text' | 'vision_ocr'
+  failedPages: number
+  phase: 'reading' | 'pdf_text' | 'vision_ocr' | 'failed'
 }
 
 export function isDesktopRuntime() {

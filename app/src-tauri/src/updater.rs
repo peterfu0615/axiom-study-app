@@ -466,6 +466,7 @@ log "更新完成。"
 
 /// 简单的语义版本比较：`latest` 是否比 `current` 新。
 /// 仅比较 `major.minor.patch`，忽略预发布后缀（Beta 版视为同版本）。
+/// 任一版本号无法解析时视为无更新（返回 false），避免字符串比较误判。
 fn is_newer(latest: &str, current: &str) -> bool {
     fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
         let v = v.split('-').next()?; // 去掉预发布后缀
@@ -482,10 +483,8 @@ fn is_newer(latest: &str, current: &str) -> bool {
 
     match (parse_version(latest), parse_version(current)) {
         (Some(l), Some(c)) => l > c,
-        _ => {
-            // 回退到字符串比较
-            latest != current
-        }
+        // 无法解析的版本号一律视为无更新
+        _ => false,
     }
 }
 
@@ -518,10 +517,12 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_on_invalid_version() {
-        // 无效版本回退到字符串比较
-        assert!(is_newer("abc", "def"));
-        assert!(!is_newer("same", "same"));
+    fn treats_unparseable_versions_as_no_update() {
+        // 无法解析的版本号视为无更新，不再回退字符串比较
+        assert!(!is_newer("abc", "def"));
+        assert!(!is_newer("abc", "0.1.0"));
+        assert!(!is_newer("0.2.0", "not-a-version"));
+        assert!(!is_newer("1.2", "1.2.0"));
     }
 
     #[test]

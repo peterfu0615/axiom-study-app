@@ -51,7 +51,13 @@ export function CurriculumAnalysisProvider({
   useEffect(() => {
     if (initialJob !== undefined) store.publish(initialJob)
     if (!enabled) return undefined
-    void store.start(resumeOnMount ? resumeCurriculumImports : reconcileCurriculumImportResumeSlot)
+    void store.start(
+      resumeOnMount
+        // The resume worker publishes its terminal state so completed/failed
+        // jobs surface immediately instead of waiting for the next poll tick.
+        ? () => resumeCurriculumImports((finished) => store.publish(finished))
+        : reconcileCurriculumImportResumeSlot,
+    )
     return () => store.stop()
   }, [enabled, initialJob, resumeOnMount, store])
 
@@ -62,6 +68,9 @@ export function CurriculumAnalysisProvider({
   const openProgress = useCallback((jobId?: string) => {
     const target = jobId ?? store.getSnapshot()?.id
     if (target) setOpenedJobId(target)
+    // Opening the progress view is a direct user intent signal: force one
+    // refresh so a job that settled between poll ticks is never shown stale.
+    void store.refresh()
   }, [store])
   const closeProgress = useCallback(() => setOpenedJobId(null), [])
   const publishJob = useCallback((next: CurriculumImportJob | null) => store.publish(next), [store])

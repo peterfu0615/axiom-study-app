@@ -1,5 +1,6 @@
 import type { ErrorObject } from 'ajv'
 import type { GeneratedSolution, SolutionStep } from '../domain/models'
+import { sanitizeAIOutputText } from './intelligenceParser'
 import validateSolution from './generated/solutionValidator.js'
 
 export interface ParsedSolution {
@@ -160,7 +161,7 @@ function normalizeStep(step: Record<string, unknown>): SolutionStep {
   return {
     index: Number(step.index),
     title: String(step.title),
-    contentMarkdown: String(step.content_markdown),
+    contentMarkdown: sanitizeAIOutputText(String(step.content_markdown)),
   }
 }
 
@@ -219,7 +220,7 @@ export function parseSolution(rawOutput: string): ParsedSolution {
   }
   return {
     solution: {
-      contentMarkdown: String(value.content_markdown),
+      contentMarkdown: sanitizeAIOutputText(String(value.content_markdown)),
       steps,
       keyMethod:
         value.key_method === null ? null : String(value.key_method),

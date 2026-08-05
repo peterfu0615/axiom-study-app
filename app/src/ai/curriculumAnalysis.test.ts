@@ -5,6 +5,7 @@ import {
   parseCurriculumTags,
   reconcileCurriculumTagCandidates,
 } from './curriculumAnalysis'
+import { buildTextbookRecognitionPrompt } from './textbookRecognitionContract'
 
 const recognition = {
   title: { value: '八年级数学', confidence: .9, evidence: '封面' },
@@ -111,5 +112,24 @@ describe('curriculum tag inference', () => {
     expect(chunks.map((chunk) => chunk.map((page) => page.pageNumber))).toEqual([
       [1, 2], [3, 4], [5, 6],
     ])
+  })
+
+  it('keeps failed extraction placeholders without breaking chunks or prompts', () => {
+    // The Vision helper emits placeholder pages (empty evidenceText, extraction
+    // method "failed") when a page cannot be rendered; downstream consumers
+    // must tolerate them and keep page numbering contiguous.
+    const pages = [
+      { pageNumber: 1, evidenceText: '第 1 章 代数 正文内容' },
+      { pageNumber: 2, evidenceText: '' },
+      { pageNumber: 3, evidenceText: '第 2 章 几何 正文内容' },
+    ]
+    const chunks = chunkTextbookPages(pages, [], 10_000)
+    expect(chunks.flat().map((page) => page.pageNumber)).toEqual([1, 2, 3])
+    const prompt = buildTextbookRecognitionPrompt({
+      sourceName: '数学八年级下册.pdf', pageCount: 3, outline: [], pages,
+    })
+    expect(prompt).toContain('"page_number":1')
+    expect(prompt).toContain('"page_number":3')
+    expect(prompt).not.toContain('"page_number":2')
   })
 })

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { SavedProblem, Solution, StudentAttempt } from '../../domain/models'
 import { SolutionComparison } from './SolutionComparison'
+import { normalizeKeyPoint } from './explanationText'
 
 const problem = {
   id: 'problem-1',
@@ -69,5 +70,28 @@ describe('SolutionComparison', () => {
     expect(html).toContain('我的解答')
     expect(html).toContain('class="katex"')
     expect(html).toContain('点击查看完整解答')
+  })
+})
+
+describe('normalizeKeyPoint', () => {
+  it('keeps plain key points unchanged (real DB form)', () => {
+    expect(normalizeKeyPoint('用待定系数法求一次函数表达式')).toBe('用待定系数法求一次函数表达式')
+  })
+
+  it('strips self-added markdown stars', () => {
+    expect(normalizeKeyPoint('**用待定系数法求一次函数表达式**')).toBe('用待定系数法求一次函数表达式')
+  })
+
+  it('strips double-escaped stars', () => {
+    expect(normalizeKeyPoint(String.raw`\*\*用待定系数法\*\*`)).toBe('用待定系数法')
+  })
+
+  it('strips surrounding whitespace and mixed star/backslash noise', () => {
+    expect(normalizeKeyPoint('  ** 关键点内容 **  ')).toBe('关键点内容')
+  })
+
+  it('returns empty for star-only output so the row is hidden', () => {
+    expect(normalizeKeyPoint('****')).toBe('')
+    expect(normalizeKeyPoint('   ')).toBe('')
   })
 })

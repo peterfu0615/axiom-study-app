@@ -69,6 +69,66 @@ describe('relabel worker contract', () => {
     expect(mocks.runProblemAIWorker).not.toHaveBeenCalled()
   })
 
+  it('stops without claiming when the batch has been cancelled', async () => {
+    mocks.refreshRelabelBatch.mockResolvedValueOnce({ ...running, status: 'cancelled' })
+    await startRelabelBatchWorker('batch-1')
+    expect(mocks.claimRelabelItem).not.toHaveBeenCalled()
+    expect(mocks.queueProblemAIWithRun).not.toHaveBeenCalled()
+    expect(mocks.runProblemAIWorker).not.toHaveBeenCalled()
+  })
+
+  it('stops after the current item when cancellation lands mid-batch', async () => {
+    mocks.refreshRelabelBatch
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce({ ...running, status: 'cancelled' })
+    mocks.claimRelabelItem.mockResolvedValueOnce({
+      problemId: 'problem-1',
+      modelRunId: 'run-1',
+      claimToken: 'claim-1',
+    })
+    await startRelabelBatchWorker('batch-1')
+    // 当前已领取的项目跑完即止，不再领取下一项
+    expect(mocks.runProblemAIWorker).toHaveBeenCalledTimes(1)
+    expect(mocks.claimRelabelItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('finishes the already-claimed item when a pause lands mid-batch', async () => {
+    mocks.refreshRelabelBatch
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce({ ...running, status: 'paused', pausedAt: 10 })
+    mocks.claimRelabelItem.mockResolvedValueOnce({
+      problemId: 'problem-1',
+      modelRunId: 'run-1',
+      claimToken: 'claim-1',
+    })
+    await startRelabelBatchWorker('batch-1')
+    // 暂停瞬间已领取的项目正常收尾；之后不再领取，也不标记失败
+    expect(mocks.runProblemAIWorker).toHaveBeenCalledTimes(1)
+    expect(mocks.claimRelabelItem).toHaveBeenCalledTimes(1)
+    expect(mocks.failRelabelItem).not.toHaveBeenCalled()
+    expect(mocks.recordRelabelModelRunFailure).not.toHaveBeenCalled()
+  })
+
+  it('resumes from pending items after pause without recreating model runs', async () => {
+    // 第一趟：暂停抢先，未领取任何项目直接退出
+    mocks.refreshRelabelBatch
+      .mockResolvedValueOnce({ ...running, status: 'paused', pausedAt: 10 })
+      // 第二趟：恢复后批次重新 processing，收尾刷新为 completed
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(completed)
+    // 恢复后领取到的是重启/暂停恢复出来的项目：ModelRun 已挂在项目上
+    mocks.claimRelabelItem
+      .mockResolvedValueOnce({ problemId: 'problem-1', modelRunId: 'run-restored', claimToken: 'claim-2' })
+      .mockResolvedValueOnce(null)
+    await startRelabelBatchWorker('batch-1')
+    await startRelabelBatchWorker('batch-1')
+    // 恢复路径绝不重复创建 ModelRun，也不重新绑定已挂载的运行
+    expect(mocks.queueProblemAIWithRun).not.toHaveBeenCalled()
+    expect(mocks.bindRelabelItemModelRun).not.toHaveBeenCalled()
+    expect(mocks.cancelUnboundProblemAIModelRun).not.toHaveBeenCalled()
+    expect(mocks.runProblemAIWorker).toHaveBeenCalledTimes(1)
+  })
+
   it('does not run an unbound ModelRun when binding loses the claim', async () => {
     mocks.refreshRelabelBatch.mockResolvedValueOnce(running).mockResolvedValueOnce(completed)
     mocks.claimRelabelItem.mockResolvedValueOnce({ problemId: 'problem-1', modelRunId: null, claimToken: 'claim-1' }).mockResolvedValueOnce(null)

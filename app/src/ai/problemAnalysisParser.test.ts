@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
+import { readFileSync } from 'node:fs'
 import {
   normalizeProblemAnalysisDifficultyScore,
   parseProblemAnalysis,
   ProblemAnalysisParseError,
 } from './problemAnalysisParser'
+import {
+  PROBLEM_ANALYSIS_PROMPT,
+  PROBLEM_ANALYSIS_PROMPT_VERSION,
+  buildLockedTextbookPromptSection,
+} from './problemAnalysisContract'
 
 const valid = {
   title: '分式-选择题-化简',
@@ -138,6 +145,55 @@ describe('parseProblemAnalysis', () => {
     delete (legacy as { textbook_hint?: unknown }).textbook_hint
     const parsed = parseProblemAnalysis(JSON.stringify(legacy))
     expect(parsed.analysis.textbookHint).toBeNull()
+  })
+
+  it('locks the textbook_hint contract: schema optional, prompt declares omissible, parser defaults to null', () => {
+    // 统一口径：textbook_hint 保持 optional（parser 以 null 兜底），
+    // schema、prompt 与 parser 三方必须保持一致，任何单方改动都应让此测试失败。
+    const schema = JSON.parse(
+      readFileSync(new URL('./problemAnalysis.schema.json', import.meta.url), 'utf8'),
+    ) as { required: string[]; properties: Record<string, unknown> }
+    expect(schema.required).not.toContain('textbook_hint')
+    expect(schema.properties.textbook_hint).toBeDefined()
+    // prompt 明确告知模型该字段可缺省，省略与 null 等价
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('textbook_hint 是可选字段')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('省略与返回 null 等价')
+    // parser 兜底语义：缺失时按 null 落库，且不触发 repair
+    const parsed = parseProblemAnalysis(JSON.stringify((() => {
+      const withoutHint = { ...valid }
+      delete (withoutHint as { textbook_hint?: unknown }).textbook_hint
+      return withoutHint
+    })()))
+    expect(parsed.analysis.textbookHint).toBeNull()
+    expect(parsed.repairStrategy).toBeNull()
+  })
+
+  it('declares the locked-textbook alignment rule and bumps the prompt version', () => {
+    expect(PROBLEM_ANALYSIS_PROMPT_VERSION).toBe(
+      'problem-understanding-v7-locked-textbook-context',
+    )
+    // 锁定教材对齐规则必须存在于 prompt，且 textbook_hint 可缺省语义保持不变
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('locked_textbook_json')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('用户已确认并锁定的教材')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('textbook_hint 是可选字段')
+  })
+
+  it('serializes locked textbook context as an additive prompt section', () => {
+    const section = buildLockedTextbookPromptSection({
+      title: '义务教育教科书·数学八年级下册',
+      subject: '数学',
+      grade: '八年级',
+      volume: '下册',
+      publisher: '人民教育出版社',
+      edition: null,
+    })
+    expect(section).toContain('<locked_textbook_json>')
+    expect(section).toContain('</locked_textbook_json>')
+    expect(section).toContain('"title":"义务教育教科书·数学八年级下册"')
+    expect(section).toContain('"grade":"八年级"')
+    expect(section).toContain('"volume":"下册"')
+    // 附加段以换行开头，纯附加式拼接，不改变基础 prompt 正文
+    expect(section.startsWith('\n\n<locked_textbook_json>')).toBe(true)
   })
 
   it('fills nullable textbook hint fields when a provider returns a partial object', () => {

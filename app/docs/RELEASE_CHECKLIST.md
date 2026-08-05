@@ -33,7 +33,7 @@
 - [x] Release Build 成功（`npm run tauri -- build`）
 - [x] 应用可启动、可创建数据目录
 - [x] 日志写入正确目录
-- [x] API Key 存入 Keychain（不回传前端）
+- [x] API Key 持久化于本地 SQLite（不回传前端、日志不落密钥）
 - [x] 全部测试通过（`npm test` + `cargo test --lib`）
 - [x] Clippy / Fmt / Typecheck 无错误
 - [ ] **真实用户 Acceptance Test 通过**（见 [ACCEPTANCE_TEST.md](./ACCEPTANCE_TEST.md)）
@@ -127,7 +127,7 @@ xcrun stapler staple Axiom.dmg
 - [ ] `TeamIdentifier` 显示正确的 Team ID
 - [ ] `spctl -a -vv --assess Axiom.app` 通过（notarized）
 - [ ] 全新 Mac 双击 DMG 可直接安装，无 Gatekeeper 拦截
-- [ ] Keychain 访问正常（签名后 keychain partition ID 稳定）
+- [ ] API Key 读写正常（SQLite 本地存储；旧 Keychain 数据一次性回迁为 best-effort）
 
 ## 5. 架构覆盖路线
 
@@ -142,6 +142,6 @@ xcrun stapler staple Axiom.dmg
 > GitHub Actions `release.yml` 已内置架构检测（约束 #4），不假设 runner 为 arm64。
 
 ## 6. 发布后监控
-- 收集 Beta 用户反馈（Gatekeeper、Keychain、数据库路径、AI 调用）
+- 收集 Beta 用户反馈（Gatekeeper、API Key 存储与回迁、数据库路径、AI 调用）
 - 关注日志路径 `~/Library/Application Support/com.axiom.study/logs/axiom.log`
 - 数据库路径不一致问题已在 Phase 1 修复，但仍需关注迁移用户

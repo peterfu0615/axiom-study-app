@@ -32,6 +32,10 @@ const {
   removeProblemDiagram: vi.fn(),
 }))
 
+const { getProblemTextbookMatch } = vi.hoisted(() => ({
+  getProblemTextbookMatch: vi.fn(),
+}))
+
 vi.mock('../platform/database', () => ({
   claimNextProblemAIModelRun,
   completeProblemAIModelRun,
@@ -53,6 +57,10 @@ vi.mock('../platform/native', () => ({
   analyzeProblemWithOpenAICompatible: vi.fn(),
   cropProblemDiagram,
   removeProblemDiagram,
+}))
+
+vi.mock('../platform/horizonDatabase', () => ({
+  getProblemTextbookMatch,
 }))
 
 import { runProblemAIWorker } from './pipeline'
@@ -111,6 +119,7 @@ describe('problem AI worker', () => {
       created: true,
     })
     removeProblemDiagram.mockResolvedValue(undefined)
+    getProblemTextbookMatch.mockResolvedValue(null)
     setAIProviderForTests({
       id: 'test',
       model: 'test-v1',
@@ -240,5 +249,112 @@ describe('problem AI worker', () => {
       null,
     )
     expect(claimNextProblemAIModelRun).toHaveBeenCalledTimes(3)
+  })
+})
+
+const lockedTextbook = {
+  id: 'textbook-1',
+  subject: '数学',
+  title: '义务教育教科书·数学八年级下册',
+  grade: '八年级',
+  volume: '下册',
+  publisher: '人民教育出版社',
+  edition: null,
+}
+
+describe('locked textbook context injection', () => {
+  function setupAnalyzeProblemProvider() {
+    const analyzeProblem = vi.fn().mockResolvedValue({
+      analysis,
+      rawOutput: '{"title":"数学 · 选择题"}',
+      repairStrategy: null,
+    })
+    setAIProviderForTests({
+      id: 'test',
+      model: 'test-v1',
+      supportsVision: true,
+      supportsText: true,
+      analyzeProblem,
+      analyzeProblemImage: vi.fn(),
+    })
+    return analyzeProblem
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    completeProblemAIModelRun.mockResolvedValue(null)
+    queueProblemSolution.mockResolvedValue(undefined)
+    queueStudentAttempt.mockResolvedValue(undefined)
+    getProblemRegions.mockResolvedValue([])
+    getProblemTextbookMatch.mockResolvedValue(null)
+  })
+
+  it('injects textbook context when the problem match is user-locked', async () => {
+    const analyzeProblem = setupAnalyzeProblemProvider()
+    getProblemTextbookMatch.mockResolvedValue({
+      textbook: lockedTextbook,
+      confidence: 1,
+      reason: '用户手动选择',
+      source: 'user',
+      problemId: 'problem-1',
+      subject: '数学',
+      locked: true,
+      candidates: [],
+    })
+    claimNextProblemAIModelRun
+      .mockResolvedValueOnce(run)
+      .mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(getProblemTextbookMatch).toHaveBeenCalledWith(run.problemId)
+    expect(analyzeProblem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lockedTextbookContext: {
+          title: '义务教育教科书·数学八年级下册',
+          subject: '数学',
+          grade: '八年级',
+          volume: '下册',
+          publisher: '人民教育出版社',
+          edition: null,
+        },
+      }),
+    )
+  })
+
+  it('does not inject textbook context when the match is not locked', async () => {
+    const analyzeProblem = setupAnalyzeProblemProvider()
+    getProblemTextbookMatch.mockResolvedValue({
+      textbook: lockedTextbook,
+      confidence: 0.9,
+      reason: 'AI 推断',
+      source: 'ai',
+      problemId: 'problem-1',
+      subject: '数学',
+      locked: false,
+      candidates: [],
+    })
+    claimNextProblemAIModelRun
+      .mockResolvedValueOnce(run)
+      .mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyzeProblem).toHaveBeenCalledTimes(1)
+    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toBeUndefined()
+  })
+
+  it('continues without injection when the textbook lookup fails', async () => {
+    const analyzeProblem = setupAnalyzeProblemProvider()
+    getProblemTextbookMatch.mockRejectedValue(new Error('db unavailable'))
+    claimNextProblemAIModelRun
+      .mockResolvedValueOnce(run)
+      .mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyzeProblem).toHaveBeenCalledTimes(1)
+    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toBeUndefined()
+    expect(completeProblemAIModelRun).toHaveBeenCalled()
   })
 })

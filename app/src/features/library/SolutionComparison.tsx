@@ -18,8 +18,9 @@ import type {
 import { MathMarkdown } from '../../components/MathMarkdown'
 import { Icon } from '../../components/Icon'
 import { explainSelection, EXPLAIN_STREAM_EVENT } from '../../ai/intelligencePipeline'
-import { sanitizeAIOutputText } from '../../ai/intelligenceParser'
+import { sanitizeAIOutputText, extractPartialField } from '../../ai/intelligenceParser'
 import { SOLUTION_STREAM_EVENT } from '../../ai/solutionPipeline'
+import { extractReadableMathText, normalizeKeyPoint } from './explanationText'
 
 const EXPLANATION_OPEN_EVENT = 'axiom:explanation-panel-open'
 
@@ -125,7 +126,7 @@ function ExplainableMathMarkdown({
       ? event.target.closest('p, li, blockquote, h1, h2, h3, h4')
       : null
     if (!element || !rootRef.current?.contains(element)) return
-    const text = (element.textContent ?? '').trim()
+    const text = extractReadableMathText(element)
     if (!text) return
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current)
     setHoverTarget({
@@ -140,9 +141,16 @@ function ExplainableMathMarkdown({
     if (!hoverEnabled) return
     window.setTimeout(() => {
       const selection = window.getSelection()
-      const text = selection?.toString().trim() ?? ''
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null
-      if (!text || !range || !rootRef.current?.contains(range.commonAncestorContainer)) {
+      if (!range || !rootRef.current?.contains(range.commonAncestorContainer)) {
+        setSelectionTarget(null)
+        return
+      }
+      // 同样把选区内的 KaTeX 还原为 $LaTeX$ 源，避免 MathML+视觉层重复拼接。
+      const container = document.createElement('div')
+      container.appendChild(range.cloneContents())
+      const text = extractReadableMathText(container) || selection?.toString().trim() || ''
+      if (!text) {
         setSelectionTarget(null)
         return
       }
@@ -285,7 +293,11 @@ function SolutionPane({
             {solution.steps.map((step) => (
               <section className="comparison-step" key={step.index}>
                 <span>步骤 {step.index}</span>
-                {step.title ? <strong>{step.title}</strong> : null}
+                {step.title ? (
+                  <strong>
+                    <MathMarkdown inline>{sanitizeAIOutputText(step.title)}</MathMarkdown>
+                  </strong>
+                ) : null}
                 <ExplainableMathMarkdown
                   className="problem-solution-content"
                   hoverEnabled
@@ -322,13 +334,17 @@ function SolutionPane({
             {solution.keyMethod && (
               <div>
                 <span>关键方法</span>
-                <strong>{solution.keyMethod}</strong>
+                <MathMarkdown className="solution-formula-list">
+                  {solution.keyMethod}
+                </MathMarkdown>
               </div>
             )}
             {solution.knowledgePoints.length > 0 && (
               <div>
                 <span>关联知识点</span>
-                <p>{solution.knowledgePoints.join(' · ')}</p>
+                <MathMarkdown className="solution-formula-list">
+                  {solution.knowledgePoints.join(' · ')}
+                </MathMarkdown>
               </div>
             )}
           </div>
@@ -363,21 +379,43 @@ function ExplanationPanel({
       setStreamText('')
     }
   }, [explanation.status])
-  // 流式订阅：loading 时实时显示 AI 累积输出
+  // 流式订阅：loading 时实时显示 AI 累积输出。
+  // SSE chunk 频率很高，这里用 ~100ms 尾部节流合帧，
+  // 避免每个 chunk 都触发全量重渲染。
   useEffect(() => {
     if (explanation.status !== 'loading') return
     setStreamText('')
+    let latest = ''
+    let timer: number | null = null
+    const flush = () => {
+      timer = null
+      setStreamText(latest)
+    }
     const handler = (event: Event) => {
       const detail = (event as CustomEvent).detail as { accumulated: string }
       if (typeof detail?.accumulated === 'string') {
-        setStreamText(detail.accumulated)
+        latest = detail.accumulated
+        if (timer === null) timer = window.setTimeout(flush, 100)
       }
     }
     window.addEventListener(EXPLAIN_STREAM_EVENT, handler)
-    return () => window.removeEventListener(EXPLAIN_STREAM_EVENT, handler)
+    return () => {
+      window.removeEventListener(EXPLAIN_STREAM_EVENT, handler)
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [explanation.status])
   if (explanation.status === 'idle') return null
   const target = explanation.target
+  // 流式期从部分 JSON 中提取 explanation_markdown 字段渲染；
+  // 提取失败（字段尚未到达/输入非法）退回下方占位，绝不渲染原始 JSON 文本。
+  const streamPartial = streamText
+    ? extractPartialField(streamText, 'explanation_markdown')
+    : null
+  // key_point 可能自带星号/转义（各形态见 normalizeKeyPoint），
+  // 剥净后用 JSX <strong> 拼接标签，不再依赖 remark 的 emphasis 解析
+  // （全角冒号紧跟 `**` 会导致 flanking 判定失败、星号字面显示）。
+  const keyPointText =
+    explanation.status === 'completed' ? normalizeKeyPoint(explanation.result.keyPoint ?? '') : ''
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return
     const dx = event.clientX - drag.current.startX
@@ -438,11 +476,12 @@ function ExplanationPanel({
       </header>
       <div className="explain-floating-body">
         <MathMarkdown className="explain-selection-quote">{target.text}</MathMarkdown>
-        {explanation.status === 'loading' && (
-          streamText
-            ? <MathMarkdown className="explain-result-content explain-streaming">{streamText}</MathMarkdown>
-            : <div className="comparison-placeholder"><Icon name="ai" size={18} />正在生成解释…</div>
-        )}
+        {explanation.status === 'loading' &&
+          (streamPartial ? (
+            <MathMarkdown className="explain-result-content explain-streaming">{streamPartial}</MathMarkdown>
+          ) : (
+            <div className="comparison-placeholder"><Icon name="ai" size={18} />正在生成解释…</div>
+          ))}
         {explanation.status === 'failed' && (
           <div className="explain-error" role="alert">
             <strong>解释生成失败</strong>
@@ -453,13 +492,20 @@ function ExplanationPanel({
         {explanation.status === 'completed' && (
           <>
             <MathMarkdown className="explain-result-content">{explanation.result.explanationMarkdown}</MathMarkdown>
-            {explanation.result.keyPoint && (
-              <MathMarkdown className="explain-key-point">{`**关键点：**${explanation.result.keyPoint}`}</MathMarkdown>
+            {keyPointText && (
+              <div className="explain-key-point">
+                <p>
+                  <strong>关键点：</strong>
+                  <MathMarkdown inline>{keyPointText}</MathMarkdown>
+                </p>
+              </div>
             )}
             {explanation.result.relatedKnowledgePoints.length > 0 && (
-              <p className="explain-related-points">
-                关联知识点：{explanation.result.relatedKnowledgePoints.join(' · ')}
-              </p>
+              <div className="explain-related-points">
+                <MathMarkdown>
+                  {`关联知识点：${explanation.result.relatedKnowledgePoints.join(' · ')}`}
+                </MathMarkdown>
+              </div>
             )}
           </>
         )}
@@ -774,7 +820,7 @@ export function SolutionComparison({
                 {reasoning.firstWrongStep && (
                   <p>首个需要检查的步骤：第 {reasoning.firstWrongStep} 步</p>
                 )}
-                {reasoning.errorType && <p>错误类型：{reasoning.errorType}</p>}
+                {reasoning.errorType && <p>错误类型：{sanitizeAIOutputText(reasoning.errorType)}</p>}
                 {sanitizeAIOutputText(reasoning.reason) && (
                   <MathMarkdown className="reasoning-text">{sanitizeAIOutputText(reasoning.reason)}</MathMarkdown>
                 )}

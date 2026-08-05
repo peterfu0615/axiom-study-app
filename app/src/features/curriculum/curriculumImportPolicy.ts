@@ -45,9 +45,14 @@ export function nextSafeCurriculumStage(stage: CurriculumImportStage) {
 
 export function shouldPersistCurriculumCheckpoint(
   stage: string,
-  aiRequestSubmitted: boolean,
+  extractionPersisted: boolean,
 ) {
-  return aiRequestSubmitted && recoverableCurriculumStatuses.includes(stage as CurriculumImportStatus)
+  // The durable checkpoint is written as soon as the extraction result has
+  // been stored on the job row — before any AI request is submitted — so a
+  // crash between OCR and AI dispatch cannot lose the whole-book extraction.
+  // Recovery then reuses the persisted extractionJSON and never re-extracts.
+  return extractionPersisted &&
+    recoverableCurriculumStatuses.includes(stage as CurriculumImportStatus)
 }
 
 export function newCurriculumImportAction(hasResumeSlot: boolean) {

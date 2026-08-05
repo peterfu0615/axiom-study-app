@@ -1,7 +1,8 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
+import type { LockedTextbookContext } from '../domain/models'
 
 export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v4-textbook-hint'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v5-difficulty-score'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v7-locked-textbook-context'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -131,8 +132,13 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
     无法可靠量化 score 时必须返回 "score": null，绝对不能省略 score；
     level、confidence 和 reason 仍然必须提供，不得用未知或空对象代替。
 16. error_categories 仅在附加的学生答案提供明确证据时识别；没有证据返回 []，不得根据错题身份猜测错因。
-17. textbook_hint 只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
+17. textbook_hint 是可选字段（JSON Schema 未列入 required），可以整体省略；省略与返回 null 等价。
+    只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
     无法确认时返回 null；对象中的字段均可为 null，confidence 必须为 0 到 1，evidence 只写简短可审计依据。
+18. 若附加上下文中提供了 <locked_textbook_json>，它表示用户已确认并锁定的教材。
+    textbook_hint 与 knowledge_points、知识类标签的命名应优先与该教材的标题、科目、年级、册别对齐；
+    它只作为对齐参考，不能覆盖题面实际内容，也不得据此编造题面中不存在的章节或页码信息。
+    未提供 <locked_textbook_json> 时忽略本条。
 
 必须返回以下字段，无法识别的标量或对象返回 null：
 {
@@ -154,3 +160,20 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "warnings": []
 }
 `.trim()
+
+/**
+ * 将用户锁定的教材上下文序列化为附加 prompt 段。
+ * 纯附加式注入：仅在提供时拼接在基础 prompt 之后，不改变基础 prompt。
+ */
+export function buildLockedTextbookPromptSection(
+  context: LockedTextbookContext,
+): string {
+  return `\n\n<locked_textbook_json>\n${JSON.stringify({
+    title: context.title,
+    subject: context.subject,
+    grade: context.grade,
+    volume: context.volume,
+    publisher: context.publisher,
+    edition: context.edition,
+  })}\n</locked_textbook_json>`
+}

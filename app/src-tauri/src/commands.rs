@@ -4,7 +4,8 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::atomic::{AtomicI64, Ordering},
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::Duration,
     time::Instant,
@@ -26,6 +27,11 @@ use crate::models::{
 const MAX_IMAGE_BYTES: usize = 30 * 1024 * 1024;
 const MAX_TEXTBOOK_BYTES: u64 = 300 * 1024 * 1024;
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+/// 教材提取的宽裕总超时。300 MB 的扫描版教材可能有数百页，Vision
+/// accurate 模式每页数秒，最坏情况下整本 OCR 需要数十分钟；45 分钟
+/// 足以覆盖这种极端输入，同时保证病态 PDF（渲染死循环、超大页数）
+/// 不会让导入永远挂起。用户主动取消仍由 cancel 标志负责，不受此限制。
+const TEXTBOOK_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 static CANCELLED_TEXTBOOK_IMPORTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn cancelled_textbook_imports() -> &'static Mutex<HashSet<String>> {
@@ -229,11 +235,16 @@ fn import_textbook_source_blocking(
         stdout.read_to_end(&mut bytes).map(|_| bytes)
     });
     let app_for_progress = app.clone();
+    let processed_pages = Arc::new(AtomicI64::new(0));
+    let processed_pages_for_progress = Arc::clone(&processed_pages);
     let progress_thread = thread::spawn(move || {
         let mut diagnostic = String::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if let Some(payload) = line.strip_prefix("AXIOM_PROGRESS ") {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) {
+                    if let Some(current) = value.get("currentPage").and_then(|item| item.as_i64()) {
+                        processed_pages_for_progress.fetch_max(current, Ordering::Relaxed);
+                    }
                     let _ = app_for_progress.emit("curriculum-extraction-progress", value);
                 }
             } else {
@@ -243,6 +254,7 @@ fn import_textbook_source_blocking(
         }
         diagnostic
     });
+    let started = Instant::now();
     let status = loop {
         if textbook_import_cancelled(&request_id) {
             let _ = child.kill();
@@ -253,6 +265,27 @@ fn import_textbook_source_blocking(
                 .ok()
                 .map(|mut set| set.remove(&request_id));
             return Err("教材导入已取消".to_string());
+        }
+        if started.elapsed() >= TEXTBOOK_EXTRACTION_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            // 子进程已终止，管道随之关闭，读取线程会立即退出。
+            let _ = stdout_thread.join();
+            let _ = progress_thread.join();
+            let _ = fs::remove_file(&target);
+            cancelled_textbook_imports()
+                .lock()
+                .ok()
+                .map(|mut set| set.remove(&request_id));
+            let processed = processed_pages.load(Ordering::Relaxed);
+            let progress_note = if processed > 0 {
+                format!("，已处理 {processed} 页")
+            } else {
+                String::new()
+            };
+            return Err(format!(
+                "教材内容提取超时（超过 45 分钟）{progress_note}。请尝试页数更少的教材文件。"
+            ));
         }
         if let Some(status) = child
             .try_wait()

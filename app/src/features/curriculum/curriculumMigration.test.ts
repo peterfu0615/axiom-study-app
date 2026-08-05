@@ -6,6 +6,9 @@ const migration = readFileSync(new URL('../../../src-tauri/migrations/0024_flatt
 
 describe('curriculum tree compatibility migration', () => {
   it('is append-only, transactional, and creates a review-only fallback chapter', () => {
+    // 0024 是 codex/horizon-quality-upgrade 分支的历史迁移，用户库已应用并
+    // 记录了 checksum，必须逐字节保留（含自带事务）；它不经过 sqlx Migrator
+    // 执行，而是由 Rust 侧 migrate_embedded_schema 剥离最外层 BEGIN/COMMIT 后运行。
     expect(migration).toContain('BEGIN IMMEDIATE;')
     expect(migration).toContain('COMMIT;')
     expect(migration).toContain('ADD COLUMN is_unclassified')

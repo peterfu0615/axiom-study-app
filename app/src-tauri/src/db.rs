@@ -1,17 +1,21 @@
 use serde_json::{json, Value};
+use sha2::{Digest, Sha384};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteConnection},
     Column, ConnectOptions, Executor, Row, TypeInfo,
 };
+use std::borrow::Cow;
 use std::time::Duration;
 use tauri::{async_runtime::Mutex, AppHandle, Manager};
+use tauri_plugin_sql::Migration;
 
 /// 单连接 SQLite 状态。
 ///
 /// tauri-plugin-sql 内部使用多连接池（默认 5），BEGIN/COMMIT 会被路由到不同连接，
 /// 导致 "cannot start a transaction within a transaction" 和 "database is locked" 错误。
 /// 这里使用单一 sqlx 连接 + Mutex 序列化所有数据操作，从根上消除连接交错问题。
-/// tauri-plugin-sql 仅保留用于启动时迁移。
+/// 迁移同样由本模块的 migrate_embedded_schema 在这条连接上执行；
+/// tauri-plugin-sql 不注册任何迁移，仅用于前端数据读写。
 #[derive(Default)]
 pub struct DbState {
     pub connection: Mutex<Option<SqliteConnection>>,
@@ -78,7 +82,279 @@ pub fn migrate_database(from: String, to: String) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn init_db(app: &AppHandle) -> Result<(), String> {
+/// sqlx 的 Migrator（tauri-plugin-sql 内部路径）会把每个 migration 放进外层
+/// 事务，但 0024–0026 的历史 migration 为了保证 SQLite 数据修复的原子性，
+/// 自身包含 BEGIN IMMEDIATE/COMMIT。SQLite 不允许事务嵌套，因此这些
+/// migration 不能直接交给 plugin/sqlx Migrator 执行。
+///
+/// 这里在 Rust 启动阶段使用同一数据库连接预执行全部 migration，并写入
+/// 与 sqlx/tauri-plugin-sql 兼容的 `_sqlx_migrations` 记录与 SHA-384 校验值。
+/// 仅在执行时去掉 migration 文本最外层的显式事务；磁盘上的 migration
+/// 原文不变，checksum 始终按原文计算。用户库中由 codex/horizon-quality-upgrade
+/// 分支应用过的 24–27 记录因此能通过校验。这样既兼容历史文件，又保证
+/// schema 变更和安装记录在同一个事务中提交。
+pub(crate) async fn migrate_embedded_schema(
+    conn: &mut SqliteConnection,
+    migrations: &[Migration],
+) -> Result<(), String> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY NOT NULL,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL,
+            checksum BLOB NOT NULL,
+            execution_time BIGINT NOT NULL
+        )",
+    )
+    .await
+    .map_err(|error| format!("创建 migration 记录表失败：{error}"))?;
+
+    let mut known = std::collections::HashMap::with_capacity(migrations.len());
+    let mut previous_version = None;
+    for migration in migrations {
+        if previous_version.is_some_and(|version| migration.version <= version) {
+            return Err(format!(
+                "migration 版本必须严格递增：{} 排在 {:?} 之后",
+                migration.version, previous_version
+            ));
+        }
+        previous_version = Some(migration.version);
+        if known.insert(migration.version, migration).is_some() {
+            return Err(format!("migration 版本重复：{}", migration.version));
+        }
+    }
+
+    let applied_rows = sqlx::query(
+        "SELECT version, success, checksum
+         FROM _sqlx_migrations
+         ORDER BY version",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|error| format!("读取 migration 记录失败：{error}"))?;
+
+    let mut applied = std::collections::HashSet::with_capacity(applied_rows.len());
+    for row in applied_rows {
+        let version: i64 = row
+            .try_get("version")
+            .map_err(|error| format!("读取 migration 版本失败：{error}"))?;
+        let success: i64 = row
+            .try_get("success")
+            .map_err(|error| format!("读取 migration 状态失败：{error}"))?;
+        let checksum: Vec<u8> = row
+            .try_get("checksum")
+            .map_err(|error| format!("读取 migration 校验值失败：{error}"))?;
+        let Some(migration) = known.get(&version) else {
+            return Err(format!("数据库包含未知 migration：{version}"));
+        };
+        if success != 1 {
+            return Err(format!("数据库包含未完成 migration：{version}"));
+        }
+        let expected = Sha384::digest(migration.sql.as_bytes());
+        if checksum.as_slice() != expected.as_slice() {
+            return Err(format!(
+                "migration 校验值不匹配：{version} ({})",
+                migration.description
+            ));
+        }
+        applied.insert(version);
+    }
+
+    for migration in migrations {
+        if applied.contains(&migration.version) {
+            continue;
+        }
+
+        let sql = migration_sql_for_execution(migration)?;
+        let started_at = std::time::Instant::now();
+        conn.execute("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| format!("开始 migration {} 事务失败：{error}", migration.version))?;
+
+        let result = async {
+            conn.execute(sql.as_ref())
+                .await
+                .map_err(|error| format!("执行 migration {} 失败：{error}", migration.version))?;
+
+            let checksum = Sha384::digest(migration.sql.as_bytes());
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations
+                 (version, description, installed_on, success, checksum, execution_time)
+                 VALUES ($1, $2, CURRENT_TIMESTAMP, 1, $3, $4)",
+            )
+            .bind(migration.version)
+            .bind(migration.description)
+            .bind(checksum.as_slice())
+            .bind(started_at.elapsed().as_millis() as i64)
+            .execute(&mut *conn)
+            .await
+            .map_err(|error| format!("登记 migration {} 失败：{error}", migration.version))?;
+
+            Ok::<(), String>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT").await.map_err(|error| {
+                    format!("提交 migration {} 事务失败：{error}", migration.version)
+                })?;
+                applied.insert(migration.version);
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK").await;
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 只移除 migration 文本最外层的事务边界，不改动其源文本或 checksum。
+/// 触发器内部的 BEGIN/END 不在首尾，因此不会被误处理。
+fn migration_body_for_execution(sql: &str) -> &str {
+    let statement_start = leading_sql_trivia_len(sql);
+    let executable = &sql[statement_start..];
+    let begin_len = if executable
+        .get(.."BEGIN IMMEDIATE;".len())
+        .is_some_and(|value| value.eq_ignore_ascii_case("BEGIN IMMEDIATE;"))
+    {
+        "BEGIN IMMEDIATE;".len()
+    } else if executable
+        .get(.."BEGIN;".len())
+        .is_some_and(|value| value.eq_ignore_ascii_case("BEGIN;"))
+    {
+        "BEGIN;".len()
+    } else {
+        return sql;
+    };
+
+    let executable_end = trailing_sql_trivia_start(sql);
+    let Some(commit_start) = executable_end.checked_sub("COMMIT;".len()) else {
+        return sql;
+    };
+    if !sql[commit_start..executable_end].eq_ignore_ascii_case("COMMIT;") {
+        return sql;
+    }
+
+    &sql[statement_start + begin_len..commit_start]
+}
+
+/// 0024 was already shipped with a valid SQLx checksum, but its correlated
+/// scalar subquery orders by columns from the outer `node` alias.  The SQLite
+/// library bundled by sqlx rejects that name resolution even though the macOS
+/// system SQLite used by the original fixture accepts it.  Never edit the
+/// historical file: existing databases must keep its checksum.  Instead,
+/// normalize only that known block while executing an unapplied 0024 and
+/// record the checksum of the immutable source text.
+fn migration_sql_for_execution<'a>(migration: &'a Migration) -> Result<Cow<'a, str>, String> {
+    let body = migration_body_for_execution(migration.sql);
+    if migration.version != 24 {
+        return Ok(Cow::Borrowed(body));
+    }
+
+    const LEGACY_LOOKUP: &str = r#"    (
+      SELECT chapter.id
+      FROM knowledge_nodes chapter
+      WHERE chapter.textbook_id = node.textbook_id
+        AND chapter.node_type = 'chapter'
+        AND chapter.archived_at IS NULL
+        AND (
+          lower(node.path) LIKE lower(chapter.path) || '/%'
+          OR (
+            node.source_page_start IS NOT NULL
+            AND chapter.source_page_start IS NOT NULL
+            AND node.source_page_start >= chapter.source_page_start
+            AND node.source_page_start <= COALESCE(chapter.source_page_end, 2147483647)
+          )
+        )
+      ORDER BY CASE WHEN lower(node.path) LIKE lower(chapter.path) || '/%' THEN 0 ELSE 1 END,
+        abs(COALESCE(node.source_page_start, chapter.source_page_start) - COALESCE(chapter.source_page_start, node.source_page_start))
+      LIMIT 1
+    ),"#;
+    const COMPATIBLE_LOOKUP: &str = r#"    (
+      SELECT chapter.id
+      FROM knowledge_nodes chapter
+      WHERE chapter.textbook_id = node.textbook_id
+        AND chapter.node_type = 'chapter'
+        AND chapter.archived_at IS NULL
+        AND lower(node.path) LIKE lower(chapter.path) || '/%'
+      ORDER BY length(chapter.path) DESC, chapter.sort_order, chapter.id
+      LIMIT 1
+    ),
+    (
+      SELECT chapter.id
+      FROM knowledge_nodes chapter
+      WHERE chapter.textbook_id = node.textbook_id
+        AND chapter.node_type = 'chapter'
+        AND chapter.archived_at IS NULL
+        AND node.source_page_start IS NOT NULL
+        AND chapter.source_page_start IS NOT NULL
+        AND node.source_page_start >= chapter.source_page_start
+        AND node.source_page_start <= COALESCE(chapter.source_page_end, 2147483647)
+      ORDER BY chapter.source_page_start DESC, chapter.sort_order, chapter.id
+      LIMIT 1
+    ),"#;
+
+    if body.matches(LEGACY_LOOKUP).count() != 1 {
+        return Err("migration 24 的兼容修复目标与已知源文件不一致".to_string());
+    }
+    Ok(Cow::Owned(body.replacen(
+        LEGACY_LOOKUP,
+        COMPATIBLE_LOOKUP,
+        1,
+    )))
+}
+
+fn leading_sql_trivia_len(sql: &str) -> usize {
+    let bytes = sql.as_bytes();
+    let mut offset = 0;
+    loop {
+        while offset < bytes.len() && bytes[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        if sql[offset..].starts_with("--") {
+            offset = sql[offset..]
+                .find('\n')
+                .map_or(bytes.len(), |newline| offset + newline + 1);
+            continue;
+        }
+        if sql[offset..].starts_with("/*") {
+            let Some(end) = sql[offset + 2..].find("*/") else {
+                return offset;
+            };
+            offset += end + 4;
+            continue;
+        }
+        return offset;
+    }
+}
+
+fn trailing_sql_trivia_start(sql: &str) -> usize {
+    let mut end = sql.len();
+    loop {
+        while end > 0 && sql.as_bytes()[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        if sql[..end].ends_with("*/") {
+            let Some(start) = sql[..end - 2].rfind("/*") else {
+                return end;
+            };
+            end = start;
+            continue;
+        }
+        let line_start = sql[..end].rfind('\n').map_or(0, |newline| newline + 1);
+        if sql[line_start..end].trim_start().starts_with("--") {
+            end = line_start;
+            continue;
+        }
+        return end;
+    }
+}
+
+pub async fn init_db(app: &AppHandle, migrations: Vec<Migration>) -> Result<(), String> {
     let path = db_path(app)?;
     let options = SqliteConnectOptions::new()
         .filename(&path)
@@ -105,6 +381,10 @@ pub async fn init_db(app: &AppHandle) -> Result<(), String> {
     conn.execute("PRAGMA foreign_keys = ON")
         .await
         .map_err(|e| format!("启用外键约束失败：{e}"))?;
+
+    // 启动期在 Rust 侧预执行全部迁移（含 checksum 校验），前端
+    // Database.load 时 tauri-plugin-sql 不再自行跑迁移。
+    migrate_embedded_schema(&mut conn, &migrations).await?;
 
     app.manage(DbState {
         connection: Mutex::new(Some(conn)),

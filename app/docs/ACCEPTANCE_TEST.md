@@ -127,7 +127,10 @@ ls -la "$HOME/Library/Logs/com.axiom.study/" 2>/dev/null || echo "OS 默认 Logs
 
 ---
 
-## C. AI Provider 与 Keychain
+## C. AI Provider 与 API Key（SQLite 本地存储）
+
+> 决策口径：migration 0021 起，API Key 以 SQLite `ai_provider_profiles.api_key`
+> 列为唯一事实源；Keychain 仅用于旧版本数据的一次性恢复（`recover_legacy_api_keys`）。
 
 ### C.1 添加 OpenAI 兼容 Provider
 **步骤**：
@@ -136,49 +139,55 @@ ls -la "$HOME/Library/Logs/com.axiom.study/" 2>/dev/null || echo "OS 默认 Logs
 3. 保存。
 
 **预期**：
-- 保存后 UI 显示「API Key 已保存到 Keychain」。
-- API Key 输入框被清空，placeholder 变为「输入新值以替换 Keychain 中的密钥（留空保持不变）」。
+- 保存后 UI 显示「已保存 · sk-••••••••<末4位>」（掩码来自数据库安全派生，不是真实 Key）。
+- API Key 输入框被清空，placeholder 变为「不填写则保留已保存 Key」。
 
 **实际**：
 
-### C.2 API Key 不回传前端（约束 #2 核心）
+### C.2 api_key 持久化于 SQLite
 **步骤**：终端执行：
 ```sh
 # 查询数据库中的 ai_provider_profiles 表
 sqlite3 "$HOME/Library/Application Support/com.axiom.study/axiom.db" \
-  "SELECT id, name, credential_ref, api_key FROM ai_provider_profiles;"
+  "SELECT id, name, length(trim(api_key)) > 0 AS has_key FROM ai_provider_profiles;"
 ```
 
 **预期**：
-- `credential_ref` 列等于 Provider id（非空）。
-- `api_key` 列为空字符串（**不应**包含明文 key）。
+- 刚保存的 Provider 的 `api_key` 列**存在且不为空**（等于保存的明文 Key）。
+- SQLite 是 API Key 的唯一持久化位置，不依赖 Keychain 条目存在。
 
 **实际**：
 
-### C.3 Keychain 条目存在
-**步骤**：打开「钥匙串访问」App，搜索 `axiom`（或 service name `com.axiom.study.keystore`）。
+### C.3 Profile 读取接口不回传明文
+**步骤**：
+1. 重新进入设置页加载 Provider 列表。
+2. 检查前端读取 SQL（`platform/database.ts` 的 `listAIProviderProfiles`）与实际返回字段。
 
-**预期**：能看到一条名为 `axiom.<provider_id>` 的密码条目。
+**预期**：
+- 读取接口仅返回 `has_api_key` 布尔与 `api_key_suffix`（Key 末 4 位），**不 SELECT 完整 api_key 列**。
+- 前端 React state、网络 / IPC 面板中均不出现完整 API Key。
 
 **实际**：
 
-### C.4 AI 调用从 Keychain 直读
+### C.4 日志不落密钥明文
 **步骤**：
 1. 在题库中触发一次 AI 解题。
-2. 查看日志 `axiom.log`。
+2. 在 `axiom.log` 中搜索所保存的 API Key 字符串。
 
 **预期**：
-- 日志中**不应**出现 `load_api_key` 的 IPC 调用记录（说明是 Rust 内部直读，约束 #2）。
-- 不应在任何前端日志 / 网络请求面板中看到完整 API Key。
+- 日志文件中**不应**出现 API Key 明文（含 AI 请求相关日志）。
+- 应用不因 Key 读取失败而崩溃。
 
 **实际**：
 
-### C.5 删除 Provider 清理 Keychain
-**步骤**：在设置中删除上一步创建的 Provider。
+### C.5 删除 Key 与删除 Provider
+**步骤**：
+1. 在设置中点击「删除 API Key」。
+2. 再删除该 Provider。
 
 **预期**：
-- 钥匙串中对应条目被删除（幂等，再次删除不报错）。
-- 数据库中该行已删除。
+- 删除 Key 后 UI 显示「未保存」，数据库中 `api_key` 列为空（幂等，再次删除不报错）。
+- 删除 Provider 后该行从 `ai_provider_profiles` 中移除。
 
 **实际**：
 
@@ -311,14 +320,21 @@ sqlite3 "$HOME/Library/Application Support/com.axiom.study/axiom.db" \
 
 **实际**：
 
-### H.2 Keychain 条目丢失容错
+### H.2 recover_legacy_api_keys 一次性回迁容错
 **步骤**：
-1. 在「钥匙串访问」中删除 `axiom.<provider_id>` 条目。
-2. 触发该 Provider 的 AI 解题。
+1. 记录当前回迁状态：
+```sh
+sqlite3 "$HOME/Library/Application Support/com.axiom.study/axiom.db" \
+  "SELECT * FROM ai_provider_api_key_recovery_attempts;"
+```
+2. 重启 Axiom（前端在迁移完成后调用 `recover_legacy_api_keys`）。
+3. 再次查询上表与 `ai_provider_profiles`。
 
 **预期**：
-- Rust 命令返回明确错误：「Keychain 中未找到 API Key，请重新保存」。
-- 应用不崩溃，用户可在设置中重新保存 Key。
+- 回迁**仅一次性执行**：`ai_provider_api_key_recovery_attempts` 每个 Provider 至多一行（`ON CONFLICT(provider_id) DO NOTHING`），重复启动不产生重复行、不重复读取 Keychain。
+- 仅对「SQLite `api_key` 为空且存在旧 `credential_ref` 且无回迁记录」的 Provider 尝试从 Keychain 恢复；恢复成功后 Key 写回 `api_key` 列，日志出现「已从旧 Keychain 回迁 API Key」。
+- 回迁记录表只存状态码（`attempted_at` / `recovered_at` / `error_code`），**不含任何密钥材料**。
+- Keychain 条目不存在或读取失败时应用不崩溃（日志为 WARN），用户可在设置中重新保存 Key。
 
 **实际**：
 

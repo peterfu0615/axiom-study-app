@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { inferMissingTextbookRecognition } from './textbookRecognitionInference'
 import { parseTextbookRecognition } from './textbookRecognitionParser'
 
+const emptyField = { value: null, confidence: 0, evidence: '' }
+
 describe('textbook recognition inference fallback', () => {
   it('fills missing fields from local filename and extracted evidence', () => {
     const recognition = parseTextbookRecognition(JSON.stringify({
-      title: {}, subject: {}, grade: {}, volume: {}, publisher: {}, edition: {},
-      overall_confidence: 0.98, warnings: [],
+      title: emptyField, subject: emptyField, grade: emptyField, volume: emptyField,
+      publisher: emptyField, edition: emptyField,
+      chapters: [], overall_confidence: 0.98, warnings: [],
     }))
     const result = inferMissingTextbookRecognition(recognition, {
       sourceName: '（根据2022年版课程标准修订）义务教育教科书·数学八年级下册.pdf',
@@ -26,8 +29,8 @@ describe('textbook recognition inference fallback', () => {
     const recognition = parseTextbookRecognition(JSON.stringify({
       title: { value: '自定义标题', confidence: 0.9, evidence: 'AI' },
       subject: { value: '数学', confidence: 0.9, evidence: 'AI' },
-      grade: {}, volume: {}, publisher: {}, edition: {},
-      overall_confidence: 0.9, warnings: [],
+      grade: emptyField, volume: emptyField, publisher: emptyField, edition: emptyField,
+      chapters: [], overall_confidence: 0.9, warnings: [],
     }))
     const result = inferMissingTextbookRecognition(recognition, {
       sourceName: '数学八年级下册.pdf', outline: [], pages: [],

@@ -1,3 +1,4 @@
+import type { CurriculumImportJob } from '../../domain/horizon'
 import {
   getCurriculumImportJob,
   reconcileCurriculumImportResumeSlot,
@@ -6,7 +7,8 @@ import {
 import { isCurriculumAnalysisRunning } from './curriculumAnalysisStatus'
 
 const activeJobs = new Set<string>()
-let startupResume: Promise<Awaited<ReturnType<typeof getCurriculumImportJob>>> | null = null
+const resumeSettleListeners = new Set<(job: CurriculumImportJob) => void>()
+let startupResume: Promise<CurriculumImportJob | null> | null = null
 
 export async function startCurriculumImport(jobId: string, resumeAfterRestart = false) {
   if (activeJobs.has(jobId)) return getCurriculumImportJob(jobId)
@@ -22,7 +24,10 @@ export async function startCurriculumImport(jobId: string, resumeAfterRestart = 
   }
 }
 
-export async function resumeCurriculumImports() {
+export async function resumeCurriculumImports(
+  onSettled?: (job: CurriculumImportJob) => void,
+) {
+  if (onSettled) resumeSettleListeners.add(onSettled)
   if (startupResume) return startupResume
   startupResume = (async () => {
     const slot = await reconcileCurriculumImportResumeSlot()
@@ -31,6 +36,20 @@ export async function resumeCurriculumImports() {
       // page never reaches this coordinator and therefore cannot create an
       // attempt or redispatch a provider request.
       void startCurriculumImport(slot.id, true)
+        .then((finished) => {
+          // Publish the terminal state immediately instead of waiting for the
+          // next poll tick: the store disarms its timer once the job stops
+          // running, so completed/failed states must be pushed proactively.
+          if (!finished) return
+          for (const listener of [...resumeSettleListeners]) listener(finished)
+        })
+        .catch(() => {
+          // The persisted row keeps the failure state; the status store picks
+          // it up on its next refresh.  Only the listeners are dropped here.
+        })
+        .finally(() => {
+          resumeSettleListeners.clear()
+        })
     }
     return slot
   })()

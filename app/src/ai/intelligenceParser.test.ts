@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  extractPartialField,
   parseExplainSelection,
   parseReasoningAnalysis,
   parseStudentAttempt,
@@ -83,5 +84,44 @@ describe('intelligence parsers', () => {
     )
     expect(parsed.analysis.errorType).toBe('calculation_error')
     expect(parsed.repairStrategy).toBeNull()
+  })
+})
+
+describe('extractPartialField', () => {
+  it('extracts the field value from a complete JSON document', () => {
+    const json = JSON.stringify({
+      explanation_markdown: '设 $y=kx+b$。\n因为直线过点 A，所以成立。',
+      key_point: '待定系数法',
+    })
+    expect(extractPartialField(json, 'explanation_markdown')).toBe(
+      '设 $y=kx+b$。\n因为直线过点 A，所以成立。',
+    )
+  })
+
+  it('returns the received prefix when the string value is truncated', () => {
+    const partial = '{"explanation_markdown": "第一行\n第二行只写了一'
+    expect(extractPartialField(partial, 'explanation_markdown')).toBe(
+      '第一行\n第二行只写了一',
+    )
+  })
+
+  it('drops a dangling escape when truncation splits an escape sequence', () => {
+    expect(extractPartialField('{"explanation_markdown": "abc\\', 'explanation_markdown')).toBe('abc')
+    expect(extractPartialField('{"explanation_markdown": "abc\\u00', 'explanation_markdown')).toBe('abc')
+  })
+
+  it('decodes escaped quotes and unicode escapes while streaming', () => {
+    const partial = '{"explanation_markdown": "引号 \\"ok\\" 与 \\u4e2d"'
+    expect(extractPartialField(partial, 'explanation_markdown')).toBe('引号 "ok" 与 中')
+  })
+
+  it('returns null when the field is missing or input is malformed', () => {
+    expect(extractPartialField('{"key_point": "x"}', 'explanation_markdown')).toBeNull()
+    expect(extractPartialField('完全不是 JSON 的说明文本', 'explanation_markdown')).toBeNull()
+    expect(extractPartialField('', 'explanation_markdown')).toBeNull()
+  })
+
+  it('never throws on arbitrary garbage input', () => {
+    expect(() => extractPartialField('\u{0}\ud800"explanation_markdown', 'explanation_markdown')).not.toThrow()
   })
 })

@@ -395,6 +395,67 @@ export function parseReasoningAnalysis(rawOutput: string): {
   }
 }
 
+const JSON_ESCAPE_SEQUENCES: Record<string, string> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+}
+
+/**
+ * 从流式累积的部分（或完整）JSON 文本中尽力提取指定字段的字符串值。
+ * 用于「向我解释」流式期在 JSON 尚未接收完整时先行渲染正文，
+ * 避免把原始 JSON（转义符、字段名）直接暴露给用户。
+ *
+ * 容错策略：
+ *   - 字段尚未到达 / 输入不是对象文本 → 返回 null（调用方退回占位提示）；
+ *   - 字符串值被截断（未收到结束引号）→ 返回已接收的部分，实现渐进显示；
+ *   - 转义序列被截断（孤立的反斜杠、不完整的 \\uXXXX）或遇到非法转义
+ *     → 丢弃残缺转义并返回此前已解析的部分；
+ *   - 任何异常一律吞掉并返回 null，本函数绝不抛错。
+ */
+export function extractPartialField(accumulated: string, field: string): string | null {
+  try {
+    if (!accumulated || !field) return null
+    const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const keyPattern = new RegExp(`"${escapedField}"\\s*:\\s*"`, 'u')
+    const keyMatch = keyPattern.exec(accumulated)
+    if (!keyMatch) return null
+
+    let index = keyMatch.index + keyMatch[0].length
+    let value = ''
+    while (index < accumulated.length) {
+      const character = accumulated[index]
+      if (character === '"') return value
+      if (character !== '\\') {
+        value += character
+        index += 1
+        continue
+      }
+      const next = accumulated[index + 1]
+      if (next === undefined) return value
+      if (next === 'u') {
+        const hex = accumulated.slice(index + 2, index + 6)
+        if (!/^[0-9a-fA-F]{4}$/u.test(hex)) return value
+        value += String.fromCodePoint(Number.parseInt(hex, 16))
+        index += 6
+        continue
+      }
+      const mapped = JSON_ESCAPE_SEQUENCES[next]
+      if (mapped === undefined) return value
+      value += mapped
+      index += 2
+    }
+    return value
+  } catch {
+    return null
+  }
+}
+
 export function parseExplainSelection(rawOutput: string): {
   result: ExplainResult
   repairStrategy: string | null
@@ -403,9 +464,11 @@ export function parseExplainSelection(rawOutput: string): {
   const value = parsed.value as ExplainSelectionJSON
   return {
     result: {
-      explanationMarkdown: value.explanation_markdown,
-      keyPoint: value.key_point,
-      relatedKnowledgePoints: value.related_knowledge_points,
+      explanationMarkdown: sanitizeAIOutputText(value.explanation_markdown),
+      keyPoint: sanitizeAIOutputText(value.key_point),
+      relatedKnowledgePoints: value.related_knowledge_points
+        .map(sanitizeAIOutputText)
+        .filter((point) => point.length > 0),
     },
     repairStrategy: parsed.repairStrategy,
   }

@@ -10,7 +10,9 @@ import {
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
 } from '../platform/database'
+import { getProblemTextbookMatch } from '../platform/horizonDatabase'
 import { normalizeAIProblemAnalysis } from '../domain/ai'
+import type { LockedTextbookContext } from '../domain/models'
 import {
   cropProblemDiagram,
   removeProblemDiagram,
@@ -40,6 +42,30 @@ function hasUsableDiagramBounds(
   return rect.width > 0.001 && rect.height > 0.001
 }
 
+/**
+ * 仅当题目的教材匹配被用户锁定且教材存在时返回教材上下文，
+ * 用于附加注入分析 prompt；读取失败不阻断分析流程。
+ */
+async function getLockedTextbookContext(
+  problemId: string,
+): Promise<LockedTextbookContext | null> {
+  try {
+    const match = await getProblemTextbookMatch(problemId)
+    if (!match || !match.locked || !match.textbook) return null
+    return {
+      title: match.textbook.title,
+      subject: match.textbook.subject,
+      grade: match.textbook.grade,
+      volume: match.textbook.volume,
+      publisher: match.textbook.publisher,
+      edition: match.textbook.edition,
+    }
+  } catch (error) {
+    console.error('[ProblemAI] 读取锁定教材上下文失败，将不注入教材信息', error)
+    return null
+  }
+}
+
 async function drainPendingProblemAI() {
   while (true) {
     const run = await claimNextProblemAIModelRun()
@@ -48,6 +74,7 @@ async function drainPendingProblemAI() {
 
     let activeRun = run
     const errors: string[] = []
+    const lockedTextbookContext = await getLockedTextbookContext(run.problemId)
     try {
       const providers = getVisionProvidersForRun(run.provider, run.model)
       for (const provider of providers) {
@@ -77,6 +104,7 @@ async function drainPendingProblemAI() {
                   .filter((region) => region.type === 'answer' && region.imagePath)
                   .map((region) => region.imagePath as string),
                 regionIds: regions.map((region) => region.id),
+                ...(lockedTextbookContext ? { lockedTextbookContext } : {}),
               })
               })()
             : await provider.analyzeProblemImage(activeRun.input)
