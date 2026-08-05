@@ -84,7 +84,9 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           RUNNER_TEMP_PASSWORD: ${{ secrets.RUNNER_TEMP_PASSWORD }}
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        # 注意：必须直接引用 secrets 上下文。步骤自身 env 块定义的变量
+        # 在该步骤 if: 求值时尚未注入，用 env.APPLE_CERTIFICATE 判断会恒为 false。
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
         run: |
           echo "signing=enabled" >> "$GITHUB_OUTPUT"
           echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
