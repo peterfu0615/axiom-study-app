@@ -124,7 +124,7 @@ describe('knowledge node import dedupe contract', () => {
     expect(source).toContain('loadActiveKnowledgeSiblings')
     expect(source).toContain('SELECT id, parent_id, canonical_name, created_at FROM knowledge_nodes')
     expect(source).toContain('AND archived_at IS NULL AND merged_into_id IS NULL')
-    // JS 端键与 migration 0026 部分唯一索引的 lower(trim()) 口径一致
+    // JS 端键与 migration 0028 部分唯一索引的 lower(trim()) 口径一致
     expect(source).toContain("canonicalName.trim().toLowerCase()")
     // 章节与知识点都从 sibling 映射中解析复用节点
     expect(source).toContain('siblingKey(null, chapter.title)')

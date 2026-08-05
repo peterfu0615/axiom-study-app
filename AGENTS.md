@@ -47,7 +47,7 @@ Axiom/
 │   │   │   ├── updater.rs        # 自动更新模块（GitHub Release 检查/下载/替换）
 │   │   │   ├── lib.rs            # 应用入口与插件注册
 │   │   │   └── models.rs         # 数据模型
-│   │   ├── migrations/           # SQLite 迁移脚本（0001-0025）
+│   │   ├── migrations/           # SQLite 迁移脚本（0001-0029）
 │   │   ├── Cargo.toml            # Rust 依赖
 │   │   └── tauri.conf.json        # Tauri 配置
 │   ├── scripts/
@@ -383,8 +383,11 @@ cd app/src-tauri && cargo clippy -- -D warnings && cargo fmt -- --check && cargo
 ### 数据库迁移
 
 - 迁移脚本位于 `app/src-tauri/migrations/`，命名 `XXXX_description.sql`
-- 新增迁移时递增编号（当前最大 0025）
-- 迁移在应用启动时自动执行（`lib.rs` setup）
+- 新增迁移时递增编号（当前最大 0029）
+- 迁移编号只增不复用（跨分支共享版本号空间）：复用已被其他分支占用的版本号会与既有库的 checksum 冲突
+- 迁移在应用启动时由 Rust 侧 `db::migrate_embedded_schema` 在 setup 阶段执行（早于前端 `Database.load`）；tauri-plugin-sql 不注册任何迁移，仅用于前端数据读写
+- 历史迁移（0024–0026）自带 `BEGIN IMMEDIATE/COMMIT` 以保证数据修复原子性，执行器只剥离最外层事务边界；磁盘原文与 SHA-384 checksum 永不修改，否则既有库启动时报 checksum 不匹配
+- 已被用户库应用过的迁移文件视为不可变：需要修正其行为时，只能新增编号更大的迁移
 
 ### Tauri 命令注册
 
@@ -437,7 +440,7 @@ A: 自动更新只能在通过 `.app` 安装的版本上运行，不能在 `npm 
 
 ### Q: 报「no such column: credential_ref」或 API Key 丢失
 
-A: 先确认全部迁移（0001-0025）已在 `lib.rs` 注册并执行。注意：migration 0021 起 API Key 以 SQLite `ai_provider_profiles.api_key` 为唯一事实源；Keychain 只是旧版本数据的一次性恢复来源（`recover_legacy_api_keys`），不再作为存储位置。
+A: 先确认全部迁移（0001-0029）已在 `lib.rs` 注册并执行。注意：migration 0021 起 API Key 以 SQLite `ai_provider_profiles.api_key` 为唯一事实源；Keychain 只是旧版本数据的一次性恢复来源（`recover_legacy_api_keys`），不再作为存储位置。
 
 ### Q: 日志文件找不到
 

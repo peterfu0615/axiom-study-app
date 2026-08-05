@@ -82,7 +82,7 @@ app/
   src-tauri/
     native/          Apple Vision / Core Image Swift 处理器（编译为 sidecar）
     binaries/        构建时生成的 sidecar 二进制
-    migrations/      追加式 SQLite 迁移（0001–0025）
+    migrations/      追加式 SQLite 迁移（0001–0029）
     src/             Rust 命令、数据库、AI 编排、自动更新
     Info.plist        macOS 隐私声明（NSCameraUsageDescription）
     Entitlements.plist

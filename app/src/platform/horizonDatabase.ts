@@ -126,7 +126,7 @@ function findPersistedKnowledgeReference(
 }
 
 // Re-importing the same textbook must merge into the existing tree instead of
-// failing on the sibling unique index (migration 0026).  One round trip loads
+// failing on the sibling unique index (migration 0028).  One round trip loads
 // every active node of the textbook and the JS map resolves siblings with the
 // same lower(trim()) contract as the partial unique index, so a large import
 // no longer pays one SELECT per chapter/point.  Loading more folded forms in

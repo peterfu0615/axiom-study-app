@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // End-to-end duplicate protection for knowledge tree imports (checkpoint 4).
 //
 // The fake DB below simulates exactly the SQLite behaviour the import path
-// touches, including migration 0026's partial unique index
+// touches, including migration 0028's partial unique index
 // (textbook_id, ifnull(parent_id,''), lower(trim(canonical_name)))
 // WHERE archived_at IS NULL AND merged_into_id IS NULL.  If the JS reuse
 // logic ever stops resolving existing siblings, the fake throws the same
@@ -197,7 +197,7 @@ import { confirmCurriculumImportJob } from './horizonDatabase'
 
 // Force both imports to target the same textbook row: the first id() call in
 // each confirm flow is the textbook id, so pinning it simulates re-importing
-// into an existing textbook (the scenario migration 0026 protects).
+// into an existing textbook (the scenario migration 0028 protects).
 let forcedTextbookId: string | null = null
 let idCounter = 0
 const asUuid = (value: string) => value as ReturnType<typeof crypto.randomUUID>
@@ -227,7 +227,7 @@ const variantOutline = [
   { title: ' ADDING fractions ', level: 2 },
 ]
 
-describe('knowledge tree duplicate protection (migration 0026)', () => {
+describe('knowledge tree duplicate protection (migration 0028)', () => {
   beforeEach(() => {
     fake.nodes.length = 0
     fake.pages = 0
