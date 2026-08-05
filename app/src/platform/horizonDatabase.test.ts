@@ -3,17 +3,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 // Records every statement funneled through db_execute / db_select so the
-// cancel contract can be asserted on the exact SQL sequence.
+// cancel contract can be asserted on the exact SQL sequence.  Overrides let
+// individual tests simulate affected-row counts and query results.
 const recorded = vi.hoisted(() => {
   const calls: Array<{ sql: string; params: unknown[] }> = []
-  return { calls }
+  const executeOverrides: Array<{ match: RegExp; rowsAffected: number }> = []
+  const selectOverrides: Array<{ match: RegExp; rows: unknown[] }> = []
+  return { calls, executeOverrides, selectOverrides }
 })
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string, args?: { sql?: string; params?: unknown[] }) => {
     if (command === 'db_execute' || command === 'db_select') {
-      recorded.calls.push({ sql: (args?.sql ?? '').trim(), params: args?.params ?? [] })
-      return command === 'db_select' ? [] : { rowsAffected: 0, lastInsertId: 0 }
+      const sql = (args?.sql ?? '').trim()
+      recorded.calls.push({ sql, params: args?.params ?? [] })
+      if (command === 'db_select') {
+        return recorded.selectOverrides.find((entry) => entry.match.test(sql))?.rows ?? []
+      }
+      return {
+        rowsAffected: recorded.executeOverrides.find((entry) => entry.match.test(sql))?.rowsAffected ?? 0,
+        lastInsertId: 0,
+      }
     }
     throw new Error(`unexpected invoke: ${command}`)
   }),
@@ -37,7 +47,13 @@ vi.mock('./native', () => ({
   verifyTextbookSource: vi.fn(),
 }))
 
-import { cancelRelabelBatch } from './horizonDatabase'
+import {
+  archiveTextbook,
+  cancelRelabelBatch,
+  getTextbookDeletionImpact,
+  listHorizonSubjects,
+  listTextbooks,
+} from './horizonDatabase'
 
 describe('cancelRelabelBatch', () => {
   beforeEach(() => {
@@ -133,5 +149,88 @@ describe('knowledge node import dedupe contract', () => {
     expect(source).toContain('executeBatchedInsert')
     expect(source).toContain('INSERT_BATCH_ROWS')
     expect(source).not.toContain('findActiveSiblingNodeId')
+  })
+})
+
+describe('archiveTextbook soft delete', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  const statements = () => recorded.calls.map((call) => call.sql)
+
+  it('archives the textbook and clears only unlocked problem matches in one transaction', async () => {
+    recorded.executeOverrides.push({ match: /UPDATE textbooks SET archived_at/, rowsAffected: 1 })
+    await expect(archiveTextbook('book-1')).resolves.toBe(true)
+    const sequence = statements()
+    expect(sequence[0]).toBe('BEGIN IMMEDIATE')
+    expect(sequence.at(-1)).toBe('COMMIT')
+    expect(sequence.filter((sql) => sql === 'BEGIN IMMEDIATE')).toHaveLength(1)
+    const textbookUpdate = recorded.calls.find((call) => call.sql.startsWith('UPDATE textbooks'))!
+    expect(textbookUpdate.sql).toContain('archived_at = $1')
+    expect(textbookUpdate.sql).toContain('is_current = 0')
+    // 软删除只作用于活跃教材，重复归档天然幂等
+    expect(textbookUpdate.sql).toContain('AND archived_at IS NULL')
+    expect(textbookUpdate.params).toEqual([expect.any(Number), 'book-1'])
+    const problemUpdate = recorded.calls.find((call) => call.sql.startsWith('UPDATE problems'))!
+    expect(problemUpdate.sql).toContain('matched_textbook_id = NULL')
+    expect(problemUpdate.sql).toContain("textbook_match_source = 'unresolved'")
+    expect(problemUpdate.sql).toContain('textbook_match_locked = 0')
+    // 已锁定的匹配是用户的显式选择，删课后必须保留
+    expect(problemUpdate.sql).toContain('WHERE matched_textbook_id = $2 AND textbook_match_locked = 0')
+    expect(problemUpdate.params).toEqual([expect.any(Number), 'book-1'])
+  })
+
+  it('is idempotent: re-archiving reports no deletion and skips match cleanup', async () => {
+    // 默认 rowsAffected = 0 → 教材已归档，二次调用返回未删除
+    await expect(archiveTextbook('book-1')).resolves.toBe(false)
+    expect(statements().some((sql) => sql.startsWith('UPDATE problems'))).toBe(false)
+  })
+
+  it('list queries keep hiding archived textbooks afterwards', async () => {
+    await listTextbooks('数学')
+    await listHorizonSubjects()
+    const textbookList = recorded.calls.find((call) => call.sql.includes('SELECT * FROM textbooks'))!
+    expect(textbookList.sql).toContain('archived_at IS NULL')
+    const subjectList = recorded.calls.find((call) => call.sql.startsWith('SELECT subject FROM textbooks'))!
+    expect(subjectList.sql).toContain('archived_at IS NULL')
+  })
+})
+
+describe('getTextbookDeletionImpact', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  it('counts chapters, knowledge points, pages and matched problems', async () => {
+    recorded.selectOverrides.push(
+      {
+        match: /FROM knowledge_nodes/,
+        rows: [
+          { node_type: 'chapter', count: 3 },
+          { node_type: 'knowledge', count: 5 },
+          { node_type: 'formula', count: 2 },
+          { node_type: 'section', count: 1 },
+        ],
+      },
+      { match: /FROM textbook_pages/, rows: [{ count: 12 }] },
+      { match: /FROM problems/, rows: [{ count: 4 }] },
+    )
+    await expect(getTextbookDeletionImpact('book-1')).resolves.toEqual({
+      chapterCount: 3,
+      knowledgeCount: 7,
+      pageCount: 12,
+      matchedProblemCount: 4,
+    })
+    const nodeQuery = recorded.calls.find((call) => call.sql.includes('FROM knowledge_nodes'))!
+    // 已归档节点不计入删除影响
+    expect(nodeQuery.sql).toContain('AND archived_at IS NULL')
+    const problemQuery = recorded.calls.find((call) => call.sql.includes('FROM problems'))!
+    expect(problemQuery.sql).toContain('matched_textbook_id = $1')
+    expect(problemQuery.sql).toContain('deleted_at IS NULL')
   })
 })

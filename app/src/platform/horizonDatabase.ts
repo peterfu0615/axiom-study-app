@@ -1393,6 +1393,76 @@ export async function archiveKnowledgeNode(node: KnowledgeNode) {
   )
 }
 
+export interface TextbookDeletionImpact {
+  chapterCount: number
+  knowledgeCount: number
+  pageCount: number
+  matchedProblemCount: number
+}
+
+// Mirrors the knowledge-point filter used by CurriculumWorkspace so the
+// deletion impact preview matches what the user sees in the summary panel.
+const KNOWLEDGE_POINT_NODE_TYPES = ['knowledge', 'definition', 'formula', 'theorem', 'property']
+
+export async function getTextbookDeletionImpact(textbookId: string): Promise<TextbookDeletionImpact> {
+  const [nodeRows, pageRows, problemRows] = await Promise.all([
+    select<Array<{ node_type: string; count: number }>>(
+      `SELECT node_type, COUNT(*) AS count FROM knowledge_nodes
+       WHERE textbook_id = $1 AND archived_at IS NULL
+       GROUP BY node_type`,
+      [textbookId],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT COUNT(*) AS count FROM textbook_pages WHERE textbook_id = $1`,
+      [textbookId],
+    ),
+    select<Array<{ count: number }>>(
+      `SELECT COUNT(*) AS count FROM problems
+       WHERE matched_textbook_id = $1 AND deleted_at IS NULL`,
+      [textbookId],
+    ),
+  ])
+  let chapterCount = 0
+  let knowledgeCount = 0
+  for (const row of nodeRows) {
+    const count = Number(row.count)
+    if (row.node_type === 'chapter') chapterCount += count
+    else if (KNOWLEDGE_POINT_NODE_TYPES.includes(String(row.node_type))) knowledgeCount += count
+  }
+  return {
+    chapterCount,
+    knowledgeCount,
+    pageCount: Number(pageRows[0]?.count ?? 0),
+    matchedProblemCount: Number(problemRows[0]?.count ?? 0),
+  }
+}
+
+export async function archiveTextbook(textbookId: string): Promise<boolean> {
+  const now = Date.now()
+  return transaction(async () => {
+    // Soft delete keeps every row intact, so FK references and audit history
+    // survive; all list queries already filter archived_at IS NULL.
+    const archived = await execute(
+      `UPDATE textbooks SET archived_at = $1, is_current = 0, updated_at = $1
+       WHERE id = $2 AND archived_at IS NULL`,
+      [now, textbookId],
+    )
+    if (archived.rowsAffected === 0) return false
+    // Locked matches are the user's explicit choice and survive the deletion;
+    // unlocked matches point at a course that no longer exists, so release
+    // them back to unresolved.  NEW.matched_textbook_id is NULL here, so the
+    // subject consistency trigger never fires.
+    await execute(
+      `UPDATE problems SET matched_textbook_id = NULL, textbook_match_confidence = 0,
+       textbook_match_reason = '教材已删除', textbook_match_source = 'unresolved',
+       textbook_match_locked = 0, textbook_match_updated_at = $1, updated_at = $1
+       WHERE matched_textbook_id = $2 AND textbook_match_locked = 0`,
+      [now, textbookId],
+    )
+    return true
+  })
+}
+
 export { mergeKnowledgeNodes }
 
 export async function listTagDefinitions(

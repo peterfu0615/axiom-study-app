@@ -24,10 +24,19 @@ describe('curriculum structure layout contract', () => {
     expect(stylesheet).toContain('.curriculum-tag-table article > .ax-status-badge')
   })
 
-  it('gives textbook analysis a full-width mode without changing compact relabel cards', () => {
+  it('gives textbook analysis a full-width mode and aligns relabel cards with the tag table', () => {
     expect(readFileSync(new URL('../../components/ui/FlowingTaskSurface.css', import.meta.url), 'utf8')).toMatch(/\.flowing-task-surface\.is-full-width\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/u)
     expect(stylesheet).toMatch(/\.curriculum-task-safe-area > \.flowing-task-surface\.is-full-width\s*\{[^}]*justify-self:\s*stretch/u)
-    expect(stylesheet).toContain('.curriculum-relabel-task.is-active > .flowing-task-surface { width: min(100%, 520px);')
+    // 运行中的旧错题任务卡片与上方标签表格同宽、同左右边距（不再 520px 限宽居中）
+    expect(stylesheet).toContain('.curriculum-relabel-task.is-active { display: block; padding: 15px 0; }')
+    expect(stylesheet).toContain('.curriculum-relabel-task.is-active > .flowing-task-surface { width: 100%; }')
+    expect(stylesheet).not.toContain('width: min(100%, 520px); margin: 0 auto;')
+  })
+
+  it('keeps review feedback banners aligned with the review content rows', () => {
+    // Banner 与内联错误提示沿用工具栏/列表的 16px 水平内缩，宽度与内容行一致
+    expect(stylesheet).toContain('.curriculum-review-center__body > .ax-inline-notice { margin: 0 16px 10px; }')
+    expect(stylesheet).toContain('.curriculum-review-center__body > .curriculum-inline-error { margin: 0 16px 10px; }')
   })
 
   it('keeps preview fixtures on the two-level structure contract', () => {
