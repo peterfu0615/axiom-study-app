@@ -225,6 +225,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0031_textbook_resolution_audit.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 32,
+            description: "curriculum_structured_errors",
+            sql: include_str!("../migrations/0032_curriculum_structured_errors.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

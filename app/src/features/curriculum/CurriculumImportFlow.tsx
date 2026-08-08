@@ -5,12 +5,14 @@ import {
   Button,
   Dialog,
   EmptyState,
+  ErrorState,
   FlowingTaskSurface,
   FileDropzone,
   IconButton,
   ListboxSelect,
   StatusBadge,
 } from '../../components/ui'
+import { classifyAIError } from '../../domain/aiError'
 import { cancelTextbookImport, mediaAssetUrl } from '../../platform/native'
 import type { TextbookExtractionProgress, TextbookOutlineCandidate } from '../../platform/native'
 import {
@@ -312,11 +314,11 @@ export function CurriculumImportFlow({
       )}
 
       {job?.status === 'ai_failed_recoverable' && (
-        <section className="curriculum-import-card curriculum-import-processing curriculum-import-processing--error">
-          <h2>分析已暂停</h2>
-          <p>{job.errorMessage || '请检查文件后重试。'}</p>
-          <div className="curriculum-import-card__actions"><Button loading={submitting} onClick={() => void retry()} variant="primary">重新尝试</Button><Button onClick={() => setCancelConfirmOpen(true)} variant="ghost">放弃分析</Button></div>
-        </section>
+        <ErrorState
+          error={job.error ?? classifyAIError(job.errorMessage || '请检查文件后重试。')}
+          onRetry={submitting ? undefined : () => void retry()}
+          secondaryAction={<Button onClick={() => setCancelConfirmOpen(true)} variant="ghost">放弃分析</Button>}
+        />
       )}
 
       {phase === 'confirm' && job?.recognition && (

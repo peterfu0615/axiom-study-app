@@ -500,6 +500,8 @@ export async function completeCurriculumImportAttempt(request: CurriculumImportA
 
 export async function failCurriculumImportAttempt(request: CurriculumImportAttemptIdentity & {
   errorMessage: string
+  errorCode: string
+  errorJson: string
 }) {
   return invoke<boolean>('fail_curriculum_import_attempt', { request })
 }

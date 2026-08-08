@@ -18,9 +18,16 @@ import {
   type TextbookRecognition,
 } from '../domain/horizon'
 import {
+  AIProviderFailure,
   getTextbookRecognitionProvider,
   getCurriculumAnalysisProvider,
 } from '../ai/provider'
+import {
+  classifyAIError,
+  isAIErrorEnvelope,
+  publicAIErrorMessage,
+  type AIErrorEnvelope,
+} from '../domain/aiError'
 import {
   buildCurriculumAuditPrompt,
   buildCurriculumTagPrompt,
@@ -359,6 +366,8 @@ function rowToTextbook(row: Record<string, unknown>): Textbook {
 
 function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImportJob {
   const storedRecognition = parseJSON<Record<string, unknown> | null>(row.metadata_json, null)
+  const storedError = parseJSON<AIErrorEnvelope | null>(row.error_json, null)
+  const errorMessage = nullableString(row.error_message)
   return {
     id: String(row.id),
     originalSourcePath: String(row.original_source_path),
@@ -383,7 +392,12 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
     schemaVersion: nullableString(row.schema_version),
     inputHash: nullableString(row.input_hash),
     rawOutput: nullableString(row.raw_output),
-    errorMessage: nullableString(row.error_message),
+    errorMessage,
+    error: isAIErrorEnvelope(storedError)
+      ? storedError
+      : errorMessage
+        ? classifyAIError(errorMessage)
+        : null,
     providerTaskId: nullableString(row.provider_task_id),
     structure: parseJSON<unknown | null>(row.structure_json, null),
     tags: parseJSON<unknown | null>(row.tags_json, null),
@@ -899,10 +913,43 @@ async function failCurriculumAttempt(
   lease: CurriculumImportAttemptLease,
   error: unknown,
 ) {
+  const job = await getCurriculumImportJob(jobId)
+  const source = error instanceof AIProviderFailure ? error.error : error
+  const envelope = classifyAIError(source, {
+    providerId: job?.provider ?? null,
+    model: job?.model ?? null,
+    attemptId: lease.attemptId,
+    detailSafe: error instanceof AIProviderFailure
+      ? error.error.detailSafe ?? `stage=${stage}`
+      : `${readableAttemptError(error)} · stage=${stage}`,
+  })
   await failCurriculumImportAttempt({
     ...attemptIdentity(jobId, stage, lease),
-    errorMessage: readableAttemptError(error),
+    errorMessage: publicAIErrorMessage(envelope),
+    errorCode: envelope.code,
+    errorJson: JSON.stringify(envelope),
   })
+}
+
+async function persistCurriculumJobFailure(
+  jobId: string,
+  error: unknown,
+  resumeStage?: CurriculumImportJob['stage'],
+) {
+  const job = await getCurriculumImportJob(jobId)
+  const envelope = classifyAIError(error, {
+    providerId: job?.provider ?? null,
+    model: job?.model ?? null,
+    detailSafe: readableAttemptError(error),
+  })
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
+     resume_stage = COALESCE($1, resume_stage), error_message = $2,
+     error_code = $3, error_json = $4, progress_label = '分析已暂停',
+     updated_at = $5 WHERE id = $6`,
+    [resumeStage ?? null, publicAIErrorMessage(envelope), envelope.code,
+      JSON.stringify(envelope), Date.now(), jobId],
+  )
 }
 
 async function runStructureStage(
@@ -1119,13 +1166,7 @@ export async function createCurriculumImportJob(
   // late-result checks, so the UI can poll the single slot while this pipeline
   // advances through structure, tags, and audit in the background.
   void runStructureStage(jobId).catch(async (error) => {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       resume_stage = 'waiting_for_review', error_message = $1,
-       progress_label = '分析已暂停', updated_at = $2
-       WHERE id = $3`,
-      [readableAttemptError(error), Date.now(), jobId],
-    ).catch(() => {})
+    await persistCurriculumJobFailure(jobId, error, 'waiting_for_review').catch(() => {})
   })
   return getCurriculumImportJob(jobId)
 }
@@ -1138,19 +1179,15 @@ export async function runCurriculumImportJob(
   try {
     await verifyTextbookSource(job.originalSourcePath, job.contentHash ?? '')
   } catch (error) {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       error_message = $1, progress_label = '分析已暂停',
-       updated_at = $2 WHERE id = $3`,
-      [String(error), Date.now(), jobId],
-    )
+    await persistCurriculumJobFailure(jobId, error)
     return getCurriculumImportJob(jobId)
   }
   if (job.stage === 'waiting_for_review') {
     if (job.status === 'ai_failed_recoverable') {
       await execute(
         `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
-         error_message = NULL, progress_current = 1, progress_total = 1,
+         error_message = NULL, error_code = NULL, error_json = NULL,
+         progress_current = 1, progress_total = 1,
          progress_fraction = 1, progress_label = '分析完成',
          updated_at = $1 WHERE id = $2`,
         [Date.now(), jobId],

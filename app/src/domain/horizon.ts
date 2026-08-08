@@ -121,6 +121,7 @@ export interface CurriculumImportJob {
   inputHash: string | null
   rawOutput: string | null
   errorMessage: string | null
+  error?: import('./aiError').AIErrorEnvelope | null
   providerTaskId: string | null
   structure: unknown | null
   tags: unknown | null

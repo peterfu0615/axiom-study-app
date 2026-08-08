@@ -50,13 +50,16 @@ vi.mock('./native', () => ({
 import {
   archiveTextbook,
   cancelRelabelBatch,
+  getCurriculumImportJob,
   getTextbookDeletionImpact,
   listHorizonSubjects,
   listTextbooks,
   resolveProblemTextbookBeforeAnalysis,
   resolveProblemTextbookContextBeforeAnalysis,
+  runCurriculumImportJob,
   writeControlledProblemAnalysis,
 } from './horizonDatabase'
+import { verifyTextbookSource } from './native'
 
 const textbookRow = (overrides: Record<string, unknown> = {}) => ({
   id: 'book-1', subject: '数学', title: '数学八年级下册', grade: '八年级',
@@ -64,6 +67,65 @@ const textbookRow = (overrides: Record<string, unknown> = {}) => ({
   source_type: 'pdf', source_path: null, content_hash: null,
   extraction_status: 'completed', extraction_method: 'pdf_text', is_current: 0,
   archived_at: null, created_at: 1, updated_at: 1, ...overrides,
+})
+
+const curriculumJobRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'job-1', original_source_path: '/tmp/math.pdf', source_path: '/tmp/math.pdf',
+  source_name: 'math.pdf', source_type: 'pdf', content_hash: 'hash',
+  status: 'ai_analyzing_structure', resume_stage: 'ai_analyzing_structure',
+  page_count: 1, extraction_method: 'pdf_text', extraction_json: '{"pageCount":1,"extractionMethod":"pdf_text","pages":[],"outline":[],"warnings":[]}',
+  metadata_json: null, provider: 'provider-1', model: 'model-1',
+  prompt_version: 'v1', schema_version: 'v1', input_hash: 'input', raw_output: null,
+  error_message: null, error_code: null, error_json: null, provider_task_id: null,
+  structure_json: null, tags_json: null, audit_json: null,
+  progress_current: 0, progress_total: 1, progress_fraction: 0, progress_label: '',
+  created_at: 1, updated_at: 1, ...overrides,
+})
+
+describe('curriculum structured failure compatibility', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+    vi.mocked(verifyTextbookSource).mockReset()
+  })
+
+  it('hydrates a persisted envelope and classifies a legacy error message', async () => {
+    const envelope = {
+      code: 'RATE_LIMIT_ERROR', title: '模型服务繁忙', userMessage: '请稍后重试。',
+      retryable: true, fallbackAllowed: true, providerId: 'provider-1', model: 'model-1',
+      httpStatus: 429, runId: null, attemptId: 'attempt-1', detailSafe: 'status=429', occurredAt: 1,
+    }
+    recorded.selectOverrides.push({
+      match: /SELECT \* FROM curriculum_import_jobs WHERE id = \$1/,
+      rows: [curriculumJobRow({ error_message: '旧版 timeout', error_json: JSON.stringify(envelope) })],
+    })
+    await expect(getCurriculumImportJob('job-1')).resolves.toMatchObject({ error: envelope })
+
+    recorded.selectOverrides[0].rows = [curriculumJobRow({ error_message: '旧版 timeout' })]
+    await expect(getCurriculumImportJob('job-1')).resolves.toMatchObject({
+      error: { code: 'TIMEOUT_ERROR', retryable: true },
+    })
+  })
+
+  it('persists source verification failures as machine-readable errors', async () => {
+    recorded.selectOverrides.push({
+      match: /SELECT \* FROM curriculum_import_jobs WHERE id = \$1/,
+      rows: [curriculumJobRow()],
+    })
+    vi.mocked(verifyTextbookSource).mockRejectedValueOnce(new Error('network connection failed'))
+
+    await runCurriculumImportJob('job-1')
+
+    const update = recorded.calls.find((call) =>
+      call.sql.startsWith("UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable'"),
+    )
+    expect(update?.sql).toContain('error_code = $3, error_json = $4')
+    expect(update?.params[2]).toBe('NETWORK_ERROR')
+    expect(JSON.parse(String(update?.params[3]))).toMatchObject({
+      code: 'NETWORK_ERROR', providerId: 'provider-1', model: 'model-1',
+    })
+  })
 })
 
 describe('cancelRelabelBatch', () => {
