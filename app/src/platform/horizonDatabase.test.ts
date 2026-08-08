@@ -54,6 +54,7 @@ import {
   listHorizonSubjects,
   listTextbooks,
   resolveProblemTextbookBeforeAnalysis,
+  resolveProblemTextbookContextBeforeAnalysis,
 } from './horizonDatabase'
 
 const textbookRow = (overrides: Record<string, unknown> = {}) => ({
@@ -313,5 +314,34 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     expect(update.params[0]).toBeNull()
     expect(update.params[3]).toBe('unresolved')
     expect(update.params[6]).toBe(0)
+  })
+
+  it('retrieves a bounded canonical context only from the selected textbook', async () => {
+    seed({}, [textbookRow()])
+    recorded.selectOverrides.push(
+      { match: /AS problem_text/, rows: [{ problem_text: '利用全等判定证明三角形全等' }] },
+      { match: /td\.id AS canonical_tag_id/, rows: [{
+        canonical_tag_id: 'tag-1', canonical_name: '三角形全等的判定', taxonomy_version: 4,
+        knowledge_node_id: 'node-1', path: '第十二章/三角形全等的判定',
+        evidence_text: '教材第十二章', aliases: `全等判定${String.fromCharCode(31)}判定全等`,
+      }] },
+    )
+    const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
+    expect(result.context).toMatchObject({
+      textbookId: 'book-1', subject: '数学', taxonomyVersion: 4,
+      totalKnowledgeCount: 1, candidateLimit: 30,
+      candidates: [{ canonicalTagId: 'tag-1', knowledgeNodeId: 'node-1' }],
+    })
+    const query = recorded.calls.find((call) => call.sql.includes('td.id AS canonical_tag_id'))!
+    expect(query.params).toEqual(['数学', 'book-1'])
+    expect(query.sql).toContain("td.lifecycle_status = 'active'")
+    expect(query.sql).toContain('kn.textbook_id = $2')
+  })
+
+  it('does not query or fabricate canonical knowledge when resolution is unresolved', async () => {
+    seed({}, [])
+    const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
+    expect(result.context).toBeNull()
+    expect(recorded.calls.some((call) => call.sql.includes('canonical_tag_id'))).toBe(false)
   })
 })

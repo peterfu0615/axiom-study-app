@@ -72,6 +72,35 @@ describe('subject-scoped controlled tag mapping', () => {
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 
+  it('accepts a controlled id only when it belongs to the selected textbook', () => {
+    const result = mapCandidatesToControlledTags(
+      '数学', 'knowledge',
+      [{ ...candidate, canonicalTagId: 'math-factoring', name: '模型返回的显示名' }],
+      [definition()], 'math-book',
+    )
+    expect(result[0].definition?.id).toBe('math-factoring')
+  })
+
+  it('rejects a real controlled id from another textbook', () => {
+    const result = mapCandidatesToControlledTags(
+      '数学', 'knowledge',
+      [{ ...candidate, canonicalTagId: 'other-book-tag' }],
+      [definition({ id: 'other-book-tag', textbookId: 'other-book' })], 'math-book',
+    )
+    expect(result[0].definition).toBeNull()
+    expect(result[0].mappingStatus).toBe('unmapped')
+  })
+
+  it('rejects hallucinated ids without silently falling back by name', () => {
+    const result = mapCandidatesToControlledTags(
+      '数学', 'knowledge',
+      [{ ...candidate, canonicalTagId: 'hallucinated-id' }],
+      [definition()], 'math-book',
+    )
+    expect(result[0].definition).toBeNull()
+    expect(result[0].mappingStatus).toBe('unmapped')
+  })
+
   it('does not map knowledge when the problem has no matched textbook', () => {
     const result = mapCandidatesToControlledTags(
       '数学',

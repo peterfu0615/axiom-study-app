@@ -20,12 +20,22 @@ import {
 import {
   PROBLEM_ANALYSIS_PROMPT,
   buildLockedTextbookPromptSection,
+  buildResolvedTextbookPromptSection,
   problemAnalysisAntigravityJSONSchema,
 } from './problemAnalysisContract'
 import {
   parseProblemAnalysis,
   ProblemAnalysisParseError,
 } from './problemAnalysisParser'
+
+function buildProblemTextbookPromptSection(input: ProblemAnalysisInput) {
+  if (input.resolvedTextbookContext) {
+    return buildResolvedTextbookPromptSection(input.resolvedTextbookContext)
+  }
+  return input.lockedTextbookContext
+    ? buildLockedTextbookPromptSection(input.lockedTextbookContext)
+    : ''
+}
 import {
   SOLUTION_PROMPT,
   solutionAntigravityJSONSchema,
@@ -416,11 +426,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         regionIds: input.regionIds,
         diagramImagePaths: input.diagramImagePaths,
         answerImagePaths: input.answerImagePaths,
-      })}\n</regions_json>${
-        input.lockedTextbookContext
-          ? buildLockedTextbookPromptSection(input.lockedTextbookContext)
-          : ''
-      }`,
+      })}\n</regions_json>${buildProblemTextbookPromptSection(input)}`,
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
     if (response.errorMessage || response.error) {
@@ -706,11 +712,7 @@ export class AntigravityCLIProvider implements AIProvider {
         regionIds: input.regionIds,
         diagramImagePaths: input.diagramImagePaths,
         answerImagePaths: input.answerImagePaths,
-      })}\n</regions_json>${
-        input.lockedTextbookContext
-          ? buildLockedTextbookPromptSection(input.lockedTextbookContext)
-          : ''
-      }`,
+      })}\n</regions_json>${buildProblemTextbookPromptSection(input)}`,
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
     if (response.errorMessage) {

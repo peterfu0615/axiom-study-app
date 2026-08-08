@@ -10,9 +10,9 @@ import {
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
 } from '../platform/database'
-import { resolveProblemTextbookBeforeAnalysis } from '../platform/horizonDatabase'
+import { resolveProblemTextbookContextBeforeAnalysis } from '../platform/horizonDatabase'
 import { normalizeAIProblemAnalysis } from '../domain/ai'
-import type { LockedTextbookContext } from '../domain/models'
+import type { ResolvedTextbookContext } from '../domain/models'
 import {
   cropProblemDiagram,
   removeProblemDiagram,
@@ -55,18 +55,9 @@ function hasUsableDiagramBounds(
  */
 async function getResolvedTextbookMetadata(
   problemId: string,
-): Promise<LockedTextbookContext | null> {
+): Promise<ResolvedTextbookContext | null> {
   try {
-    const match = await resolveProblemTextbookBeforeAnalysis(problemId)
-    if (!match?.textbook) return null
-    return {
-      title: match.textbook.title,
-      subject: match.textbook.subject,
-      grade: match.textbook.grade,
-      volume: match.textbook.volume,
-      publisher: match.textbook.publisher,
-      edition: match.textbook.edition,
-    }
+    return (await resolveProblemTextbookContextBeforeAnalysis(problemId)).context
   } catch (error) {
     console.error('[ProblemAI] 分析前教材解析失败，将按未匹配教材继续', error)
     return null
@@ -81,7 +72,7 @@ async function drainPendingProblemAI() {
 
     let activeRun = run
     const errors: AIErrorEnvelope[] = []
-    const lockedTextbookContext = await getResolvedTextbookMetadata(run.problemId)
+    const resolvedTextbookContext = await getResolvedTextbookMetadata(run.problemId)
     try {
       const providers = getVisionProvidersForRun(run.provider, run.model)
       let completedProviderResult: AIProviderResult | null = null
@@ -101,7 +92,7 @@ async function drainPendingProblemAI() {
                     diagramImagePaths: regions.filter((region) => region.type === 'diagram' && region.imagePath).map((region) => region.imagePath as string),
                     answerImagePaths: regions.filter((region) => region.type === 'answer' && region.imagePath).map((region) => region.imagePath as string),
                     regionIds: regions.map((region) => region.id),
-                    ...(lockedTextbookContext ? { lockedTextbookContext } : {}),
+                    ...(resolvedTextbookContext ? { resolvedTextbookContext } : {}),
                   })
                 })()
               : await provider.analyzeProblemImage(activeRun.input)

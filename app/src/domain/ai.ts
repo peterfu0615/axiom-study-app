@@ -45,6 +45,7 @@ function normalizeTagCandidates(value: unknown): AITagCandidate[] {
     if (!name) return []
     const source = asString(candidate.source)
     return [{
+      canonicalTagId: asString(candidate.canonicalTagId ?? candidate.canonical_tag_id) || null,
       name,
       role: candidate.role === 'primary' ? 'primary' : 'secondary',
       confidence: clampUnit(candidate.confidence),
@@ -241,6 +242,8 @@ export function normalizeAIProblemAnalysis(
   const problemType = asString(
     candidate.problemType ?? candidate.problem_type,
   )
+  const unresolvedKnowledgeCandidates =
+    candidate.unresolvedKnowledgeCandidates ?? candidate.unresolved_knowledge_candidates
 
   return {
     title: normalizeAIProblemTitle(
@@ -269,6 +272,9 @@ export function normalizeAIProblemAnalysis(
     knowledgeTags: normalizeTagCandidates(
       candidate.knowledgeTags ?? candidate.knowledge_tags,
     ),
+    ...(unresolvedKnowledgeCandidates === undefined ? {} : {
+      unresolvedKnowledgeCandidates: normalizeTagCandidates(unresolvedKnowledgeCandidates),
+    }),
     methodTags: normalizeTagCandidates(
       candidate.methodTags ?? candidate.method_tags,
     ),

@@ -236,16 +236,26 @@ export function mapCandidatesToControlledTags(
     definition.subject === subject &&
     definition.tagType === tagType &&
     definition.lifecycleStatus === 'active' &&
+    definition.archivedAt === null &&
+    definition.mergedIntoId === null &&
+    Number.isInteger(definition.taxonomyVersion) && definition.taxonomyVersion > 0 &&
     (tagType !== 'knowledge' || (
-      matchedTextbookId !== null && definition.textbookId === matchedTextbookId
+      matchedTextbookId !== null &&
+      definition.knowledgeNodeId !== null &&
+      definition.textbookId === matchedTextbookId
     ))
   )
   return candidates.map((candidate) => {
     const normalized = normalizeTagName(candidate.name)
-    const definition = scoped.find((item) =>
-      normalizeTagName(item.canonicalName) === normalized ||
-      item.aliases.some((alias) => normalizeTagName(alias) === normalized)
-    ) ?? null
+    // A model-proposed controlled ID is authoritative only as a lookup key:
+    // never fall back to a same-name tag when that ID is hallucinated or
+    // belongs to another subject/textbook.
+    const definition = candidate.canonicalTagId
+      ? scoped.find((item) => item.id === candidate.canonicalTagId) ?? null
+      : scoped.find((item) =>
+        normalizeTagName(item.canonicalName) === normalized ||
+        item.aliases.some((alias) => normalizeTagName(alias) === normalized)
+      ) ?? null
     if (!definition) {
       return {
         candidate,

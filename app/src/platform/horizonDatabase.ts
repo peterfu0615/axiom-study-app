@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AIProblemAnalysis, HorizonTagType } from '../domain/models'
+import type {
+  AIProblemAnalysis,
+  CanonicalKnowledgeCandidate,
+  HorizonTagType,
+  ResolvedTextbookContext,
+} from '../domain/models'
 import {
   mapCandidatesToControlledTags,
   normalizeTagName,
@@ -70,6 +75,10 @@ import {
   type ProblemTextbookMatch,
 } from '../domain/problemTextbook'
 import { withTransactionLock } from './transactionLock'
+import {
+  KNOWLEDGE_CONTEXT_CANDIDATE_LIMIT,
+  rankCanonicalKnowledgeCandidates,
+} from '../domain/knowledgeContext'
 
 interface ExecuteResult {
   rowsAffected: number
@@ -599,6 +608,77 @@ export async function resolveProblemTextbookBeforeAnalysis(
     )
   })
   return getProblemTextbookMatch(problemId)
+}
+
+export async function resolveProblemTextbookContextBeforeAnalysis(
+  problemId: string,
+): Promise<{
+  match: ProblemTextbookMatchView | null
+  context: ResolvedTextbookContext | null
+}> {
+  const match = await resolveProblemTextbookBeforeAnalysis(problemId)
+  if (!match?.textbook) return { match, context: null }
+
+  const problemRows = await select<Array<{ problem_text: string }>>(
+    `SELECT COALESCE(NULLIF(user_title, ''), NULLIF(ai_title, ''), title, '') || ' ' ||
+       COALESCE(NULLIF(user_stem_markdown, ''), NULLIF(ai_stem_markdown, ''), stem_markdown, '') AS problem_text
+     FROM problems WHERE id = $1 LIMIT 1`,
+    [problemId],
+  )
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT td.id AS canonical_tag_id, td.canonical_name, td.taxonomy_version,
+       kn.id AS knowledge_node_id, kn.path, kn.evidence_text,
+       COALESCE(group_concat(ta.alias, char(31)), '') AS aliases
+     FROM tag_definitions td
+     JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+     LEFT JOIN tag_aliases ta ON ta.tag_id = td.id AND ta.subject = td.subject
+     WHERE td.subject = $1 AND td.tag_type = 'knowledge'
+       AND td.lifecycle_status = 'active' AND td.archived_at IS NULL
+       AND kn.textbook_id = $2 AND kn.subject = $1
+       AND kn.archived_at IS NULL AND kn.merged_into_id IS NULL
+     GROUP BY td.id
+     ORDER BY kn.sort_order, td.canonical_name COLLATE NOCASE`,
+    [match.subject, match.textbook.id],
+  )
+  const allCandidates: CanonicalKnowledgeCandidate[] = rows.map((row) => {
+    const hierarchyPath = String(row.path || row.canonical_name || '')
+    const pathParts = hierarchyPath.split('/').map((part) => part.trim()).filter(Boolean)
+    return {
+      canonicalTagId: String(row.canonical_tag_id),
+      canonicalName: String(row.canonical_name),
+      aliases: String(row.aliases || '').split(String.fromCharCode(31)).filter(Boolean),
+      knowledgeNodeId: String(row.knowledge_node_id),
+      chapter: pathParts.length > 1 ? pathParts[0] : null,
+      hierarchyPath,
+      taxonomyVersion: Number(row.taxonomy_version),
+      evidence: nullableString(row.evidence_text),
+    }
+  })
+  const ranked = rankCanonicalKnowledgeCandidates(
+    allCandidates,
+    String(problemRows[0]?.problem_text || ''),
+  )
+  const taxonomyVersion = allCandidates.reduce(
+    (latest, candidate) => Math.max(latest, candidate.taxonomyVersion),
+    0,
+  )
+  return {
+    match,
+    context: {
+      textbookId: match.textbook.id,
+      title: match.textbook.title,
+      subject: match.textbook.subject,
+      grade: match.textbook.grade,
+      volume: match.textbook.volume,
+      publisher: match.textbook.publisher,
+      edition: match.textbook.edition,
+      taxonomyVersion,
+      candidates: ranked.candidates,
+      totalKnowledgeCount: allCandidates.length,
+      candidateLimit: KNOWLEDGE_CONTEXT_CANDIDATE_LIMIT,
+      contextCharacterCount: ranked.contextCharacterCount,
+    },
+  }
 }
 
 export async function setProblemTextbookMatch(
@@ -2050,30 +2130,39 @@ export async function prepareControlledProblemAnalysis(
     effective_subject: string
     matched_textbook_id: string | null
     textbook_match_locked: number
+    textbook_match_confidence: number
+    textbook_match_reason: string
+    textbook_match_source: ProblemTextbookMatch['source']
   }>>(
     `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
-       matched_textbook_id, textbook_match_locked
+       matched_textbook_id, textbook_match_locked, textbook_match_confidence,
+       textbook_match_reason, textbook_match_source
      FROM problems WHERE id = $1`,
     [problemId],
   )
   const subject = String(problems[0]?.effective_subject || '')
   if (!subject) return null
   if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
-    return null
+    throw new Error('受控知识标签映射失败：模型科目与题目有效科目不一致')
   }
   const textbooks = (await select<Record<string, unknown>[]>(
     `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
   )).map(rowToTextbook)
-  const legacyCurrentTextbookId = textbooks.find((book) => book.isCurrent && book.archivedAt === null)?.id ?? null
-  const textbookMatch = resolveProblemTextbook({
-    subject,
-    lockedTextbookId: Number(problems[0]?.textbook_match_locked ?? 0) === 1
-      ? nullableString(problems[0]?.matched_textbook_id)
-      : null,
-    hint: analysis.textbookHint ?? null,
-    textbooks,
-    legacyCurrentTextbookId,
-  })
+  const matchedTextbookId = nullableString(problems[0]?.matched_textbook_id)
+  const selectedTextbook = matchedTextbookId
+    ? textbooks.find((book) => book.id === matchedTextbookId) ?? null
+    : null
+  if (matchedTextbookId && !selectedTextbook) {
+    throw new Error('受控知识标签映射失败：分析前选择的教材不属于题目有效科目')
+  }
+  // The provider output must never re-route the textbook. This snapshot is
+  // the decision persisted by the pre-analysis resolver and used in prompt.
+  const textbookMatch: ProblemTextbookMatch = {
+    textbook: selectedTextbook,
+    confidence: Number(problems[0]?.textbook_match_confidence ?? 0),
+    reason: String(problems[0]?.textbook_match_reason || '分析前未匹配教材'),
+    source: problems[0]?.textbook_match_source ?? 'unresolved',
+  }
   const definitions = await listTagDefinitions(subject)
   return {
     problemId,

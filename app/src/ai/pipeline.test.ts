@@ -32,8 +32,8 @@ const {
   removeProblemDiagram: vi.fn(),
 }))
 
-const { resolveProblemTextbookBeforeAnalysis } = vi.hoisted(() => ({
-  resolveProblemTextbookBeforeAnalysis: vi.fn(),
+const { resolveProblemTextbookContextBeforeAnalysis } = vi.hoisted(() => ({
+  resolveProblemTextbookContextBeforeAnalysis: vi.fn(),
 }))
 
 vi.mock('../platform/database', () => ({
@@ -60,7 +60,7 @@ vi.mock('../platform/native', () => ({
 }))
 
 vi.mock('../platform/horizonDatabase', () => ({
-  resolveProblemTextbookBeforeAnalysis,
+  resolveProblemTextbookContextBeforeAnalysis,
 }))
 
 import { runProblemAIWorker } from './pipeline'
@@ -120,7 +120,7 @@ describe('problem AI worker', () => {
       created: true,
     })
     removeProblemDiagram.mockResolvedValue(undefined)
-    resolveProblemTextbookBeforeAnalysis.mockResolvedValue(null)
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({ match: null, context: null })
     setAIProviderForTests({
       id: 'test',
       model: 'test-v1',
@@ -339,20 +339,27 @@ describe('locked textbook context injection', () => {
     queueProblemSolution.mockResolvedValue(undefined)
     queueStudentAttempt.mockResolvedValue(undefined)
     getProblemRegions.mockResolvedValue([])
-    resolveProblemTextbookBeforeAnalysis.mockResolvedValue(null)
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({ match: null, context: null })
   })
 
   it('injects textbook context when the problem match is user-locked', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    resolveProblemTextbookBeforeAnalysis.mockResolvedValue({
-      textbook: lockedTextbook,
-      confidence: 1,
-      reason: '用户手动选择',
-      source: 'user',
-      problemId: 'problem-1',
-      subject: '数学',
-      locked: true,
-      candidates: [],
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({
+      match: { textbook: lockedTextbook, source: 'user' },
+      context: {
+        textbookId: lockedTextbook.id,
+        title: lockedTextbook.title,
+        subject: lockedTextbook.subject,
+        grade: lockedTextbook.grade,
+        volume: lockedTextbook.volume,
+        publisher: lockedTextbook.publisher,
+        edition: lockedTextbook.edition,
+        taxonomyVersion: 2,
+        candidates: [],
+        totalKnowledgeCount: 0,
+        candidateLimit: 30,
+        contextCharacterCount: 2,
+      },
     })
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
@@ -360,32 +367,40 @@ describe('locked textbook context injection', () => {
 
     await runProblemAIWorker()
 
-    expect(resolveProblemTextbookBeforeAnalysis).toHaveBeenCalledWith(run.problemId)
+    expect(resolveProblemTextbookContextBeforeAnalysis).toHaveBeenCalledWith(run.problemId)
     expect(analyzeProblem).toHaveBeenCalledWith(
       expect.objectContaining({
-        lockedTextbookContext: {
+        resolvedTextbookContext: expect.objectContaining({
+          textbookId: lockedTextbook.id,
           title: '义务教育教科书·数学八年级下册',
           subject: '数学',
           grade: '八年级',
           volume: '下册',
           publisher: '人民教育出版社',
           edition: null,
-        },
+        }),
       }),
     )
   })
 
   it('injects a deterministically resolved textbook even when it is not user locked', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    resolveProblemTextbookBeforeAnalysis.mockResolvedValue({
-      textbook: lockedTextbook,
-      confidence: 0.9,
-      reason: 'AI 推断',
-      source: 'ai',
-      problemId: 'problem-1',
-      subject: '数学',
-      locked: false,
-      candidates: [],
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({
+      match: { textbook: lockedTextbook, source: 'metadata_match' },
+      context: {
+        textbookId: lockedTextbook.id,
+        title: lockedTextbook.title,
+        subject: lockedTextbook.subject,
+        grade: lockedTextbook.grade,
+        volume: lockedTextbook.volume,
+        publisher: lockedTextbook.publisher,
+        edition: lockedTextbook.edition,
+        taxonomyVersion: 2,
+        candidates: [],
+        totalKnowledgeCount: 0,
+        candidateLimit: 30,
+        contextCharacterCount: 2,
+      },
     })
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
@@ -394,19 +409,14 @@ describe('locked textbook context injection', () => {
     await runProblemAIWorker()
 
     expect(analyzeProblem).toHaveBeenCalledTimes(1)
-    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toEqual({
-      title: '义务教育教科书·数学八年级下册',
-      subject: '数学',
-      grade: '八年级',
-      volume: '下册',
-      publisher: '人民教育出版社',
-      edition: null,
-    })
+    expect(analyzeProblem.mock.calls[0][0].resolvedTextbookContext).toEqual(
+      expect.objectContaining({ textbookId: lockedTextbook.id, subject: '数学' }),
+    )
   })
 
   it('continues without injection when the textbook lookup fails', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    resolveProblemTextbookBeforeAnalysis.mockRejectedValue(new Error('db unavailable'))
+    resolveProblemTextbookContextBeforeAnalysis.mockRejectedValue(new Error('db unavailable'))
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
       .mockResolvedValueOnce(null)
@@ -414,7 +424,7 @@ describe('locked textbook context injection', () => {
     await runProblemAIWorker()
 
     expect(analyzeProblem).toHaveBeenCalledTimes(1)
-    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toBeUndefined()
+    expect(analyzeProblem.mock.calls[0][0].resolvedTextbookContext).toBeUndefined()
     expect(completeProblemAIModelRun).toHaveBeenCalled()
   })
 })

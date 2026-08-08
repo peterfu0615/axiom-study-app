@@ -1,8 +1,8 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
-import type { LockedTextbookContext } from '../domain/models'
+import type { LockedTextbookContext, ResolvedTextbookContext } from '../domain/models'
 
-export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v4-textbook-hint'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v7-locked-textbook-context'
+export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v5-controlled-knowledge'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v8-constrained-knowledge'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -12,6 +12,7 @@ const antigravityTagCandidates = {
     type: 'object',
     required: ['name', 'role', 'confidence', 'evidence', 'source'],
     properties: {
+      canonical_tag_id: {},
       name: { type: 'string' },
       role: { type: 'string', enum: ['primary', 'secondary'] },
       confidence: { type: 'number' },
@@ -89,6 +90,7 @@ export const problemAnalysisAntigravityJSONSchema = {
       items: { type: 'string' },
     },
     knowledge_tags: antigravityTagCandidates,
+    unresolved_knowledge_candidates: antigravityTagCandidates,
     method_tags: antigravityTagCandidates,
     model_tags: antigravityTagCandidates,
     error_categories: antigravityTagCandidates,
@@ -122,8 +124,10 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
    不要把公式、普通文字或选项框误判为图形。没有图形时 diagram 为 {"exists":false,"kind":null,"bbox":null}。
 10. 可选的附加答案/图形图片只用于补充识别，Problem Analysis 不得评价学生正误。
 11. confidence 是 0 到 1 的整体识别置信度。发现裁图残缺、模糊或信息矛盾时写入 warnings。
-12. 采用开放识别返回 knowledge_tags、method_tags、model_tags：此阶段只提出候选名称，不得虚构标签 ID，
-    也不得宣称已写入正式标签库。每项必须给出 primary/secondary、题面依据、来源和置信度。
+12. 返回 knowledge_tags、method_tags、model_tags。每项必须给出 primary/secondary、题面依据、来源和置信度。
+    当附加上下文提供 <resolved_textbook_context_json> 时，knowledge_tags 优先从其中选择 canonical_tag_id；
+    canonical_tag_id 必须逐字复制候选 ID，不得改写或虚构。候选中没有对应知识点时，将其放入
+    unresolved_knowledge_candidates，canonical_tag_id 返回 null。method/model/error 不得伪装成教材知识节点。
 13. model_tags 必须描述稳定的问题结构或条件组合，禁止使用“选择题”“填空题”“解答题”等答题形式。
 14. 方法候选中的 primary 表示完成解答不可缺少的核心方法，secondary 表示可选辅助方法。
 15. difficulty 为 null，或必须严格返回以下完整对象：
@@ -135,10 +139,12 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
 17. textbook_hint 是可选字段（JSON Schema 未列入 required），可以整体省略；省略与返回 null 等价。
     只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
     无法确认时返回 null；对象中的字段均可为 null，confidence 必须为 0 到 1，evidence 只写简短可审计依据。
-18. 若附加上下文中提供了 <locked_textbook_json>，它表示用户已确认并锁定的教材。
+18. 若附加上下文中提供了 <locked_textbook_json>，它表示已由服务层为本次分析解析的教材。
     textbook_hint 与 knowledge_points、知识类标签的命名应优先与该教材的标题、科目、年级、册别对齐；
     它只作为对齐参考，不能覆盖题面实际内容，也不得据此编造题面中不存在的章节或页码信息。
     未提供 <locked_textbook_json> 时忽略本条。
+19. <resolved_textbook_context_json> 中只包含当前题目所选教材的有限受控知识候选。
+    只能选择其中存在的 canonical_tag_id。不得从记忆补造 ID，也不得输出其他教材或科目的 ID。
 
 必须返回以下字段，无法识别的标量或对象返回 null：
 {
@@ -151,6 +157,7 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "diagram": null,
   "knowledge_points": [],
   "knowledge_tags": [],
+  "unresolved_knowledge_candidates": [],
   "method_tags": [],
   "model_tags": [],
   "difficulty": null,
@@ -176,4 +183,30 @@ export function buildLockedTextbookPromptSection(
     publisher: context.publisher,
     edition: context.edition,
   })}\n</locked_textbook_json>`
+}
+
+export function buildResolvedTextbookPromptSection(
+  context: ResolvedTextbookContext,
+): string {
+  return `\n\n<resolved_textbook_context_json>\n${JSON.stringify({
+    textbook: {
+      id: context.textbookId,
+      title: context.title,
+      subject: context.subject,
+      grade: context.grade,
+      volume: context.volume,
+      publisher: context.publisher,
+      edition: context.edition,
+    },
+    taxonomyVersion: context.taxonomyVersion,
+    candidates: context.candidates.map((candidate) => ({
+      canonicalTagId: candidate.canonicalTagId,
+      canonicalName: candidate.canonicalName,
+      aliases: candidate.aliases,
+      knowledgeNodeId: candidate.knowledgeNodeId,
+      chapter: candidate.chapter,
+      hierarchyPath: candidate.hierarchyPath,
+      evidence: candidate.evidence,
+    })),
+  })}\n</resolved_textbook_context_json>`
 }
