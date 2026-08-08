@@ -216,6 +216,78 @@ export interface ControlledTagMapping {
   verificationStatus: VerificationStatus
 }
 
+export function mergeKnowledgeCandidateOutputs(
+  selected: AITagCandidate[],
+  unresolved: AITagCandidate[],
+): AITagCandidate[] {
+  const seen = new Set<string>()
+  return [
+    ...selected,
+    ...unresolved.map((candidate) => ({ ...candidate, canonicalTagId: null })),
+  ].filter((candidate) => {
+    const key = candidate.canonicalTagId || normalizeTagName(candidate.name)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export type ProblemTagOutcomeCode =
+  | 'mapped'
+  | 'needs_review'
+  | 'unresolved'
+  | 'no_textbook'
+  | 'no_active_definitions'
+  | 'no_candidate'
+
+export interface ProblemTagOutcome {
+  code: ProblemTagOutcomeCode
+  title: string
+  detail: string
+}
+
+export function summarizeProblemTagOutcome(input: {
+  tags: ProblemTag[]
+  definitions: TagDefinition[]
+  selectedTextbookId: string | null
+}): ProblemTagOutcome {
+  const mapped = input.tags.filter((tag) => tag.mappingStatus === 'mapped')
+  const unresolved = input.tags.filter((tag) => tag.mappingStatus !== 'mapped')
+  if (unresolved.length) return {
+    code: 'unresolved',
+    title: '有知识标签需要审核',
+    detail: `${unresolved.length} 项尚未映射到受控标签，可选择对应标签或移除。`,
+  }
+  if (mapped.some((tag) => !tag.isLocked && tag.verificationStatus !== 'user_verified')) return {
+    code: 'needs_review',
+    title: 'AI 标签等待确认',
+    detail: `${mapped.length} 项已映射到受控标签，确认后会保持锁定。`,
+  }
+  if (mapped.length) return {
+    code: 'mapped',
+    title: '受控标签已映射',
+    detail: `${mapped.length} 项标签已连接到当前 taxonomy。`,
+  }
+  if (!input.selectedTextbookId) return {
+    code: 'no_textbook',
+    title: '未匹配教材',
+    detail: '分析可以继续，但不会生成伪装成教材知识点的 canonical 标签。',
+  }
+  const activeDefinitions = input.definitions.filter((definition) =>
+    definition.lifecycleStatus === 'active' && definition.archivedAt === null &&
+    (definition.tagType !== 'knowledge' || definition.textbookId === input.selectedTextbookId))
+  if (!activeDefinitions.length) return {
+    code: 'no_active_definitions',
+    title: '当前教材没有可用标签',
+    detail: '请先在课程中批准知识结构，之后重新分析本题。',
+  }
+  return {
+    code: 'no_candidate',
+    title: 'AI 未提出标签候选',
+    detail: '题目分析已完成，但本次输出没有可持久化的标签或难度结果。',
+  }
+}
+
 export function normalizeTagName(value: string) {
   return value
     .normalize('NFKC')

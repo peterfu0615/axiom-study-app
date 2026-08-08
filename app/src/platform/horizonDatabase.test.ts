@@ -55,6 +55,7 @@ import {
   listTextbooks,
   resolveProblemTextbookBeforeAnalysis,
   resolveProblemTextbookContextBeforeAnalysis,
+  writeControlledProblemAnalysis,
 } from './horizonDatabase'
 
 const textbookRow = (overrides: Record<string, unknown> = {}) => ({
@@ -343,5 +344,66 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
     expect(result.context).toBeNull()
     expect(recorded.calls.some((call) => call.sql.includes('canonical_tag_id'))).toBe(false)
+  })
+})
+
+describe('writeControlledProblemAnalysis', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+    recorded.selectOverrides.push(
+      { match: /SELECT textbook_match_locked FROM problems/, rows: [{ textbook_match_locked: 0 }] },
+      { match: /SELECT version FROM taxonomy_versions/, rows: [{ version: 5 }] },
+      { match: /SELECT id FROM problem_difficulties/, rows: [] },
+    )
+  })
+
+  it('persists unknown knowledge as an unresolved ProblemTag without minting a fake definition', async () => {
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-1', subject: '数学', now: 100,
+      textbookMatch: { textbook: textbookRow() as never, confidence: .9, reason: '单本教材', source: 'single_subject_textbook' },
+      definitions: [],
+      candidateGroups: [['knowledge', [{
+        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary', confidence: .7,
+        evidence: '题面证据', source: 'problem',
+      }]]],
+      difficulty: null,
+    })
+    expect(recorded.calls.some((call) => call.sql.startsWith('INSERT OR IGNORE INTO tag_definitions')))
+      .toBe(false)
+    const insert = recorded.calls.find((call) => call.sql.startsWith('INSERT OR IGNORE INTO problem_tags'))!
+    expect(insert.params[4]).toBeNull()
+    expect(insert.params[5]).toBe('候选中不存在的知识')
+    expect(insert.params[7]).toBe('unmapped')
+  })
+
+  it('supersedes only unlocked unconfirmed model tags during re-analysis', async () => {
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 200,
+      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      definitions: [], candidateGroups: [], difficulty: null,
+    })
+    const supersede = recorded.calls.find((call) =>
+      call.sql.startsWith('UPDATE problem_tags SET superseded_at'))!
+    expect(supersede.sql).toContain("source = 'model'")
+    expect(supersede.sql).toContain('is_locked = 0')
+    expect(supersede.sql).toContain("verification_status != 'user_verified'")
+  })
+
+  it('does not replace a locked or user-confirmed difficulty during re-analysis', async () => {
+    const difficultyRows = recorded.selectOverrides.find((entry) =>
+      entry.match.test('SELECT id FROM problem_difficulties'))!
+    difficultyRows.rows = [{ id: 'difficulty-user' }]
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 300,
+      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      definitions: [], candidateGroups: [],
+      difficulty: { level: 'advanced', score: .9, reason: '综合题', confidence: .95 },
+    })
+    expect(recorded.calls.some((call) => call.sql.startsWith('INSERT INTO problem_difficulties')))
+      .toBe(false)
+    expect(recorded.calls.some((call) => call.sql.startsWith('UPDATE problem_difficulties SET superseded_at')))
+      .toBe(false)
   })
 })

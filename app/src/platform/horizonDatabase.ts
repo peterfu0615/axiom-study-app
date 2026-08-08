@@ -7,6 +7,7 @@ import type {
 } from '../domain/models'
 import {
   mapCandidatesToControlledTags,
+  mergeKnowledgeCandidateOutputs,
   normalizeTagName,
   type CurriculumImportJob,
   type KnowledgeNode,
@@ -2164,6 +2165,10 @@ export async function prepareControlledProblemAnalysis(
     source: problems[0]?.textbook_match_source ?? 'unresolved',
   }
   const definitions = await listTagDefinitions(subject)
+  const knowledgeCandidates = mergeKnowledgeCandidateOutputs(
+    analysis.knowledgeTags ?? [],
+    analysis.unresolvedKnowledgeCandidates ?? [],
+  )
   return {
     problemId,
     modelRunId,
@@ -2172,7 +2177,7 @@ export async function prepareControlledProblemAnalysis(
     textbookMatch,
     definitions,
     candidateGroups: [
-      ['knowledge', analysis.knowledgeTags ?? []],
+      ['knowledge', knowledgeCandidates],
       ['method', analysis.methodTags ?? []],
       ['model', analysis.modelTags ?? []],
       ['error', analysis.errorCategories ?? []],
@@ -2211,7 +2216,10 @@ export async function writeControlledProblemAnalysis(
       subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
     )
     for (const mapping of mappings) {
-      if (!mapping.definition) {
+      // Unknown textbook knowledge remains an unresolved ProblemTag. Creating
+      // a tag_definition without a valid KnowledgeNode would mint a fake
+      // canonical ID and make the candidate appear detached from its book.
+      if (!mapping.definition && tagType !== 'knowledge') {
         await execute(
           `INSERT OR IGNORE INTO tag_definitions (
             id, subject, tag_type, canonical_name, source, verification_status,
