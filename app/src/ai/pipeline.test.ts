@@ -63,7 +63,7 @@ vi.mock('../platform/horizonDatabase', () => ({
   resolveProblemTextbookContextBeforeAnalysis,
 }))
 
-import { runProblemAIWorker } from './pipeline'
+import { resumeProblemAIPipeline, runProblemAIWorker } from './pipeline'
 import { AIProviderFailure, setAIProviderForTests } from './provider'
 import { createAIError } from '../domain/aiError'
 
@@ -153,6 +153,21 @@ describe('problem AI worker', () => {
     )
     expect(failProblemAIModelRun).not.toHaveBeenCalled()
     expect(queueProblemSolution).toHaveBeenCalledWith(run.problemId)
+  })
+
+  it('recovers interrupted runs before claiming resumed work', async () => {
+    const order: string[] = []
+    recoverProblemAITasks.mockImplementationOnce(async () => {
+      order.push('recover')
+    })
+    claimNextProblemAIModelRun.mockImplementationOnce(async () => {
+      order.push('claim')
+      return null
+    })
+
+    await resumeProblemAIPipeline()
+
+    expect(order).toEqual(['recover', 'claim'])
   })
 
   it('crops a detected diagram and removes the superseded crop', async () => {
