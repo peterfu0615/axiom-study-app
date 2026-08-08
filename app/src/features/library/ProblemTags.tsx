@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
-import { Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
+import { Badge, Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import {
   summarizeProblemTagOutcome,
@@ -163,7 +163,7 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
         <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><Button disabled={!subject} onClick={() => openPicker(type, null)} variant="ghost">添加</Button></div>
         {grouped[type].map((tag) => <article className={`controlled-problem-tag ${tag.mappingStatus}`} key={tag.id}>
-          <div><strong>{tag.canonicalName}</strong><small>{tag.role === 'primary' ? '核心' : '辅助'} · {Math.round(tag.confidence * 100)}% · {sourceLabels[tag.source]}</small></div>
+          <div><Badge>{tag.canonicalName}</Badge><small>{tag.role === 'primary' ? '核心' : '辅助'} · {Math.round(tag.confidence * 100)}% · {sourceLabels[tag.source]}</small></div>
           <p>{tag.evidence || '未提供标签依据'}</p>
           <StatusBadge tone={mappingStatus(tag).tone}>{mappingStatus(tag).label}</StatusBadge>
           <div>{tag.mappingStatus === 'mapped' && !tag.isLocked && <Button onClick={() => void confirmProblemTag(tag.id).then(refresh)} variant="secondary">确认</Button>}

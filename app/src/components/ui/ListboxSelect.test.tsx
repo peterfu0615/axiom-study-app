@@ -38,6 +38,10 @@ describe('ListboxSelect', () => {
     const source = readFileSync(new URL('./ListboxSelect.tsx', import.meta.url), 'utf8')
     expect(source).toContain('aria-selected={value === option.value}')
     expect(source).toContain('ax-listbox__check')
+    expect(source).toContain('<Icon name="check" size={16} />')
+    expect(source).toContain('<Icon name="chevron" size={16} />')
+    expect(source).not.toContain('✓')
+    expect(source).not.toContain('⌄')
   })
 
   it('contains the keyboard, outside-click, and viewport repositioning hooks', () => {
@@ -45,6 +49,7 @@ describe('ListboxSelect', () => {
     expect(source).toContain("event.key === 'Escape'")
     expect(source).toContain("event.key === 'Home' || event.key === 'End'")
     expect(source).toContain("document.addEventListener('pointerdown'")
+    expect(source).toContain("document.addEventListener('keydown', closeOnEscape)")
     expect(source).toContain("window.addEventListener('resize'")
     expect(source).toContain("window.addEventListener('scroll', onViewportChange, true)")
   })

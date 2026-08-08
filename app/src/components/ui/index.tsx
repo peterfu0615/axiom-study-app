@@ -1,13 +1,16 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ButtonHTMLAttributes,
   type ChangeEvent,
   type HTMLAttributes,
+  type InputHTMLAttributes,
   type ReactNode,
 } from 'react'
 import type { AIErrorEnvelope } from '../../domain/aiError'
+import { Icon } from '../Icon'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 export { ListboxSelect } from './ListboxSelect'
@@ -70,17 +73,18 @@ export function InlineNotice({
   action?: ReactNode
 }) {
   if (!feedback) return null
-  const icon = feedback.tone === 'success' ? '✓' : feedback.tone === 'warning' ? '!' : '×'
   return (
     <div
       aria-live={feedback.tone === 'danger' ? undefined : 'polite'}
       className={`ax-inline-notice ax-inline-notice--${feedback.tone}`}
       role={feedback.tone === 'danger' ? 'alert' : 'status'}
     >
-      <span aria-hidden="true" className="ax-inline-notice__icon">{icon}</span>
+      <span aria-hidden="true" className="ax-inline-notice__icon">
+        <Icon name={feedback.tone === 'success' ? 'check' : feedback.tone === 'warning' ? 'alert' : 'close'} size={16} />
+      </span>
       <span className="ax-inline-notice__message">{feedback.message}</span>
       {action && <span className="ax-inline-notice__action">{action}</span>}
-      {onClose && <IconButton label="关闭提示" onClick={onClose}>×</IconButton>}
+      {onClose && <IconButton label="关闭提示" onClick={onClose}><Icon name="close" size={16} /></IconButton>}
     </div>
   )
 }
@@ -133,6 +137,34 @@ export function StatusBadge({
   tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'brand'
 }) {
   return <span className={`ax-status-badge ax-status-badge--${tone}`}>{children}</span>
+}
+
+export function Badge({ children }: { children: ReactNode }) {
+  return <span className="ax-badge">{children}</span>
+}
+
+export function Input({
+  label,
+  hint,
+  error,
+  className = '',
+  id,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  label?: string
+  hint?: string
+  error?: string
+}) {
+  const generatedId = useId()
+  const fieldId = id ?? generatedId
+  const descriptionId = hint || error ? `${fieldId}-description` : undefined
+  return (
+    <label className={`ax-input-field ${className}`.trim()} htmlFor={fieldId}>
+      {label && <span className="ax-field-label">{label}</span>}
+      <input {...props} aria-describedby={descriptionId} aria-invalid={Boolean(error) || undefined} id={fieldId} />
+      {(error || hint) && <small className={error ? 'ax-field-error' : 'ax-field-hint'} id={descriptionId}>{error || hint}</small>}
+    </label>
+  )
 }
 
 export function EmptyState({
@@ -266,7 +298,7 @@ export function Dialog({
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
       >
-        <header><h2>{title}</h2><IconButton label="关闭" onClick={onClose}>×</IconButton></header>
+        <header><h2>{title}</h2><IconButton label="关闭" onClick={onClose}><Icon name="close" size={16} /></IconButton></header>
         <div className="ax-dialog__body">{children}</div>
       </section>
     </div>
