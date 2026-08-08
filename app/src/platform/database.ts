@@ -76,6 +76,13 @@ import {
   writeControlledProblemAnalysis,
 } from './horizonDatabase'
 import { withTransactionLock } from './transactionLock'
+import {
+  classifyAIError,
+  createAIError,
+  isAIErrorEnvelope,
+  publicAIErrorMessage,
+  type AIErrorEnvelope,
+} from '../domain/aiError'
 
 const browserDocuments: SourceDocument[] = []
 const browserProblemRegions = new Map<string, ProblemRegion[]>()
@@ -1299,6 +1306,11 @@ function rowToModelRun(row: Record<string, unknown>): ModelRun {
   const output = row.output_json
     ? normalizeAIProblemAnalysis(parseJSON(row.output_json, {}, `model_runs.output_json#${row.id ?? '?'}`))
     : null
+  const structuredError = parseJSON<AIErrorEnvelope | null>(
+    row.error_json,
+    null,
+    `model_runs.error_json#${row.id ?? '?'}`,
+  )
   return {
     id: String(row.id),
     problemId: String(row.problem_id),
@@ -1316,6 +1328,7 @@ function rowToModelRun(row: Record<string, unknown>): ModelRun {
     repairStrategy: nullableString(row.repair_strategy),
     status: String(row.status) as ModelRun['status'],
     errorMessage: nullableString(row.error_message),
+    error: isAIErrorEnvelope(structuredError) ? structuredError : null,
     createdAt: Number(row.created_at),
   }
 }
@@ -2544,6 +2557,44 @@ export async function queueProblemAI(
   return (await queueProblemAIWithRun(problemId)).problem
 }
 
+export async function cancelProblemAI(problemId: string): Promise<boolean> {
+  if (!isDesktopRuntime()) return false
+  const db = await database()
+  const now = Date.now()
+  return inDatabaseTransaction(db, async () => {
+    const rows = await db.select<Array<{ id: string; provider: string; model: string }>>(
+      `SELECT mr.id, mr.provider, mr.model
+       FROM model_runs mr JOIN problems p ON p.ai_active_model_run_id = mr.id
+       WHERE p.id = $1 AND mr.task_type = $2
+         AND mr.status IN ('pending', 'processing')
+       LIMIT 1`,
+      [problemId, AI_TASK_TYPE],
+    )
+    const active = rows[0]
+    if (!active) return false
+    const error = createAIError('CANCELLED', {
+      providerId: active.provider,
+      model: active.model,
+      runId: active.id,
+      occurredAt: now,
+      detailSafe: 'stage=user_cancel',
+    })
+    const cancelled = await db.execute(
+      `UPDATE model_runs SET status = 'cancelled', error_message = $1,
+       error_code = $2, error_json = $3, latency_ms = MAX(0, $4 - created_at)
+       WHERE id = $5 AND status IN ('pending', 'processing')`,
+      [publicAIErrorMessage(error), error.code, JSON.stringify(error), now, active.id],
+    )
+    if (cancelled.rowsAffected !== 1) return false
+    await db.execute(
+      `UPDATE problems SET ai_status = 'failed', updated_at = $1
+       WHERE id = $2 AND ai_active_model_run_id = $3`,
+      [now, problemId, active.id],
+    )
+    return true
+  })
+}
+
 export async function cancelUnboundProblemAIModelRun(
   problemId: string,
   modelRunId: string,
@@ -2810,7 +2861,7 @@ export async function recordProcessingModelRunOutput(
   run: { id: string; provider: string; model: string },
   rawOutput: string,
   repairStrategy: string | null,
-  errorMessage: string | null = null,
+  errorInput: string | AIErrorEnvelope | null = null,
 ) {
   const db = await database()
   // 读改写必须原子：SELECT provider_attempts_json → JS 追加 → UPDATE。
@@ -2826,13 +2877,26 @@ export async function recordProcessingModelRunOutput(
       [],
       `model_runs.provider_attempts_json#${run.id}`,
     )
+    const attemptId = crypto.randomUUID()
+    const recordedAt = Date.now()
+    const error = errorInput == null ? null : classifyAIError(errorInput, {
+      providerId: run.provider,
+      model: run.model,
+      runId: run.id,
+      attemptId,
+    })
+    const errorMessage = errorInput == null
+      ? null
+      : redactAIError(isAIErrorEnvelope(errorInput) ? errorInput.detailSafe ?? errorInput.userMessage : errorInput)
     attempts.push({
+      id: attemptId,
       provider: run.provider,
       model: run.model,
       rawOutput: rawOutput.slice(0, 128 * 1024),
       repairStrategy,
-      errorMessage: errorMessage == null ? null : redactAIError(errorMessage),
-      recordedAt: Date.now(),
+      errorMessage,
+      error,
+      recordedAt,
     })
     const retainedAttempts = attempts.slice(-12)
     const result = await db.execute(
@@ -2851,6 +2915,18 @@ export async function recordProcessingModelRunOutput(
     if (result.rowsAffected !== 1) {
       throw new Error('无法保存模型原始输出：AI Task 已不再处于处理中状态')
     }
+    await db.execute(
+      `INSERT INTO provider_attempts (
+        id, model_run_id, attempt_index, provider, model, status, error_code,
+        error_json, raw_output_excerpt, repair_strategy, started_at, completed_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
+      [
+        attemptId, run.id, attempts.length, run.provider, run.model,
+        error ? (error.code === 'CANCELLED' ? 'cancelled' : 'failed') : 'completed',
+        error?.code ?? null, error ? JSON.stringify(error) : null,
+        rawOutput.slice(0, 128 * 1024), repairStrategy, recordedAt,
+      ],
+    )
   })
 }
 
@@ -2860,15 +2936,22 @@ export async function failProblemAIModelRun(
 ) {
   const db = await database()
   const now = Date.now()
-  const message = redactAIError(error).slice(0, 2000)
+  const envelope = classifyAIError(error, {
+    providerId: run.provider,
+    model: run.model,
+    runId: run.id,
+  })
+  const message = publicAIErrorMessage(envelope).slice(0, 2000)
   await inDatabaseTransaction(db, async () => {
     await db.execute(
       `UPDATE model_runs
        SET status = 'failed',
            error_message = $1,
-           latency_ms = $2
-       WHERE id = $3 AND status = 'processing'`,
-      [message, Math.max(0, now - run.createdAt), run.id],
+           error_code = $2,
+           error_json = $3,
+           latency_ms = $4
+       WHERE id = $5 AND status = 'processing'`,
+      [message, envelope.code, JSON.stringify(envelope), Math.max(0, now - run.createdAt), run.id],
     )
     await db.execute(
       `UPDATE problems

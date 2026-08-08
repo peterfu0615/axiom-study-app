@@ -7,6 +7,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from 'react'
+import type { AIErrorEnvelope } from '../../domain/aiError'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 export { ListboxSelect } from './ListboxSelect'
@@ -183,6 +184,37 @@ export function AsyncState({
     )
   }
   return <>{children}</>
+}
+
+export function ErrorState({
+  error,
+  onRetry,
+  secondaryAction,
+}: {
+  error: AIErrorEnvelope
+  onRetry?: () => void
+  secondaryAction?: ReactNode
+}) {
+  return (
+    <section className="ax-error-state" role="alert">
+      <div className="ax-error-state__copy">
+        <strong>{error.title}</strong>
+        <p>{error.userMessage}</p>
+        {error.detailSafe && (
+          <details>
+            <summary>技术信息</summary>
+            <code>{error.code} · {error.detailSafe}</code>
+          </details>
+        )}
+      </div>
+      {(onRetry || secondaryAction) && (
+        <div className="ax-error-state__actions">
+          {onRetry && error.retryable && <Button onClick={onRetry}>重新尝试</Button>}
+          {secondaryAction}
+        </div>
+      )}
+    </section>
+  )
 }
 
 export function Progress({

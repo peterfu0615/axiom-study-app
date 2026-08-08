@@ -204,6 +204,15 @@
 .ax-async-state--error { align-items: flex-start; justify-content: flex-start; min-height: auto; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border)); border-radius: var(--panel-radius); color: var(--muted); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 .ax-async-state--error strong { color: var(--danger); }
 
+.ax-error-state { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border)); border-radius: var(--panel-radius); color: var(--muted); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+.ax-error-state__copy { min-width: 0; display: grid; gap: 5px; }
+.ax-error-state strong { color: var(--danger); font-size: 13px; }
+.ax-error-state p { margin: 0; font-size: 12px; line-height: 1.5; }
+.ax-error-state details { margin-top: 3px; font-size: 11px; }
+.ax-error-state summary { width: max-content; cursor: pointer; }
+.ax-error-state code { display: block; max-width: 720px; margin-top: 6px; overflow-wrap: anywhere; color: var(--muted); white-space: pre-wrap; }
+.ax-error-state__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+
 .ax-progress { display: grid; gap: 8px; }
 .ax-progress > div:first-child { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; }
 .ax-progress strong { color: var(--ink); font-weight: 650; }

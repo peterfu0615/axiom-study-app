@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 29，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 29；
+//!   1. 全新库一路跑到 30，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 30；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 29；
+//!      校验并推进到 30；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 29（含 codex 原文的 24–27 与 0028/0029 的衔接）。
+    /// 全新库必须能一路跑到 30（含 codex 原文的 24–27 与 0028–0030 的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_29_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_30_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(29);
+            let migrations = migrations_up_to(30);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 29（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 29);
+                .expect("全新库必须能完整迁移到 30（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 30);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 29);
+            assert_eq!(max_applied_version(&mut conn).await, 30);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=29 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=30 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_29_exactly() {
+    fn migration_list_covers_versions_1_through_30_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=29).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=29");
+        let expected: Vec<i64> = (1..=30).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=30");
     }
 
     /// 在 0025 状态上插入「旧唯一索引放行、新守卫索引视为重复」的脏数据。
@@ -183,9 +183,9 @@ mod tests {
                 .expect("先迁移到 0025 状态");
             seed_dirty_sibling_data(&mut conn).await;
 
-            migrate_embedded_schema(&mut conn, &migrations_up_to(29))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(30))
                 .await
-                .expect("0026–0029 必须能在含脏数据的库上成功应用");
+                .expect("0026–0030 必须能在含脏数据的库上成功应用");
 
             let nodes = sqlx::query(
                 "SELECT id, parent_id, merged_into_id, archived_at
@@ -244,27 +244,27 @@ mod tests {
             assert!(violation.is_err(), "唯一守卫必须拦截新的同层重复");
 
             // 幂等重放：再次运行全部迁移不产生任何变化也不报错。
-            migrate_embedded_schema(&mut conn, &migrations_up_to(29))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(30))
                 .await
                 .expect("0028 必须幂等，重放不得失败");
-            assert_eq!(max_applied_version(&mut conn).await, 29);
+            assert_eq!(max_applied_version(&mut conn).await, 30);
         });
     }
 
     /// 升级路径模拟：库已在 codex 风格的 27 状态（含 0026 的触发器与
     /// sibling 索引），0028/0029 必须能在其上成功应用。
     #[test]
-    fn database_at_version_27_upgrades_to_29() {
+    fn database_at_version_27_upgrades_to_30() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("upgrade27");
             let mut conn = connect(&temp).await;
             migrate_embedded_schema(&mut conn, &migrations_up_to(27))
                 .await
                 .expect("先迁移到 0027 状态");
-            migrate_embedded_schema(&mut conn, &migrations_up_to(29))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(30))
                 .await
-                .expect("0028/0029 必须能在 0027 状态库上成功应用");
-            assert_eq!(max_applied_version(&mut conn).await, 29);
+                .expect("0028–0030 必须能在 0027 状态库上成功应用");
+            assert_eq!(max_applied_version(&mut conn).await, 30);
 
             let guard: Option<String> = sqlx::query_scalar(
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_knowledge_nodes_sibling_name_v2'",
@@ -294,7 +294,7 @@ mod tests {
     /// 24–27 的 checksum 必须与库中记录一致（不再报 VersionMismatch），
     /// 28/29 成功推进。副本由人工预置（cp 真实 axiom.db），测试绝不触碰原始库。
     #[test]
-    fn real_user_database_copy_upgrades_to_version_29() {
+    fn real_user_database_copy_upgrades_to_version_30() {
         let fixture = std::path::Path::new("/tmp/axiom-verify.db");
         if !fixture.exists() {
             eprintln!("跳过：/tmp/axiom-verify.db 不存在（需先 cp 用户真实库副本）");
@@ -318,10 +318,10 @@ mod tests {
             let mut conn = connect(&temp).await;
             // runner 内部会逐条比对已应用迁移的 SHA-384，任何不匹配都会
             // 返回错误；因此执行成功即证明 24–27 checksum 与库记录一致。
-            migrate_embedded_schema(&mut conn, &migrations_up_to(29))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(30))
                 .await
-                .expect("用户库副本必须通过 checksum 校验并成功升级到 29");
-            assert_eq!(max_applied_version(&mut conn).await, 29);
+                .expect("用户库副本必须通过 checksum 校验并成功升级到 30");
+            assert_eq!(max_applied_version(&mut conn).await, 30);
 
             // 显式实证：库中 24–27 记录的 checksum 与磁盘迁移原文 SHA-384 完全一致。
             for migration in axiom_migrations() {
@@ -382,9 +382,9 @@ mod tests {
             .await
             .expect("旧 CHECK 约束必须允许 pdf_text");
 
-            migrate_embedded_schema(&mut conn, &migrations_up_to(29))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(30))
                 .await
-                .expect("0026–0029 必须成功应用（含 0029 表重建）");
+                .expect("0026–0030 必须成功应用（含 0029 表重建）");
 
             let preserved: (String, String) = sqlx::query_as(
                 "SELECT evidence_text, extraction_method FROM textbook_pages WHERE id = 'page-1'",

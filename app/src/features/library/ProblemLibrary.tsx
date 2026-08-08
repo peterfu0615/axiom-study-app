@@ -19,6 +19,7 @@ import {
 } from '../../ai/solutionPipeline'
 import {
   deleteProblem,
+  cancelProblemAI,
   getProblemSolution,
   getReasoningAnalysis,
   getStudentAttempt,
@@ -35,7 +36,8 @@ import {
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog } from '../../components/ui'
+import { Button, Dialog, ErrorState } from '../../components/ui'
+import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
 import {
@@ -531,6 +533,20 @@ export function ProblemLibrary() {
     }
   }
 
+  const cancelAI = async () => {
+    if (!selected) return
+    setUpdating(true)
+    try {
+      await cancelProblemAI(selected.id)
+      await refresh(view, true)
+      setModelRuns(await listProblemModelRuns(selected.id))
+    } catch (error) {
+      notify(`取消 AI 分析失败：${String(error)}`, 'error')
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   const handleRecropSaved = async (
     updated: SavedProblem,
     changes: ProblemRegionType[],
@@ -850,6 +866,11 @@ export function ProblemLibrary() {
                                   : '开始整理'}
                               </button>
                             )}
+                            {selectedIsProcessing && (
+                              <Button disabled={updating} onClick={() => void cancelAI()} variant="ghost">
+                                取消分析
+                              </Button>
+                            )}
                           </div>
                         </header>
 
@@ -941,26 +962,13 @@ export function ProblemLibrary() {
                         </div>
 
                         {selected.aiStatus === 'failed' && (
-                          <div
-                            className="problem-ai-inline-error"
-                            role="alert"
-                          >
-                            <div>
-                              <strong>AI 解析失败</strong>
-                              <p>
-                                {activeModelRun?.errorMessage ||
-                                  '未返回错误详情，题目图片和用户编辑未受影响。'}
-                              </p>
-                            </div>
-                            <button
-                              className="secondary-action"
-                              disabled={updating}
-                              onClick={() => void retryAI()}
-                              type="button"
-                            >
-                              重新运行
-                            </button>
-                          </div>
+                          <ErrorState
+                            error={activeModelRun?.error ?? classifyAIError(
+                              activeModelRun?.errorMessage || 'Provider 未返回错误详情',
+                              { runId: activeModelRun?.id ?? null },
+                            )}
+                            onRetry={updating ? undefined : () => void retryAI()}
+                          />
                         )}
                       </section>
 

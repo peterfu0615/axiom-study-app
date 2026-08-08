@@ -64,7 +64,8 @@ vi.mock('../platform/horizonDatabase', () => ({
 }))
 
 import { runProblemAIWorker } from './pipeline'
-import { setAIProviderForTests } from './provider'
+import { AIProviderFailure, setAIProviderForTests } from './provider'
+import { createAIError } from '../domain/aiError'
 
 const run: ModelRun = {
   id: 'run-1',
@@ -220,10 +221,62 @@ describe('problem AI worker', () => {
     expect(failProblemAIModelRun).toHaveBeenCalledWith(
       run,
       expect.objectContaining({
-        message: expect.stringContaining('provider unavailable'),
+        envelope: expect.objectContaining({
+          code: 'PROVIDER_ERROR',
+          detailSafe: 'provider unavailable',
+        }),
       }),
     )
     expect(completeProblemAIModelRun).not.toHaveBeenCalled()
+  })
+
+  it('does not retry or fallback authentication failures', async () => {
+    const analyze = vi.fn().mockRejectedValue(new AIProviderFailure(
+      createAIError('AUTHENTICATION_ERROR', { httpStatus: 401 }),
+    ))
+    setAIProviderForTests({
+      id: 'test', model: 'test-v1', supportsVision: true, supportsText: true,
+      analyzeProblemImage: analyze,
+    })
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyze).toHaveBeenCalledTimes(1)
+    expect(failProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({
+      envelope: expect.objectContaining({ code: 'AUTHENTICATION_ERROR', fallbackAllowed: false }),
+    }))
+  })
+
+  it('retries a rate limit failure once before completing', async () => {
+    const analyze = vi.fn()
+      .mockRejectedValueOnce(new AIProviderFailure(createAIError('RATE_LIMIT_ERROR', { httpStatus: 429 })))
+      .mockResolvedValueOnce({ analysis, rawOutput: '{}', repairStrategy: null })
+    setAIProviderForTests({
+      id: 'test', model: 'test-v1', supportsVision: true, supportsText: true,
+      analyzeProblemImage: analyze,
+    })
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyze).toHaveBeenCalledTimes(2)
+    expect(completeProblemAIModelRun).toHaveBeenCalled()
+    expect(failProblemAIModelRun).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['canonical tag mapping failed', 'MAPPING_ERROR'],
+    ['SQLite transaction failed', 'PERSISTENCE_ERROR'],
+  ])('records completion failure %s separately from provider failure', async (message, code) => {
+    completeProblemAIModelRun.mockRejectedValueOnce(new Error(message))
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(failProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({
+      envelope: expect.objectContaining({ code }),
+    }))
   })
 
   it('drains a task queued while the worker is finishing', async () => {

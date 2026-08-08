@@ -5,6 +5,7 @@ import {
   assertAIProviderKeySaveStatuses,
   classifyMediaPaths,
   completeProblemAIModelRun,
+  cancelProblemAI,
   extractReferencedMediaPaths,
   isSameDatabasePath,
   parseJSON,
@@ -530,6 +531,26 @@ describe('recordProcessingModelRunOutput', () => {
         null,
       ),
     ).rejects.toThrow('AI Task 已不再处于处理中状态')
+  })
+})
+
+describe('cancelProblemAI', () => {
+  it('persists a terminal CANCELLED envelope and never leaves a processing problem', async () => {
+    fakeDb.reset()
+    fakeDb.selectHandlers.push({
+      match: (sql) => sql.includes("mr.status IN ('pending', 'processing')"),
+      rows: () => [{ id: 'run-cancel', provider: 'provider-a', model: 'model-a' }],
+    })
+    fakeDb.affectedOverrides.push({
+      match: (sql) => sql.includes("SET status = 'cancelled'"),
+      affected: () => 1,
+    })
+
+    await expect(cancelProblemAI('problem-1')).resolves.toBe(true)
+
+    const cancelStatement = fakeDb.statements.find((sql) => sql.includes("SET status = 'cancelled'"))
+    expect(cancelStatement).toContain('error_code = $2')
+    expect(fakeDb.statements.some((sql) => sql.includes("SET ai_status = 'failed'"))).toBe(true)
   })
 })
 

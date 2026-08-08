@@ -20,7 +20,14 @@ import {
 import {
   AIProviderFailure,
   getVisionProvidersForRun,
+  type AIProviderResult,
 } from './provider'
+import {
+  AIExecutionError,
+  classifyAIError,
+  createAIError,
+  type AIErrorEnvelope,
+} from '../domain/aiError'
 import { runSolutionWorker } from './solutionPipeline'
 import { runIntelligenceWorker } from './intelligencePipeline'
 
@@ -73,119 +80,91 @@ async function drainPendingProblemAI() {
     notifyProblemAIStatus(run.problemId)
 
     let activeRun = run
-    const errors: string[] = []
+    const errors: AIErrorEnvelope[] = []
     const lockedTextbookContext = await getLockedTextbookContext(run.problemId)
     try {
       const providers = getVisionProvidersForRun(run.provider, run.model)
+      let completedProviderResult: AIProviderResult | null = null
       for (const provider of providers) {
+        if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
+          activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
+        }
+        for (let retry = 0; retry <= 1; retry += 1) {
+          try {
+            const providerResult = provider.analyzeProblem
+              ? await (async () => {
+                  const regions = await getProblemRegions(activeRun.problemId)
+                  const questionRegion = regions.find((region) => region.type === 'question')
+                  return provider.analyzeProblem!({
+                    ...activeRun.input,
+                    questionImagePath: questionRegion?.imagePath ?? activeRun.input.cropImagePath,
+                    diagramImagePaths: regions.filter((region) => region.type === 'diagram' && region.imagePath).map((region) => region.imagePath as string),
+                    answerImagePaths: regions.filter((region) => region.type === 'answer' && region.imagePath).map((region) => region.imagePath as string),
+                    regionIds: regions.map((region) => region.id),
+                    ...(lockedTextbookContext ? { lockedTextbookContext } : {}),
+                  })
+                })()
+              : await provider.analyzeProblemImage(activeRun.input)
+            await recordProcessingModelRunOutput(activeRun, providerResult.rawOutput, providerResult.repairStrategy)
+            completedProviderResult = providerResult
+            errors.length = 0
+            break
+          } catch (error) {
+            const envelope = error instanceof AIProviderFailure
+              ? { ...error.error, providerId: provider.id, model: provider.model, runId: activeRun.id }
+              : classifyAIError(error, { providerId: provider.id, model: provider.model, runId: activeRun.id })
+            await recordProcessingModelRunOutput(
+              activeRun,
+              error instanceof AIProviderFailure ? error.rawOutput : '',
+              error instanceof AIProviderFailure ? error.repairStrategy : null,
+              envelope,
+            )
+            errors.push(envelope)
+            if (!envelope.retryable || retry === 1) break
+            await new Promise((resolve) => setTimeout(resolve, retry === 0 ? 300 : 900))
+          }
+        }
+        if (completedProviderResult) break
+        const lastError = errors.at(-1)
+        if (lastError && !lastError.fallbackAllowed) throw new AIExecutionError(lastError)
+      }
+      if (!completedProviderResult) {
+        throw new AIExecutionError(errors.at(-1) ?? createAIError('PROVIDER_ERROR', { runId: activeRun.id }))
+      }
+
+      let result = normalizeAIProblemAnalysis(completedProviderResult.analysis)
+      let diagramImagePath: string | null = null
+      if (result.hasDiagram && hasUsableDiagramBounds(result.diagramBBox)) {
         try {
-          if (
-            activeRun.provider !== provider.id ||
-            activeRun.model !== provider.model
-          ) {
-            activeRun = await updateProcessingModelRunProvider(
-              activeRun,
-              provider.id,
-              provider.model,
-            )
-          }
-          const providerResult = provider.analyzeProblem
-            ? await (async () => {
-                const regions = await getProblemRegions(activeRun.problemId)
-                const questionRegion = regions.find((region) => region.type === 'question')
-                return provider.analyzeProblem!({
-                ...activeRun.input,
-                questionImagePath:
-                  questionRegion?.imagePath ?? activeRun.input.cropImagePath,
-                diagramImagePaths: regions
-                  .filter((region) => region.type === 'diagram' && region.imagePath)
-                  .map((region) => region.imagePath as string),
-                answerImagePaths: regions
-                  .filter((region) => region.type === 'answer' && region.imagePath)
-                  .map((region) => region.imagePath as string),
-                regionIds: regions.map((region) => region.id),
-                ...(lockedTextbookContext ? { lockedTextbookContext } : {}),
-              })
-              })()
-            : await provider.analyzeProblemImage(activeRun.input)
-          await recordProcessingModelRunOutput(
-            activeRun,
-            providerResult.rawOutput,
-            providerResult.repairStrategy,
-          )
-          let result = normalizeAIProblemAnalysis(providerResult.analysis)
-          let diagramImagePath: string | null = null
-          if (
-            result.hasDiagram &&
-            hasUsableDiagramBounds(result.diagramBBox)
-          ) {
-            try {
-              const diagram = await cropProblemDiagram(
-                activeRun.problemId,
-                activeRun.input.cropImagePath,
-                result.diagramBBox,
-              )
-              diagramImagePath = diagram.path
-            } catch (error) {
-              result = {
-                ...result,
-                warnings: [
-                  ...result.warnings,
-                  `已识别图形边界，但独立抠图失败：${String(error)}`,
-                ],
-              }
-            }
-          }
-          const previousDiagramImagePath =
-            await completeProblemAIModelRun(
-              activeRun,
-              result,
-              diagramImagePath,
-            )
-          if (
-            previousDiagramImagePath &&
-            previousDiagramImagePath !== diagramImagePath
-          ) {
-            removeProblemDiagram(previousDiagramImagePath).catch(() => {})
-          }
-          try {
-            await queueProblemSolution(activeRun.problemId)
-            void runSolutionWorker()
-          } catch (error) {
-            await markProblemSolutionFailed(activeRun.problemId, error)
-          }
-          try {
-            await queueStudentAttempt(activeRun.problemId)
-            void runIntelligenceWorker()
-          } catch (error) {
-            // 用户答案区域是可选能力；题目解析成功不应被它阻塞。
-            console.error('用户解答识别任务排队失败', error)
-          }
-          errors.length = 0
-          break
+          const diagram = await cropProblemDiagram(activeRun.problemId, activeRun.input.cropImagePath, result.diagramBBox)
+          diagramImagePath = diagram.path
         } catch (error) {
-          if (error instanceof AIProviderFailure) {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              error.rawOutput,
-              error.repairStrategy,
-              String(error),
-            )
-          } else {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              '',
-              null,
-              String(error),
-            )
-          }
-          errors.push(
-            `${provider.id}/${provider.model}：${String(error)}`,
-          )
+          result = { ...result, warnings: [...result.warnings, `已识别图形边界，但独立抠图失败：${String(error)}`] }
         }
       }
-      if (errors.length) {
-        throw new Error(`所有视觉 Provider 均失败：${errors.join('；')}`)
+      let previousDiagramImagePath: string | null
+      try {
+        previousDiagramImagePath = await completeProblemAIModelRun(activeRun, result, diagramImagePath)
+      } catch (error) {
+        const classified = classifyAIError(error, { runId: activeRun.id })
+        throw new AIExecutionError(classified.code === 'MAPPING_ERROR'
+          ? classified
+          : createAIError('PERSISTENCE_ERROR', { runId: activeRun.id, detailSafe: classified.detailSafe }))
+      }
+      if (previousDiagramImagePath && previousDiagramImagePath !== diagramImagePath) {
+        removeProblemDiagram(previousDiagramImagePath).catch(() => {})
+      }
+      try {
+        await queueProblemSolution(activeRun.problemId)
+        void runSolutionWorker()
+      } catch (error) {
+        await markProblemSolutionFailed(activeRun.problemId, error)
+      }
+      try {
+        await queueStudentAttempt(activeRun.problemId)
+        void runIntelligenceWorker()
+      } catch (error) {
+        console.error('用户解答识别任务排队失败', error)
       }
     } catch (error) {
       try {

@@ -8,6 +8,7 @@ import type {
   PersistedMedia,
   AIProviderProfile,
 } from '../domain/models'
+import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 
 export interface PersistedProblemImage {
   path: string
@@ -17,6 +18,7 @@ export interface PersistedProblemImage {
 export interface NativeAIResponse {
   rawOutput: string
   errorMessage: string | null
+  error?: AIErrorEnvelope | null
 }
 
 export interface AIProviderSaveStatus {
@@ -246,14 +248,22 @@ export async function analyzeProblemWithOpenAICompatible(request: {
     request.onChunk?.(message)
   }
   const { onChunk: _onChunk, ...rest } = request
-  return invoke<NativeAIResponse>(
-    'analyze_problem_with_openai_compatible',
-    {
-      request: rest,
-      onChunk: channel,
-      stream: request.onChunk ? true : false,
-    },
-  )
+  try {
+    return await invoke<NativeAIResponse>(
+      'analyze_problem_with_openai_compatible',
+      {
+        request: rest,
+        onChunk: channel,
+        stream: request.onChunk ? true : false,
+      },
+    )
+  } catch (error) {
+    const envelope = classifyAIError(error, {
+      providerId: request.providerId,
+      model: request.model,
+    })
+    return { rawOutput: '', errorMessage: envelope.userMessage, error: envelope }
+  }
 }
 
 /**
@@ -350,10 +360,15 @@ export async function analyzeProblemWithAntigravityCLI(request: {
   prompt: string
   jsonSchema: string
 }) {
-  return invoke<NativeAIResponse>(
-    'analyze_problem_with_antigravity_cli',
-    { request },
-  )
+  try {
+    return await invoke<NativeAIResponse>(
+      'analyze_problem_with_antigravity_cli',
+      { request },
+    )
+  } catch (error) {
+    const envelope = classifyAIError(error, { model: request.model })
+    return { rawOutput: '', errorMessage: envelope.userMessage, error: envelope }
+  }
 }
 
 // ────────────────────────────────────────────────────────────

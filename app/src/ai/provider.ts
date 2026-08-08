@@ -14,6 +14,10 @@ import type {
 } from '../domain/models'
 import type { TextbookRecognition } from '../domain/horizon'
 import {
+  classifyAIError,
+  type AIErrorEnvelope,
+} from '../domain/aiError'
+import {
   PROBLEM_ANALYSIS_PROMPT,
   buildLockedTextbookPromptSection,
   problemAnalysisAntigravityJSONSchema,
@@ -127,16 +131,19 @@ export interface TextbookRecognitionProviderResult {
 export class AIProviderFailure extends Error {
   readonly rawOutput: string
   readonly repairStrategy: string | null
+  readonly error: AIErrorEnvelope
 
   constructor(
-    message: string,
+    error: string | AIErrorEnvelope,
     rawOutput = '',
     repairStrategy: string | null = null,
   ) {
-    super(message)
+    const envelope = typeof error === 'string' ? classifyAIError(error) : error
+    super(envelope.userMessage)
     this.name = 'AIProviderFailure'
     this.rawOutput = rawOutput
     this.repairStrategy = repairStrategy
+    this.error = envelope
   }
 }
 
@@ -372,8 +379,8 @@ export class OpenAICompatibleProvider implements AIProvider {
         prompt: PROBLEM_ANALYSIS_PROMPT,
         jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
       })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseProblemAnalysis(response.rawOutput)
@@ -416,8 +423,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       }`,
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseProblemAnalysis(response.rawOutput)
@@ -449,8 +456,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       prompt: buildStudentAttemptPrompt(input),
       jsonSchema: JSON.stringify(studentAttemptAntigravityJSONSchema),
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseStudentAttempt(response.rawOutput)
@@ -486,8 +493,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       jsonSchema: JSON.stringify(reasoningAnalysisAntigravityJSONSchema),
       onChunk,
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseReasoningAnalysis(response.rawOutput)
@@ -522,8 +529,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       jsonSchema: JSON.stringify(explainSelectionAntigravityJSONSchema),
       onChunk,
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseExplainSelection(response.rawOutput)
@@ -566,8 +573,8 @@ ${JSON.stringify(structuredProblem)}
       jsonSchema: JSON.stringify(solutionAntigravityJSONSchema),
       onChunk,
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseSolution(response.rawOutput)
@@ -598,8 +605,8 @@ ${JSON.stringify(structuredProblem)}
       userText: `教材文件：${input.sourceName}；共 ${input.pageCount} 页。`,
       jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       return {
@@ -664,8 +671,8 @@ export class AntigravityCLIProvider implements AIProvider {
         problemAnalysisAntigravityJSONSchema,
       ),
     })
-    if (response.errorMessage) {
-      throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     }
     try {
       const parsed = parseProblemAnalysis(response.rawOutput)
@@ -890,7 +897,7 @@ ${JSON.stringify(structuredProblem)}
       commandPath: this.profile.commandPath, model: this.profile.model,
       prompt: input.prompt, jsonSchema: JSON.stringify(input.jsonSchema),
     })
-    if (response.errorMessage) throw new AIProviderFailure(response.errorMessage, response.rawOutput)
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     return { rawOutput: response.rawOutput, providerTaskId: null }
   }
 }

@@ -587,6 +587,96 @@ fn is_vision_unsupported(message: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+fn native_ai_error(
+    code: &str,
+    title: &str,
+    user_message: &str,
+    retryable: bool,
+    fallback_allowed: bool,
+    http_status: Option<u16>,
+    detail_safe: String,
+) -> Value {
+    let occurred_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0);
+    json!({
+        "code": code,
+        "title": title,
+        "userMessage": user_message,
+        "retryable": retryable,
+        "fallbackAllowed": fallback_allowed,
+        "providerId": null,
+        "model": null,
+        "httpStatus": http_status,
+        "runId": null,
+        "attemptId": null,
+        "detailSafe": detail_safe,
+        "occurredAt": occurred_at
+    })
+}
+
+fn http_ai_error(status: u16, vision_unsupported: bool, endpoint_host: &str) -> Value {
+    if vision_unsupported {
+        return native_ai_error(
+            "MODEL_CAPABILITY_ERROR",
+            "当前模型不支持此任务",
+            "请选择支持图片输入的模型后重新运行。",
+            false,
+            true,
+            Some(status),
+            format!("stage=provider_http; host={endpoint_host}; status={status}"),
+        );
+    }
+    let (code, title, message, retryable, fallback) = match status {
+        401 | 403 => (
+            "AUTHENTICATION_ERROR",
+            "AI 服务认证失败",
+            "API Key 无效或没有访问当前模型的权限，请检查 Provider 设置。",
+            false,
+            false,
+        ),
+        408 => (
+            "TIMEOUT_ERROR",
+            "AI 分析超时",
+            "模型服务响应超时，可以重新尝试。",
+            true,
+            true,
+        ),
+        429 => (
+            "RATE_LIMIT_ERROR",
+            "模型服务繁忙",
+            "请求过于频繁或当前额度受限，请稍后重试。",
+            true,
+            true,
+        ),
+        400..=499 => (
+            "REQUEST_INVALID",
+            "AI 请求无法发送",
+            "Provider 拒绝了请求，请检查模型能力与请求配置。",
+            false,
+            false,
+        ),
+        _ => (
+            "PROVIDER_ERROR",
+            "模型服务暂时不可用",
+            "Provider 未能完成请求，可以重新尝试。",
+            true,
+            true,
+        ),
+    };
+    native_ai_error(
+        code,
+        title,
+        message,
+        retryable,
+        fallback,
+        Some(status),
+        format!("stage=provider_http; host={endpoint_host}; status={status}"),
+    )
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn analyze_problem_with_openai_compatible(
     app: AppHandle,
@@ -595,6 +685,7 @@ pub async fn analyze_problem_with_openai_compatible(
     stream: Option<bool>,
 ) -> Result<Value, String> {
     let endpoint = endpoint_url(&request.base_url)?;
+    let endpoint_host = endpoint.host_str().unwrap_or("unknown").to_string();
     let model = request.model.trim();
     if model.is_empty() {
         return Err("Model 不能为空".to_string());
@@ -719,7 +810,8 @@ pub async fn analyze_problem_with_openai_compatible(
             };
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": error_message
+                "errorMessage": error_message,
+                "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
             }));
         }
 
@@ -772,7 +864,8 @@ pub async fn analyze_problem_with_openai_compatible(
         if is_vision_unsupported(&accumulated) {
             return Ok(json!({
                 "rawOutput": accumulated,
-                "errorMessage": "当前模型不支持图片输入，请选择视觉模型。"
+                "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
+                "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=stream_content".to_string())
             }));
         }
         return Ok(json!({
@@ -811,7 +904,8 @@ pub async fn analyze_problem_with_openai_compatible(
         };
         return Ok(json!({
             "rawOutput": response_text,
-            "errorMessage": error_message
+            "errorMessage": error_message,
+            "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
         }));
     }
     let response_json: Value = match serde_json::from_slice(&bytes) {
@@ -819,7 +913,8 @@ pub async fn analyze_problem_with_openai_compatible(
         Err(error) => {
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": format!("AI API 响应不是 JSON：{error}")
+                "errorMessage": format!("AI API 响应不是 JSON：{error}"),
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型服务没有返回可读取的结构化响应。", true, true, None, format!("stage=provider_envelope_json; kind={:?}", error.classify()))
             }));
         }
     };
@@ -828,14 +923,16 @@ pub async fn analyze_problem_with_openai_compatible(
         Err(error) => {
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": error
+                "errorMessage": error,
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型响应中没有可读取的结果。", true, true, None, "stage=response_content".to_string())
             }));
         }
     };
     if is_vision_unsupported(&content) {
         return Ok(json!({
             "rawOutput": content,
-            "errorMessage": "当前模型不支持图片输入，请选择视觉模型。"
+            "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
+            "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=response_content".to_string())
         }));
     }
     Ok(json!({
@@ -1067,9 +1164,9 @@ fn analyze_problem_with_antigravity_cli_blocking(
 mod tests {
     use super::{
         antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
-        is_vision_unsupported, load_provider_api_key_from_connection, provider_error_message,
-        read_ai_provider_save_statuses, read_bounded, upsert_ai_provider_profile,
-        validate_provider_save_statuses, PersistedAIProviderProfile,
+        http_ai_error, is_vision_unsupported, load_provider_api_key_from_connection,
+        provider_error_message, read_ai_provider_save_statuses, read_bounded,
+        upsert_ai_provider_profile, validate_provider_save_statuses, PersistedAIProviderProfile,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::sync::{
@@ -1095,6 +1192,31 @@ mod tests {
         assert_eq!(message, "This model does not support image inputs");
         assert!(is_vision_unsupported(&message));
         assert!(!is_vision_unsupported("rate limit exceeded"));
+    }
+
+    #[test]
+    fn maps_http_failures_to_stable_safe_error_codes() {
+        for (status, expected, retryable, fallback) in [
+            (401, "AUTHENTICATION_ERROR", false, false),
+            (403, "AUTHENTICATION_ERROR", false, false),
+            (429, "RATE_LIMIT_ERROR", true, true),
+            (503, "PROVIDER_ERROR", true, true),
+            (400, "REQUEST_INVALID", false, false),
+        ] {
+            let error = http_ai_error(status, false, "api.example.test");
+            assert_eq!(error["code"], expected);
+            assert_eq!(error["retryable"], retryable);
+            assert_eq!(error["fallbackAllowed"], fallback);
+            assert_eq!(error["httpStatus"], status);
+            assert!(error["detailSafe"]
+                .as_str()
+                .unwrap()
+                .contains("api.example.test"));
+        }
+        assert_eq!(
+            http_ai_error(400, true, "api.example.test")["code"],
+            "MODEL_CAPABILITY_ERROR"
+        );
     }
 
     #[test]

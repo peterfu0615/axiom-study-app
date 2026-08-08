@@ -376,6 +376,7 @@ export interface ModelRun {
   repairStrategy: string | null
   status: ModelRunStatus
   errorMessage: string | null
+  error?: import('./aiError').AIErrorEnvelope | null
   createdAt: number
 }
 
