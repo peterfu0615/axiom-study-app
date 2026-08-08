@@ -53,7 +53,16 @@ import {
   getTextbookDeletionImpact,
   listHorizonSubjects,
   listTextbooks,
+  resolveProblemTextbookBeforeAnalysis,
 } from './horizonDatabase'
+
+const textbookRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'book-1', subject: '数学', title: '数学八年级下册', grade: '八年级',
+  volume: '下册', publisher: '人民教育出版社', edition: '2022年版',
+  source_type: 'pdf', source_path: null, content_hash: null,
+  extraction_status: 'completed', extraction_method: 'pdf_text', is_current: 0,
+  archived_at: null, created_at: 1, updated_at: 1, ...overrides,
+})
 
 describe('cancelRelabelBatch', () => {
   beforeEach(() => {
@@ -232,5 +241,77 @@ describe('getTextbookDeletionImpact', () => {
     const problemQuery = recorded.calls.find((call) => call.sql.includes('FROM problems'))!
     expect(problemQuery.sql).toContain('matched_textbook_id = $1')
     expect(problemQuery.sql).toContain('deleted_at IS NULL')
+  })
+})
+
+describe('resolveProblemTextbookBeforeAnalysis', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  function seed(problem: Record<string, unknown>, books: Array<Record<string, unknown>>) {
+    recorded.selectOverrides.push(
+      { match: /COALESCE\(NULLIF\(user_title/, rows: [{
+        effective_subject: '数学', title: '八年级下册一次函数', stem_markdown: '求解析式',
+        matched_textbook_id: null, textbook_match_locked: 0, ...problem,
+      }] },
+      { match: /SELECT \* FROM textbooks WHERE subject = \$1 ORDER BY/, rows: books },
+      { match: /SELECT p\.id, trim/, rows: [{
+        id: 'problem-1', effective_subject: '数学', matched_textbook_id: books[0]?.id ?? null,
+        textbook_match_confidence: books.length === 1 ? .95 : 0,
+        textbook_match_reason: books.length === 1 ? '当前科目只有一本未归档教材' : '教材元数据不足以安全匹配',
+        textbook_match_source: books.length === 1 ? 'single_subject_textbook' : 'unresolved',
+        textbook_match_locked: Number(problem.textbook_match_locked ?? 0),
+        textbook_resolver_version: 'problem-textbook-resolver-v1',
+        textbook_candidate_count: books.length, textbook_decision_json: '{}',
+        textbook_id: books[0]?.id ?? null, textbook_subject: books[0]?.subject,
+        textbook_title: books[0]?.title, textbook_grade: books[0]?.grade,
+        textbook_volume: books[0]?.volume, textbook_publisher: books[0]?.publisher,
+        textbook_edition: books[0]?.edition, textbook_source_type: books[0]?.source_type,
+        textbook_source_path: null, textbook_content_hash: null,
+        textbook_extraction_status: books[0]?.extraction_status,
+        textbook_extraction_method: books[0]?.extraction_method,
+        textbook_is_current: 0, textbook_archived_at: null,
+        textbook_created_at: 1, textbook_updated_at: 1,
+      }] },
+      { match: /archived_at IS NULL\s+AND extraction_status/, rows: books },
+    )
+  }
+
+  it('auto-selects the only eligible textbook before provider dispatch', async () => {
+    seed({}, [textbookRow()])
+    await expect(resolveProblemTextbookBeforeAnalysis('problem-1')).resolves.toMatchObject({
+      textbook: { id: 'book-1' }, source: 'single_subject_textbook',
+    })
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
+    expect(update.params).toEqual([
+      'book-1', .95, '当前科目只有一本未归档教材', 'single_subject_textbook',
+      expect.any(Number), 'problem-textbook-resolver-v1', 1, expect.any(String), 'problem-1',
+    ])
+  })
+
+  it('preserves a user lock while refreshing resolver audit metadata', async () => {
+    seed({ matched_textbook_id: 'book-1', textbook_match_locked: 1 }, [textbookRow()])
+    await resolveProblemTextbookBeforeAnalysis('problem-1')
+    expect(recorded.calls.some((call) => call.sql.includes('textbook_resolver_version = $1'))).toBe(true)
+    expect(recorded.calls.some((call) => call.sql.includes('matched_textbook_id = $1'))).toBe(false)
+  })
+
+  it('rejects a locked textbook that is outside the effective subject candidates', async () => {
+    seed({ matched_textbook_id: 'other-subject-book', textbook_match_locked: 1 }, [textbookRow()])
+    await expect(resolveProblemTextbookBeforeAnalysis('problem-1'))
+      .rejects.toThrow('锁定教材与题目科目不一致')
+    expect(recorded.calls.some((call) => call.sql.includes('UPDATE problems SET'))).toBe(false)
+  })
+
+  it('records unresolved without inventing a textbook when no eligible book exists', async () => {
+    seed({}, [])
+    await resolveProblemTextbookBeforeAnalysis('problem-1')
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
+    expect(update.params[0]).toBeNull()
+    expect(update.params[3]).toBe('unresolved')
+    expect(update.params[6]).toBe(0)
   })
 })

@@ -10,7 +10,7 @@ import {
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
 } from '../platform/database'
-import { getProblemTextbookMatch } from '../platform/horizonDatabase'
+import { resolveProblemTextbookBeforeAnalysis } from '../platform/horizonDatabase'
 import { normalizeAIProblemAnalysis } from '../domain/ai'
 import type { LockedTextbookContext } from '../domain/models'
 import {
@@ -50,15 +50,15 @@ function hasUsableDiagramBounds(
 }
 
 /**
- * 仅当题目的教材匹配被用户锁定且教材存在时返回教材上下文，
- * 用于附加注入分析 prompt；读取失败不阻断分析流程。
+ * 在分析开始前解析题目的教材，并在成功选中教材时返回其元数据。
+ * 用户锁定始终优先；读取或解析失败不阻断无教材模式下的分析流程。
  */
-async function getLockedTextbookContext(
+async function getResolvedTextbookMetadata(
   problemId: string,
 ): Promise<LockedTextbookContext | null> {
   try {
-    const match = await getProblemTextbookMatch(problemId)
-    if (!match || !match.locked || !match.textbook) return null
+    const match = await resolveProblemTextbookBeforeAnalysis(problemId)
+    if (!match?.textbook) return null
     return {
       title: match.textbook.title,
       subject: match.textbook.subject,
@@ -68,7 +68,7 @@ async function getLockedTextbookContext(
       edition: match.textbook.edition,
     }
   } catch (error) {
-    console.error('[ProblemAI] 读取锁定教材上下文失败，将不注入教材信息', error)
+    console.error('[ProblemAI] 分析前教材解析失败，将按未匹配教材继续', error)
     return null
   }
 }
@@ -81,7 +81,7 @@ async function drainPendingProblemAI() {
 
     let activeRun = run
     const errors: AIErrorEnvelope[] = []
-    const lockedTextbookContext = await getLockedTextbookContext(run.problemId)
+    const lockedTextbookContext = await getResolvedTextbookMetadata(run.problemId)
     try {
       const providers = getVisionProvidersForRun(run.provider, run.model)
       let completedProviderResult: AIProviderResult | null = null
