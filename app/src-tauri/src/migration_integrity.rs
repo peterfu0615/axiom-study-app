@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 32，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 32；
+//!   1. 全新库一路跑到 33，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 33；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 32；
+//!      校验并推进到 33；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -21,7 +21,7 @@ mod tests {
     use crate::db::migrate_embedded_schema;
     use sha2::{Digest, Sha384};
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-    use sqlx::{ConnectOptions, Row, SqliteConnection};
+    use sqlx::{ConnectOptions, Executor, Row, SqliteConnection};
     use tauri_plugin_sql::Migration;
 
     /// 临时库守卫：测试结束（含 panic）时删除 db 文件及其 WAL 伴生文件。
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 32（含 codex 原文的 24–27 与 0028–0032 的衔接）。
+    /// 全新库必须能一路跑到 33（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_32_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_33_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(32);
+            let migrations = migrations_up_to(33);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 32（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 32);
+                .expect("全新库必须能完整迁移到 33（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 33);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 32);
+            assert_eq!(max_applied_version(&mut conn).await, 33);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,89 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=32 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=33 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_32_exactly() {
+    fn migration_list_covers_versions_1_through_33_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=32).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=32");
+        let expected: Vec<i64> = (1..=33).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=33");
+    }
+
+    /// Today 的稳定身份、结果幂等和 SkillState 写回由 0033 的数据库约束
+    /// 托底；这里使用完整 fresh schema 验证，不依赖前端 mock。
+    #[test]
+    fn today_engine_persistence_is_idempotent_and_survives_soft_delete() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("today");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(33))
+                .await
+                .expect("Today 测试库必须迁移成功");
+
+            conn.execute("INSERT INTO source_documents (id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-today', '/tmp/today.png', 'today-hash', 'import', 'captured', 1, 1)")
+                .await.expect("source fixture");
+            conn.execute("INSERT INTO problems (id, source_document_id, subject, stem_markdown, status, created_at, updated_at) VALUES ('problem-today', 'doc-today', '数学', '求 x', 'saved', 1, 1)")
+                .await.expect("problem fixture");
+            conn.execute("INSERT INTO tag_definitions (id, subject, tag_type, canonical_name, source, taxonomy_version, verification_status, lifecycle_status, created_at, updated_at) VALUES ('tag-today', '数学', 'method', '换元法', 'user', 1, 'user_verified', 'active', 1, 1)")
+                .await.expect("tag fixture");
+            conn.execute("INSERT INTO skill_states (id, subject, tag_id, mastery_estimate, stability, retrievability, uncertainty, scheduler_version, created_at, updated_at) VALUES ('state-today', '数学', 'tag-today', .45, 1, .65, 1, 'horizon-v1', 1, 1)")
+                .await.expect("skill state fixture");
+            conn.execute("INSERT INTO skill_bundles (id, subject, canonical_key, primary_knowledge_tag_id, method_tag_ids_json, model_tag_ids_json, difficulty_context, created_at) VALUES ('bundle-today', '数学', 'math|method:tag-today|intermediate', 'legacy:problem-today', '[\"tag-today\"]', '[]', 'intermediate', 1)")
+                .await.expect("bundle fixture");
+            conn.execute("INSERT INTO skill_bundle_states (subject, skill_bundle_id, mastery_estimate, stability, retrievability, uncertainty, updated_at) VALUES ('数学', 'bundle-today', .45, 1, .65, 1, 1)")
+                .await.expect("bundle state fixture");
+            conn.execute("INSERT INTO review_sessions (id, session_date, status, mode, planned_problem_count, estimated_duration_seconds, created_at) VALUES ('session-today', '2026-08-10', 'generated', 'standard', 1, 300, 1)")
+                .await.expect("session fixture");
+            conn.execute("INSERT INTO review_modules (id, subject, session_id, skill_bundle_id, priority_score, selection_reason, target_difficulty, source_mode, estimated_duration_seconds, order_index, status) VALUES ('module-today', '数学', 'session-today', 'bundle-today', 80, '首次复习', 'intermediate', 'original', 300, 0, 'pending')")
+                .await.expect("module fixture");
+            conn.execute("INSERT INTO question_instances (id, subject, review_module_id, source_problem_id, stem_markdown, target_tags_json, difficulty, created_at) VALUES ('question-today', '数学', 'module-today', 'problem-today', '求 x', '{\"tags\":[]}', 'intermediate', 1)")
+                .await.expect("question fixture");
+            conn.execute("INSERT INTO review_attempts (id, subject, question_instance_id, is_correct, created_at, rating, result_key) VALUES ('attempt-today', '数学', 'question-today', 1, 2, 'good', 'today:question-today')")
+                .await.expect("attempt fixture");
+            conn.execute("INSERT INTO horizon_review_logs (id, review_attempt_id, subject, skill_bundle_id, rating, previous_state_json, evidence_json, new_state_json, reviewed_at) VALUES ('log-today', 'attempt-today', '数学', 'bundle-today', 'good', '{}', '{}', '{}', 2)")
+                .await.expect("review log fixture");
+
+            let duplicate_session = conn.execute("INSERT INTO review_sessions (id, session_date, status, mode, planned_problem_count, estimated_duration_seconds, created_at) VALUES ('session-duplicate', '2026-08-10', 'generated', 'standard', 1, 300, 2)").await;
+            assert!(
+                duplicate_session.is_err(),
+                "同一天不得重复生成 standard plan"
+            );
+            conn.execute("INSERT INTO review_sessions (id, session_date, status, mode, planned_problem_count, estimated_duration_seconds, created_at) VALUES ('session-next-day', '2026-08-11', 'generated', 'standard', 1, 300, 2)")
+                .await
+                .expect("跨天必须允许生成新的稳定计划");
+            let duplicate_result = conn.execute("INSERT INTO review_attempts (id, subject, question_instance_id, is_correct, created_at, rating, result_key) VALUES ('attempt-duplicate', '数学', 'question-today', 1, 3, 'good', 'today:question-today')").await;
+            assert!(duplicate_result.is_err(), "重复点击不得重复记账");
+
+            conn.execute("UPDATE skill_states SET mastery_estimate=.57, evidence_count=1, success_count=1, last_practiced_at=2, next_review_at=86400002 WHERE id='state-today'")
+                .await.expect("SkillState 必须可原子写回");
+            conn.execute("UPDATE problems SET deleted_at=3 WHERE id='problem-today'")
+                .await
+                .expect("应用删除题目为软删除");
+            let question_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM question_instances WHERE id='question-today'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("读取问题快照");
+            let log_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM horizon_review_logs WHERE id='log-today'")
+                    .fetch_one(&mut conn)
+                    .await
+                    .expect("读取 ReviewLog");
+            let evidence_count: i64 = sqlx::query_scalar(
+                "SELECT evidence_count FROM skill_states WHERE id='state-today'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("读取 SkillState");
+            assert_eq!(question_count, 1, "软删除原题后当天快照必须仍可执行");
+            assert_eq!(log_count, 1, "ReviewLog 必须保留");
+            assert_eq!(evidence_count, 1, "SkillState 必须只记账一次");
+        });
     }
 
     /// 0032 只扩展错误诊断，不得丢失旧客户端已经写入的可读错误文本。
@@ -320,17 +393,17 @@ mod tests {
     /// 升级路径模拟：库已在 codex 风格的 27 状态（含 0026 的触发器与
     /// sibling 索引），0028/0029 必须能在其上成功应用。
     #[test]
-    fn database_at_version_27_upgrades_to_32() {
+    fn database_at_version_27_upgrades_to_33() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("upgrade27");
             let mut conn = connect(&temp).await;
             migrate_embedded_schema(&mut conn, &migrations_up_to(27))
                 .await
                 .expect("先迁移到 0027 状态");
-            migrate_embedded_schema(&mut conn, &migrations_up_to(32))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(33))
                 .await
-                .expect("0028–0032 必须能在 0027 状态库上成功应用");
-            assert_eq!(max_applied_version(&mut conn).await, 32);
+                .expect("0028–0033 必须能在 0027 状态库上成功应用");
+            assert_eq!(max_applied_version(&mut conn).await, 33);
 
             let guard: Option<String> = sqlx::query_scalar(
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_knowledge_nodes_sibling_name_v2'",
@@ -360,7 +433,7 @@ mod tests {
     /// 24–27 的 checksum 必须与库中记录一致（不再报 VersionMismatch），
     /// 28/29 成功推进。副本由人工预置（cp 真实 axiom.db），测试绝不触碰原始库。
     #[test]
-    fn real_user_database_copy_upgrades_to_version_32() {
+    fn real_user_database_copy_upgrades_to_version_33() {
         let fixture = std::path::Path::new("/tmp/axiom-verify.db");
         if !fixture.exists() {
             eprintln!("跳过：/tmp/axiom-verify.db 不存在（需先 cp 用户真实库副本）");
@@ -384,10 +457,10 @@ mod tests {
             let mut conn = connect(&temp).await;
             // runner 内部会逐条比对已应用迁移的 SHA-384，任何不匹配都会
             // 返回错误；因此执行成功即证明 24–27 checksum 与库记录一致。
-            migrate_embedded_schema(&mut conn, &migrations_up_to(32))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(33))
                 .await
-                .expect("用户库副本必须通过 checksum 校验并成功升级到 32");
-            assert_eq!(max_applied_version(&mut conn).await, 32);
+                .expect("用户库副本必须通过 checksum 校验并成功升级到 33");
+            assert_eq!(max_applied_version(&mut conn).await, 33);
 
             // 显式实证：库中 24–27 记录的 checksum 与磁盘迁移原文 SHA-384 完全一致。
             for migration in axiom_migrations() {
