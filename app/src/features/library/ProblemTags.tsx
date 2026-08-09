@@ -79,7 +79,7 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
         <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><IconButton className="problem-tag-add" disabled={!subject} label={`添加${labels[type]}`} onClick={() => openPicker(type)}><Icon name="plus" size={16} /></IconButton></div>
         <div className="problem-tag-collection">
-          {grouped[type].map((tag) => <article className="controlled-problem-tag" key={tag.id} title={tag.evidence || tag.canonicalName}>
+          {grouped[type].map((tag) => <article className="controlled-problem-tag" key={tag.id}>
             <Badge>{tag.canonicalName}</Badge>
             <IconButton className="problem-tag-remove" label={`移除${tag.canonicalName}`} onClick={() => void removeProblemTag(tag.id).then(refresh)}><Icon name="close" size={16} /></IconButton>
           </article>)}

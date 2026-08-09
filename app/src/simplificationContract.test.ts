@@ -37,6 +37,7 @@ describe('autonomous compact tag UI contract', () => {
     expect(source).toContain('className="problem-tag-remove"')
     expect(source).toContain('label={`添加${labels[type]}`}')
     expect(source).toContain('label={`移除${tag.canonicalName}`}')
+    expect(source).not.toContain('tag.evidence')
     expect(source).not.toContain('>添加</Button>')
     expect(source).not.toContain('>移除</Button>')
   })
