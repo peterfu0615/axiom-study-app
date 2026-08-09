@@ -111,6 +111,19 @@ describe('resolveProblemTextbook', () => {
     expect(result.source).toBe('user')
   })
 
+  it('keeps a previously saved eligible resolution stable across re-analysis', () => {
+    const result = resolve({
+      persistedTextbookId: 'saved-book',
+      hint: null,
+      textbooks: [
+        textbook({ id: 'newer-book', updatedAt: 20 }),
+        textbook({ id: 'saved-book', updatedAt: 10 }),
+      ],
+    })
+    expect(result.textbook?.id).toBe('saved-book')
+    expect(result.source).toBe('persisted_resolution')
+  })
+
   it('does not revive the legacy global-current textbook fallback', () => {
     const result = resolve({
       hint: null,

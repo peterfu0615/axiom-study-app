@@ -5,12 +5,15 @@ import type { Textbook } from './horizon'
 export const TEXTBOOK_MATCH_MIN_SCORE = 0.52
 /** A close second result is ambiguous and must remain unresolved. */
 export const TEXTBOOK_MATCH_TIE_MARGIN = 0.08
-export const TEXTBOOK_RESOLVER_VERSION = 'problem-textbook-resolver-v1'
+export const TEXTBOOK_RESOLVER_VERSION = 'problem-textbook-resolver-v2-autonomous'
 
 export type ProblemTextbookMatchSource =
   | 'single_subject_textbook'
   | 'metadata_match'
   | 'ai_hint'
+  | 'ai_resolver'
+  | 'stable_fallback'
+  | 'persisted_resolution'
   | 'user'
   | 'legacy_current_fallback'
   | 'unresolved'
@@ -24,6 +27,7 @@ export interface ProblemTextbookMatch {
 export interface ResolveProblemTextbookInput {
   subject: string
   lockedTextbookId: string | null
+  persistedTextbookId?: string | null
   hint: AITextbookHint | null
   textbooks: Textbook[]
   legacyCurrentTextbookId?: string | null
@@ -166,6 +170,16 @@ export function resolveProblemTextbook(
     (textbook.extractionStatus === 'completed' || textbook.extractionStatus === 'needs_review'))
   if (!available.length) {
     return { textbook: null, reason: '当前科目没有可用教材', source: 'unresolved' }
+  }
+  const persisted = input.persistedTextbookId
+    ? available.find((textbook) => textbook.id === input.persistedTextbookId)
+    : null
+  if (persisted) {
+    return {
+      textbook: persisted,
+      reason: '沿用已保存的教材判断',
+      source: 'persisted_resolution',
+    }
   }
   if (available.length === 1) {
     return {

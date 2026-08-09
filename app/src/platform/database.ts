@@ -3010,7 +3010,7 @@ export class ProblemSubjectChangeConflict extends Error {
   readonly code = SUBJECT_CHANGE_REQUIRES_TEXTBOOK_UNLOCK
 
   constructor() {
-    super('当前教材属于原科目。更改科目将清除已确认教材，是否继续？')
+    super('更改科目后，Axiom 会按新科目重新整理本题标签，是否继续？')
     this.name = 'ProblemSubjectChangeConflict'
   }
 }

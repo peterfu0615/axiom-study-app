@@ -20,6 +20,8 @@ import {
 import {
   AIProviderFailure,
   getVisionProvidersForRun,
+  resolveTextbookCandidateWithProvider,
+  type AIProvider,
   type AIProviderResult,
 } from './provider'
 import {
@@ -55,11 +57,23 @@ function hasUsableDiagramBounds(
  */
 async function getResolvedTextbookMetadata(
   problemId: string,
+  modelRunId: string,
+  providers: AIProvider[],
 ): Promise<ResolvedTextbookContext | null> {
   try {
-    return (await resolveProblemTextbookContextBeforeAnalysis(problemId)).context
+    const resolverProvider = providers.find((provider) =>
+      provider.supportsText && typeof provider.analyzeCurriculumStage === 'function')
+    return (await (resolverProvider
+      ? resolveProblemTextbookContextBeforeAnalysis(
+          problemId,
+          async (input) => ({
+            ...await resolveTextbookCandidateWithProvider(resolverProvider, input),
+            runId: modelRunId,
+          }),
+        )
+      : resolveProblemTextbookContextBeforeAnalysis(problemId))).context
   } catch (error) {
-    console.error('[ProblemAI] 分析前教材解析失败，将按未匹配教材继续', error)
+    console.error('[ProblemAI] 分析前教材解析失败，将按无教材上下文继续', error)
     return null
   }
 }
@@ -72,9 +86,13 @@ async function drainPendingProblemAI() {
 
     let activeRun = run
     const errors: AIErrorEnvelope[] = []
-    const resolvedTextbookContext = await getResolvedTextbookMetadata(run.problemId)
     try {
       const providers = getVisionProvidersForRun(run.provider, run.model)
+      const resolvedTextbookContext = await getResolvedTextbookMetadata(
+        run.problemId,
+        run.id,
+        providers,
+      )
       let completedProviderResult: AIProviderResult | null = null
       for (const provider of providers) {
         if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {

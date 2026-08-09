@@ -49,6 +49,10 @@ import {
 } from '../ai/textbookRecognitionContract'
 import { inferMissingTextbookRecognition } from '../ai/textbookRecognitionInference'
 import { normalizeTextbookRecognitionChapters } from '../ai/textbookRecognitionParser'
+import type {
+  AutonomousTextbookCandidate,
+  AutonomousTextbookResolutionInput,
+} from '../ai/textbookResolutionContract'
 import {
   normalizeTextbookStructure,
   resolveKnowledgeChapterIndex,
@@ -493,6 +497,17 @@ export interface ProblemTextbookMatchView extends ProblemTextbookMatch {
   decisionDetail: Record<string, unknown> | null
 }
 
+export interface AutonomousTextbookResolverResult {
+  selectedTextbookId: string
+  providerId: string
+  model: string
+  runId?: string | null
+}
+
+export type AutonomousTextbookResolver = (
+  input: AutonomousTextbookResolutionInput,
+) => Promise<AutonomousTextbookResolverResult>
+
 export async function getProblemTextbookMatch(problemId: string): Promise<ProblemTextbookMatchView | null> {
   const rows = await select<Record<string, unknown>[]>(
     `SELECT p.id, trim(COALESCE(NULLIF(p.user_subject, ''), NULLIF(p.ai_subject, ''), NULLIF(p.subject, ''))) AS effective_subject,
@@ -581,6 +596,9 @@ export async function resolveProblemTextbookBeforeAnalysis(
       lockedTextbookId: Number(problem.textbook_match_locked) === 1
         ? nullableString(problem.matched_textbook_id)
         : null,
+      persistedTextbookId: Number(problem.textbook_match_locked) === 1
+        ? null
+        : nullableString(problem.matched_textbook_id),
       hint,
       hintSource: 'problem_metadata',
       textbooks,
@@ -622,21 +640,126 @@ export async function resolveProblemTextbookBeforeAnalysis(
   return getProblemTextbookMatch(problemId)
 }
 
+function safeResolverFailure(error: unknown) {
+  if (error instanceof AIProviderFailure) return `${error.error.code}: ${error.error.userMessage}`
+  if (error instanceof Error) return `${error.name}: ${error.message}`
+  return 'Unknown resolver failure'
+}
+
+async function buildAutonomousResolutionInput(
+  match: ProblemTextbookMatchView,
+  problemText: string,
+): Promise<AutonomousTextbookResolutionInput> {
+  const candidates: AutonomousTextbookCandidate[] = []
+  for (const textbook of match.candidates) {
+    const rows = await select<Array<{ fingerprint: string }>>(
+      `SELECT COALESCE(NULLIF(path, ''), name) AS fingerprint
+       FROM knowledge_nodes
+       WHERE textbook_id = $1 AND subject = $2
+         AND archived_at IS NULL AND merged_into_id IS NULL
+       ORDER BY sort_order, name COLLATE NOCASE LIMIT 8`,
+      [textbook.id, match.subject],
+    )
+    candidates.push({
+      id: textbook.id,
+      title: textbook.title,
+      grade: textbook.grade,
+      volume: textbook.volume,
+      publisher: textbook.publisher,
+      edition: textbook.edition,
+      chapterFingerprints: [...new Set(rows.map((row) => String(row.fingerprint || '')).filter(Boolean))],
+    })
+  }
+  return { subject: match.subject, problemText, candidates }
+}
+
+async function persistAutonomousTextbookSelection(
+  problemId: string,
+  attempted: AutonomousTextbookResolverResult | null,
+  resolverFailure: string | null,
+) {
+  const now = Date.now()
+  await transaction(async () => {
+    const problems = await select<Array<{ subject: string }>>(
+      `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS subject
+       FROM problems WHERE id = $1 AND status = 'saved' AND deleted_at IS NULL LIMIT 1`,
+      [problemId],
+    )
+    const subject = String(problems[0]?.subject || '')
+    if (!subject) return
+    const rows = await select<Record<string, unknown>[]>(
+      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL
+       AND extraction_status IN ('completed', 'needs_review')
+       ORDER BY updated_at DESC, id ASC`,
+      [subject],
+    )
+    const candidates = rows.map(rowToTextbook)
+    if (!candidates.length) return
+    const aiSelection = attempted
+      ? candidates.find((candidate) => candidate.id === attempted.selectedTextbookId)
+      : null
+    const selected = aiSelection ?? candidates[0]
+    const source: ProblemTextbookMatch['source'] = aiSelection ? 'ai_resolver' : 'stable_fallback'
+    const reason = aiSelection
+      ? '受限候选教材自动判断'
+      : '自动判断不可用，采用最近更新的同科目可用教材'
+    const decision = {
+      resolverVersion: TEXTBOOK_RESOLVER_VERSION,
+      subject,
+      candidateCount: candidates.length,
+      selectedTextbookId: selected.id,
+      source,
+      reason,
+      aiSelectedTextbookId: attempted?.selectedTextbookId ?? null,
+      aiProviderId: attempted?.providerId ?? null,
+      aiModel: attempted?.model ?? null,
+      modelRunId: attempted?.runId ?? null,
+      aiSelectionAccepted: Boolean(aiSelection),
+      resolverFailure,
+    }
+    await execute(
+      `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = 0,
+       textbook_match_reason = $2, textbook_match_source = $3, textbook_match_locked = 0,
+       textbook_match_updated_at = $4, textbook_resolver_version = $5,
+       textbook_candidate_count = $6, textbook_decision_json = $7, updated_at = $4
+       WHERE id = $8`,
+      [selected.id, reason, source, now, TEXTBOOK_RESOLVER_VERSION,
+        candidates.length, JSON.stringify(decision), problemId],
+    )
+  })
+  return getProblemTextbookMatch(problemId)
+}
+
 export async function resolveProblemTextbookContextBeforeAnalysis(
   problemId: string,
+  autonomousResolver?: AutonomousTextbookResolver,
 ): Promise<{
   match: ProblemTextbookMatchView | null
   context: ResolvedTextbookContext | null
 }> {
-  const match = await resolveProblemTextbookBeforeAnalysis(problemId)
-  if (!match?.textbook) return { match, context: null }
-
+  let match = await resolveProblemTextbookBeforeAnalysis(problemId)
   const problemRows = await select<Array<{ problem_text: string }>>(
     `SELECT COALESCE(NULLIF(user_title, ''), NULLIF(ai_title, ''), title, '') || ' ' ||
        COALESCE(NULLIF(user_stem_markdown, ''), NULLIF(ai_stem_markdown, ''), stem_markdown, '') AS problem_text
      FROM problems WHERE id = $1 LIMIT 1`,
     [problemId],
   )
+  const problemText = String(problemRows[0]?.problem_text || '')
+  if (match && !match.textbook && match.candidates.length > 0) {
+    let attempted: AutonomousTextbookResolverResult | null = null
+    let resolverFailure: string | null = null
+    if (autonomousResolver && match.candidates.length > 1) {
+      try {
+        attempted = await autonomousResolver(
+          await buildAutonomousResolutionInput(match, problemText),
+        )
+      } catch (error) {
+        resolverFailure = safeResolverFailure(error)
+      }
+    }
+    match = await persistAutonomousTextbookSelection(problemId, attempted, resolverFailure)
+  }
+  if (!match?.textbook) return { match, context: null }
   const rows = await select<Record<string, unknown>[]>(
     `SELECT td.id AS canonical_tag_id, td.canonical_name, td.taxonomy_version,
        kn.id AS knowledge_node_id, kn.path, kn.evidence_text,
@@ -668,7 +791,7 @@ export async function resolveProblemTextbookContextBeforeAnalysis(
   })
   const ranked = rankCanonicalKnowledgeCandidates(
     allCandidates,
-    String(problemRows[0]?.problem_text || ''),
+    problemText,
   )
   const taxonomyVersion = allCandidates.reduce(
     (latest, candidate) => Math.max(latest, candidate.taxonomyVersion),
