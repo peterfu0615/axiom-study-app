@@ -40,6 +40,9 @@
   --ax-accent: var(--brand);
   --ax-accent-hover: var(--brand-hover);
   --ax-accent-ink: var(--brand-ink);
+  /* Filled yellow controls require the same dark foreground in both themes.
+     --ax-accent-ink still follows the theme for text and selected surfaces. */
+  --ax-primary-control-ink: #4a3b00;
   --ax-success-fg: var(--brand-ink);
   --ax-success-bg: color-mix(in srgb, var(--brand) 38%, var(--surface));
   --ax-warning-fg: var(--brand-ink);

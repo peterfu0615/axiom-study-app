@@ -30,7 +30,7 @@
 .problem-tag-dimension { min-width: 0; }
 .problem-tag-dimension-title { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-4); margin-bottom: var(--ax-space-3); border-bottom: 1px solid var(--ax-border-subtle); }
 .problem-tag-dimension-title strong { color: var(--ax-text-primary); font-size: var(--ax-type-item-size); line-height: var(--ax-type-item-line); font-weight: var(--ax-type-item-weight); }
-.problem-tag-dimension-title .ax-button { min-height: var(--ax-control-sm); padding: 0 var(--ax-space-4); font-size: var(--ax-type-secondary-size); }
+.problem-tag-dimension-title .ax-icon-button { width: var(--ax-control-md); height: var(--ax-control-md); }
 .controlled-problem-tag { display: grid; gap: var(--ax-space-3); padding: var(--ax-space-4) 0; }
 .controlled-problem-tag + .controlled-problem-tag { border-top: 1px solid var(--ax-border-subtle); }
 .controlled-problem-tag > div:first-child { display: flex; justify-content: space-between; gap: var(--ax-space-4); }
@@ -40,6 +40,7 @@
 .controlled-problem-tag p { color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .controlled-problem-tag > div:last-child { display: flex; flex-wrap: wrap; gap: var(--ax-space-2); }
 .controlled-problem-tag > div:last-child .ax-button { min-height: var(--ax-control-sm); padding: 0 var(--ax-space-4); font-size: var(--ax-type-secondary-size); }
+.controlled-problem-tag > div:last-child .ax-icon-button { width: var(--ax-control-md); height: var(--ax-control-md); }
 .controlled-problem-tag.unmapped, .controlled-problem-tag.candidate { padding: var(--ax-space-4); border-radius: var(--ax-radius-sm); background: var(--ax-warning-bg); }
 .problem-tag-picker { display: grid; gap: var(--ax-space-5); }
 .problem-tag-picker > p { color: var(--ax-text-secondary); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }

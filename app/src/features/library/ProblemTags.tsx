@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
-import { Badge, Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
+import { Icon } from '../../components/Icon'
+import { Badge, Button, Dialog, IconButton, ListboxSelect, StatusBadge } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import {
   summarizeProblemTagOutcome,
@@ -161,14 +162,14 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
     </section>}
     <div className="problem-tag-dimensions">
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
-        <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><Button disabled={!subject} onClick={() => openPicker(type, null)} variant="ghost">添加</Button></div>
+        <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><IconButton appearance="plain" disabled={!subject} label={`添加${labels[type]}`} onClick={() => openPicker(type, null)}><Icon name="plus" size={16} /></IconButton></div>
         {grouped[type].map((tag) => <article className={`controlled-problem-tag ${tag.mappingStatus}`} key={tag.id}>
           <div><Badge>{tag.canonicalName}</Badge><small>{tag.role === 'primary' ? '核心' : '辅助'} · {Math.round(tag.confidence * 100)}% · {sourceLabels[tag.source]}</small></div>
           <p>{tag.evidence || '未提供标签依据'}</p>
           <StatusBadge tone={mappingStatus(tag).tone}>{mappingStatus(tag).label}</StatusBadge>
           <div>{tag.mappingStatus === 'mapped' && !tag.isLocked && <Button onClick={() => void confirmProblemTag(tag.id).then(refresh)} variant="secondary">确认</Button>}
             {tag.mappingStatus !== 'mapped' && !tag.isLocked && <Button onClick={() => openPicker(type, tag)} variant="secondary">选择对应标签</Button>}
-            <Button onClick={() => void removeProblemTag(tag.id).then(refresh)} variant="ghost">移除</Button></div>
+            <IconButton appearance="plain" label={`移除${labels[type]}“${tag.canonicalName}”`} onClick={() => void removeProblemTag(tag.id).then(refresh)} tone="danger"><Icon name="trash" size={16} /></IconButton></div>
         </article>)}
         {!grouped[type].length && <small className="empty-tag-dimension">暂无{labels[type]}</small>}
       </div>)}

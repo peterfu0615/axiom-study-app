@@ -45,13 +45,19 @@ export function IconButton({
   label,
   children,
   className = '',
+  appearance = 'surface',
+  tone = 'default',
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string
+  appearance?: 'surface' | 'plain'
+  tone?: 'default' | 'danger'
+}) {
   return (
     <button
       {...props}
       aria-label={label}
-      className={`ax-icon-button ${className}`.trim()}
+      className={`ax-icon-button ax-icon-button--${appearance} ax-icon-button--${tone} ${className}`.trim()}
       title={label}
       type={props.type ?? 'button'}
     >
