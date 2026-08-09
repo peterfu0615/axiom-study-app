@@ -1,12 +1,8 @@
 use std::{
     fs,
-    io::{Read, Result as IoResult},
+    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    process::{Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -454,24 +450,92 @@ fn managed_image_path(app: &AppHandle, image_path: &str) -> Result<PathBuf, Stri
     Ok(path)
 }
 
-fn read_bounded<R: Read>(
-    mut reader: R,
+struct CapturedCommandOutput {
+    status: Option<ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+    oversized: bool,
+}
+
+/// Capture CLI output in regular files instead of pipes. Some CLI launchers
+/// leave a background updater alive with inherited stdout/stderr descriptors;
+/// joining pipe-reader threads would then wait forever even after the main
+/// process exited or was killed. Reading a regular file reaches its current EOF
+/// without depending on every descendant closing the inherited descriptor.
+fn run_command_with_file_capture(
+    command: &mut Command,
+    timeout: Duration,
     limit: usize,
-    exceeded: Arc<AtomicBool>,
-) -> IoResult<Vec<u8>> {
-    let mut output = Vec::with_capacity(limit.min(64 * 1024));
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(output);
-        }
-        let remaining = limit.saturating_sub(output.len());
-        output.extend_from_slice(&buffer[..read.min(remaining)]);
-        if read > remaining {
-            exceeded.store(true, Ordering::Release);
-        }
-    }
+) -> Result<CapturedCommandOutput, String> {
+    let capture_dir = std::env::temp_dir().join(format!(
+        "axiom-antigravity-capture-{}",
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir(&capture_dir)
+        .map_err(|error| format!("创建 Antigravity CLI 临时输出目录失败：{error}"))?;
+    let stdout_path = capture_dir.join("stdout.log");
+    let stderr_path = capture_dir.join("stderr.log");
+    let result = (|| -> Result<CapturedCommandOutput, String> {
+        let stdout_file = fs::File::create(&stdout_path)
+            .map_err(|error| format!("创建 Antigravity CLI 输出文件失败：{error}"))?;
+        let stderr_file = fs::File::create(&stderr_path)
+            .map_err(|error| format!("创建 Antigravity CLI 日志文件失败：{error}"))?;
+        let mut child = command
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
+            .spawn()
+            .map_err(|error| format!("无法启动 Antigravity CLI：{error}"))?;
+        let started_at = Instant::now();
+        let mut timed_out = false;
+        let mut oversized = false;
+        let status = loop {
+            let stdout_len = fs::metadata(&stdout_path).map_or(0, |value| value.len());
+            let stderr_len = fs::metadata(&stderr_path).map_or(0, |value| value.len());
+            if stdout_len > limit as u64 || stderr_len > limit as u64 {
+                oversized = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            if started_at.elapsed() >= timeout {
+                timed_out = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            match child
+                .try_wait()
+                .map_err(|error| format!("等待 Antigravity CLI 失败：{error}"))?
+            {
+                Some(status) => break Some(status),
+                None => thread::sleep(Duration::from_millis(25)),
+            }
+        };
+        let read_capture = |path: &Path| -> Result<Vec<u8>, String> {
+            let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
+            fs::File::open(path)
+                .map_err(|error| format!("打开 Antigravity CLI 临时输出失败：{error}"))?
+                .take(limit.saturating_add(1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|error| format!("读取 Antigravity CLI 临时输出失败：{error}"))?;
+            Ok(bytes)
+        };
+        let mut stdout = read_capture(&stdout_path)?;
+        let mut stderr = read_capture(&stderr_path)?;
+        oversized |= stdout.len() > limit || stderr.len() > limit;
+        stdout.truncate(limit);
+        stderr.truncate(limit);
+        Ok(CapturedCommandOutput {
+            status,
+            stdout,
+            stderr,
+            timed_out,
+            oversized,
+        })
+    })();
+    let _ = fs::remove_dir_all(capture_dir);
+    result
 }
 
 fn image_data_url(app: &AppHandle, image_path: &str) -> Result<String, String> {
@@ -587,6 +651,96 @@ fn is_vision_unsupported(message: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+fn native_ai_error(
+    code: &str,
+    title: &str,
+    user_message: &str,
+    retryable: bool,
+    fallback_allowed: bool,
+    http_status: Option<u16>,
+    detail_safe: String,
+) -> Value {
+    let occurred_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0);
+    json!({
+        "code": code,
+        "title": title,
+        "userMessage": user_message,
+        "retryable": retryable,
+        "fallbackAllowed": fallback_allowed,
+        "providerId": null,
+        "model": null,
+        "httpStatus": http_status,
+        "runId": null,
+        "attemptId": null,
+        "detailSafe": detail_safe,
+        "occurredAt": occurred_at
+    })
+}
+
+fn http_ai_error(status: u16, vision_unsupported: bool, endpoint_host: &str) -> Value {
+    if vision_unsupported {
+        return native_ai_error(
+            "MODEL_CAPABILITY_ERROR",
+            "当前模型不支持此任务",
+            "请选择支持图片输入的模型后重新运行。",
+            false,
+            true,
+            Some(status),
+            format!("stage=provider_http; host={endpoint_host}; status={status}"),
+        );
+    }
+    let (code, title, message, retryable, fallback) = match status {
+        401 | 403 => (
+            "AUTHENTICATION_ERROR",
+            "AI 服务认证失败",
+            "API Key 无效或没有访问当前模型的权限，请检查 Provider 设置。",
+            false,
+            false,
+        ),
+        408 => (
+            "TIMEOUT_ERROR",
+            "AI 分析超时",
+            "模型服务响应超时，可以重新尝试。",
+            true,
+            true,
+        ),
+        429 => (
+            "RATE_LIMIT_ERROR",
+            "模型服务繁忙",
+            "请求过于频繁或当前额度受限，请稍后重试。",
+            true,
+            true,
+        ),
+        400..=499 => (
+            "REQUEST_INVALID",
+            "AI 请求无法发送",
+            "Provider 拒绝了请求，请检查模型能力与请求配置。",
+            false,
+            false,
+        ),
+        _ => (
+            "PROVIDER_ERROR",
+            "模型服务暂时不可用",
+            "Provider 未能完成请求，可以重新尝试。",
+            true,
+            true,
+        ),
+    };
+    native_ai_error(
+        code,
+        title,
+        message,
+        retryable,
+        fallback,
+        Some(status),
+        format!("stage=provider_http; host={endpoint_host}; status={status}"),
+    )
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn analyze_problem_with_openai_compatible(
     app: AppHandle,
@@ -595,6 +749,7 @@ pub async fn analyze_problem_with_openai_compatible(
     stream: Option<bool>,
 ) -> Result<Value, String> {
     let endpoint = endpoint_url(&request.base_url)?;
+    let endpoint_host = endpoint.host_str().unwrap_or("unknown").to_string();
     let model = request.model.trim();
     if model.is_empty() {
         return Err("Model 不能为空".to_string());
@@ -719,7 +874,8 @@ pub async fn analyze_problem_with_openai_compatible(
             };
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": error_message
+                "errorMessage": error_message,
+                "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
             }));
         }
 
@@ -772,7 +928,8 @@ pub async fn analyze_problem_with_openai_compatible(
         if is_vision_unsupported(&accumulated) {
             return Ok(json!({
                 "rawOutput": accumulated,
-                "errorMessage": "当前模型不支持图片输入，请选择视觉模型。"
+                "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
+                "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=stream_content".to_string())
             }));
         }
         return Ok(json!({
@@ -811,7 +968,8 @@ pub async fn analyze_problem_with_openai_compatible(
         };
         return Ok(json!({
             "rawOutput": response_text,
-            "errorMessage": error_message
+            "errorMessage": error_message,
+            "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
         }));
     }
     let response_json: Value = match serde_json::from_slice(&bytes) {
@@ -819,7 +977,8 @@ pub async fn analyze_problem_with_openai_compatible(
         Err(error) => {
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": format!("AI API 响应不是 JSON：{error}")
+                "errorMessage": format!("AI API 响应不是 JSON：{error}"),
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型服务没有返回可读取的结构化响应。", true, true, None, format!("stage=provider_envelope_json; kind={:?}", error.classify()))
             }));
         }
     };
@@ -828,14 +987,16 @@ pub async fn analyze_problem_with_openai_compatible(
         Err(error) => {
             return Ok(json!({
                 "rawOutput": response_text,
-                "errorMessage": error
+                "errorMessage": error,
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型响应中没有可读取的结果。", true, true, None, "stage=response_content".to_string())
             }));
         }
     };
     if is_vision_unsupported(&content) {
         return Ok(json!({
             "rawOutput": content,
-            "errorMessage": "当前模型不支持图片输入，请选择视觉模型。"
+            "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
+            "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=response_content".to_string())
         }));
     }
     Ok(json!({
@@ -934,78 +1095,26 @@ fn analyze_problem_with_antigravity_cli_blocking(
     for parent in image_parents {
         command.arg("--add-dir").arg(parent);
     }
-    let mut child = command
-        .arg("--print")
-        .arg(full_prompt)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("无法启动 Antigravity CLI：{error}"))?;
-
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法读取 Antigravity CLI 输出".to_string())?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "无法读取 Antigravity CLI 日志".to_string())?;
-    let stdout_exceeded = Arc::new(AtomicBool::new(false));
-    let stderr_exceeded = Arc::new(AtomicBool::new(false));
-    let stdout_limit = Arc::clone(&stdout_exceeded);
-    let stderr_limit = Arc::clone(&stderr_exceeded);
-    let stdout_reader =
-        thread::spawn(move || read_bounded(&mut stdout, MAX_RESPONSE_BYTES, stdout_limit));
-    let stderr_reader =
-        thread::spawn(move || read_bounded(&mut stderr, MAX_RESPONSE_BYTES, stderr_limit));
-
-    let started_at = Instant::now();
-    let mut timed_out = false;
-    let mut oversized = false;
-    let status = loop {
-        if stdout_exceeded.load(Ordering::Acquire) || stderr_exceeded.load(Ordering::Acquire) {
-            oversized = true;
-            let _ = child.kill();
-            let _ = child.wait();
-            break None;
-        }
-        if started_at.elapsed() >= Duration::from_secs(120) {
-            timed_out = true;
-            let _ = child.kill();
-            let _ = child.wait();
-            break None;
-        }
-        match child
-            .try_wait()
-            .map_err(|error| format!("等待 Antigravity CLI 失败：{error}"))?
-        {
-            Some(status) => break Some(status),
-            None => thread::sleep(Duration::from_millis(25)),
-        }
-    };
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "读取 Antigravity CLI 输出失败".to_string())?
-        .map_err(|error| format!("读取 Antigravity CLI 输出失败：{error}"))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "读取 Antigravity CLI 日志失败".to_string())?
-        .map_err(|error| format!("读取 Antigravity CLI 日志失败：{error}"))?;
-    if oversized {
+    command.arg("--print").arg(full_prompt);
+    let captured =
+        run_command_with_file_capture(&mut command, Duration::from_secs(120), MAX_RESPONSE_BYTES)?;
+    if captured.oversized {
         return Ok(json!({
-            "rawOutput": String::from_utf8_lossy(&stdout),
+            "rawOutput": String::from_utf8_lossy(&captured.stdout),
             "errorMessage": "Antigravity CLI 输出或日志超过 2 MB，已终止"
         }));
     }
-    if timed_out {
+    if captured.timed_out {
         return Ok(json!({
-            "rawOutput": String::from_utf8_lossy(&stdout),
+            "rawOutput": String::from_utf8_lossy(&captured.stdout),
             "errorMessage": "Antigravity CLI 超过 120 秒，已终止"
         }));
     }
-    let status = status.ok_or_else(|| "Antigravity CLI 未返回退出状态".to_string())?;
-    let envelope_output = String::from_utf8_lossy(&stdout).trim().to_string();
-    let stderr_text = String::from_utf8_lossy(&stderr);
+    let status = captured
+        .status
+        .ok_or_else(|| "Antigravity CLI 未返回退出状态".to_string())?;
+    let envelope_output = String::from_utf8_lossy(&captured.stdout).trim().to_string();
+    let stderr_text = String::from_utf8_lossy(&captured.stderr);
     if !status.success() {
         let details: String = stderr_text.trim().chars().take(1200).collect();
         let cli_error = antigravity_response(&envelope_output)
@@ -1067,14 +1176,14 @@ fn analyze_problem_with_antigravity_cli_blocking(
 mod tests {
     use super::{
         antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
-        is_vision_unsupported, load_provider_api_key_from_connection, provider_error_message,
-        read_ai_provider_save_statuses, read_bounded, upsert_ai_provider_profile,
-        validate_provider_save_statuses, PersistedAIProviderProfile,
+        http_ai_error, is_vision_unsupported, load_provider_api_key_from_connection,
+        provider_error_message, read_ai_provider_save_statuses, run_command_with_file_capture,
+        upsert_ai_provider_profile, validate_provider_save_statuses, PersistedAIProviderProfile,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    use std::{
+        process::Command,
+        time::{Duration, Instant},
     };
 
     #[test]
@@ -1098,6 +1207,31 @@ mod tests {
     }
 
     #[test]
+    fn maps_http_failures_to_stable_safe_error_codes() {
+        for (status, expected, retryable, fallback) in [
+            (401, "AUTHENTICATION_ERROR", false, false),
+            (403, "AUTHENTICATION_ERROR", false, false),
+            (429, "RATE_LIMIT_ERROR", true, true),
+            (503, "PROVIDER_ERROR", true, true),
+            (400, "REQUEST_INVALID", false, false),
+        ] {
+            let error = http_ai_error(status, false, "api.example.test");
+            assert_eq!(error["code"], expected);
+            assert_eq!(error["retryable"], retryable);
+            assert_eq!(error["fallbackAllowed"], fallback);
+            assert_eq!(error["httpStatus"], status);
+            assert!(error["detailSafe"]
+                .as_str()
+                .unwrap()
+                .contains("api.example.test"));
+        }
+        assert_eq!(
+            http_ai_error(400, true, "api.example.test")["code"],
+            "MODEL_CAPABILITY_ERROR"
+        );
+    }
+
+    #[test]
     fn validates_antigravity_command_configuration() {
         assert_eq!(
             antigravity_command("agy").unwrap(),
@@ -1105,6 +1239,21 @@ mod tests {
         );
         assert!(antigravity_command("").is_err());
         assert!(antigravity_command("./agy").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_capture_does_not_wait_for_descendant_to_close_output() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("(sleep 2) & printf done");
+        let started_at = Instant::now();
+        let output = run_command_with_file_capture(&mut command, Duration::from_secs(1), 1024)
+            .expect("shell command should be captured");
+
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "done");
+        assert!(output.status.is_some_and(|status| status.success()));
+        assert!(!output.timed_out);
     }
 
     #[test]
@@ -1128,17 +1277,16 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn bounds_cli_output_while_continuing_to_drain_the_stream() {
-        let exceeded = Arc::new(AtomicBool::new(false));
-        let output = read_bounded(
-            std::io::Cursor::new(vec![b'x'; 128]),
-            32,
-            Arc::clone(&exceeded),
-        )
-        .unwrap();
-        assert_eq!(output.len(), 32);
-        assert!(exceeded.load(Ordering::Acquire));
+    fn bounds_cli_output_capture() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("printf '%0128d' 0");
+        let output = run_command_with_file_capture(&mut command, Duration::from_secs(1), 32)
+            .expect("shell output should be captured");
+
+        assert_eq!(output.stdout.len(), 32);
+        assert!(output.oversized);
     }
 
     #[test]

@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
-import { Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
+import { Badge, Button, Dialog, ListboxSelect, StatusBadge } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
-import type { ProblemTag, TagDefinition } from '../../domain/horizon'
+import {
+  summarizeProblemTagOutcome,
+  type ProblemTag,
+  type TagDefinition,
+} from '../../domain/horizon'
 import {
   addProblemTag,
   confirmProblemDifficulty,
@@ -26,6 +30,9 @@ const sourceLabels: Record<ProblemTag['source'], string> = {
 }
 
 function mappingStatus(tag: ProblemTag) {
+  if (tag.mappingStatus === 'rejected' || tag.verificationStatus === 'rejected') {
+    return { label: '已驳回', tone: 'danger' as const }
+  }
   if (tag.isLocked) return { label: '已确认', tone: 'success' as const }
   if (tag.mappingStatus === 'mapped') return { label: '待确认', tone: 'warning' as const }
   if (tag.mappingStatus === 'candidate') return { label: '待确认对应', tone: 'warning' as const }
@@ -80,6 +87,11 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
     (['knowledge','method','model','error'] as HorizonTagType[])
       .map((type) => [type, tags.filter((tag) => tag.tagType === type)]),
   ) as Record<HorizonTagType, ProblemTag[]>, [tags])
+  const outcome = useMemo(() => summarizeProblemTagOutcome({
+    tags,
+    definitions,
+    selectedTextbookId: textbookMatch?.textbook?.id ?? null,
+  }), [definitions, tags, textbookMatch?.textbook?.id])
 
   const openPicker = (type: HorizonTagType, tag: ProblemTag | null) => {
     setSelectedDefinitionId('')
@@ -139,15 +151,23 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
         </div>
       </div>
     </section>}
+    {subject && textbookMatch && <section className="problem-textbook-match problem-tag-outcome" aria-label="AI 标签映射结果">
+      <div className="problem-textbook-match__header">
+        <div><strong>{outcome.title}</strong><small>{outcome.detail}</small></div>
+        <StatusBadge tone={outcome.code === 'mapped' ? 'success' : outcome.code === 'needs_review' || outcome.code === 'unresolved' ? 'warning' : 'neutral'}>
+          {outcome.code === 'mapped' ? '已映射' : outcome.code === 'needs_review' || outcome.code === 'unresolved' ? '需审核' : '无结果'}
+        </StatusBadge>
+      </div>
+    </section>}
     <div className="problem-tag-dimensions">
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
         <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><Button disabled={!subject} onClick={() => openPicker(type, null)} variant="ghost">添加</Button></div>
         {grouped[type].map((tag) => <article className={`controlled-problem-tag ${tag.mappingStatus}`} key={tag.id}>
-          <div><strong>{tag.canonicalName}</strong><small>{tag.role === 'primary' ? '核心' : '辅助'} · {Math.round(tag.confidence * 100)}% · {sourceLabels[tag.source]}</small></div>
+          <div><Badge>{tag.canonicalName}</Badge><small>{tag.role === 'primary' ? '核心' : '辅助'} · {Math.round(tag.confidence * 100)}% · {sourceLabels[tag.source]}</small></div>
           <p>{tag.evidence || '未提供标签依据'}</p>
           <StatusBadge tone={mappingStatus(tag).tone}>{mappingStatus(tag).label}</StatusBadge>
           <div>{tag.mappingStatus === 'mapped' && !tag.isLocked && <Button onClick={() => void confirmProblemTag(tag.id).then(refresh)} variant="secondary">确认</Button>}
-            {tag.mappingStatus !== 'mapped' && <Button onClick={() => openPicker(type, tag)} variant="secondary">选择对应标签</Button>}
+            {tag.mappingStatus !== 'mapped' && !tag.isLocked && <Button onClick={() => openPicker(type, tag)} variant="secondary">选择对应标签</Button>}
             <Button onClick={() => void removeProblemTag(tag.id).then(refresh)} variant="ghost">移除</Button></div>
         </article>)}
         {!grouped[type].length && <small className="empty-tag-dimension">暂无{labels[type]}</small>}

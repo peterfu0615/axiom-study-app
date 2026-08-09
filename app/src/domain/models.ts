@@ -98,6 +98,8 @@ export type HorizonTagRole = 'primary' | 'secondary'
 export type DifficultyLevel = 'basic' | 'intermediate' | 'advanced'
 
 export interface AITagCandidate {
+  /** Optional controlled ID proposed by the model; always revalidated before persistence. */
+  canonicalTagId?: string | null
   name: string
   role: HorizonTagRole
   confidence: number
@@ -142,6 +144,7 @@ export interface AIProblemAnalysis {
   diagramBBox: NormalizedRect
   knowledgePoints: string[]
   knowledgeTags?: AITagCandidate[]
+  unresolvedKnowledgeCandidates?: AITagCandidate[]
   methodTags?: AITagCandidate[]
   modelTags?: AITagCandidate[]
   difficulty?: AIDifficulty | null
@@ -316,13 +319,35 @@ export interface LockedTextbookContext {
   edition: string | null
 }
 
+export interface CanonicalKnowledgeCandidate {
+  canonicalTagId: string
+  canonicalName: string
+  aliases: string[]
+  knowledgeNodeId: string
+  chapter: string | null
+  hierarchyPath: string
+  taxonomyVersion: number
+  evidence: string | null
+}
+
+export interface ResolvedTextbookContext extends LockedTextbookContext {
+  textbookId: string
+  taxonomyVersion: number
+  candidates: CanonicalKnowledgeCandidate[]
+  totalKnowledgeCount: number
+  candidateLimit: number
+  contextCharacterCount: number
+}
+
 export interface ProblemAnalysisInput extends AIProblemInput {
   questionImagePath: string
   diagramImagePaths: string[]
   answerImagePaths: string[]
   regionIds: string[]
-  /** 仅在题目教材匹配被用户锁定且教材存在时提供；缺省表示不注入。 */
+  /** Legacy metadata-only context retained for compatibility with older callers. */
   lockedTextbookContext?: LockedTextbookContext
+  /** 分析前由服务层解析并限定到单本教材的受控知识候选上下文。 */
+  resolvedTextbookContext?: ResolvedTextbookContext
 }
 
 export interface StudentAttemptInput {
@@ -376,6 +401,7 @@ export interface ModelRun {
   repairStrategy: string | null
   status: ModelRunStatus
   errorMessage: string | null
+  error?: import('./aiError').AIErrorEnvelope | null
   createdAt: number
 }
 

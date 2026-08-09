@@ -7,6 +7,7 @@ export const TEXTBOOK_MATCH_MIN_SCORE = 0.52
 export const TEXTBOOK_MATCH_TIE_MARGIN = 0.08
 /** Low-confidence hints are retained for audit but cannot route a problem. */
 export const TEXTBOOK_HINT_MIN_CONFIDENCE = 0.35
+export const TEXTBOOK_RESOLVER_VERSION = 'problem-textbook-resolver-v1'
 
 export type ProblemTextbookMatchSource =
   | 'single_subject_textbook'
@@ -29,6 +30,7 @@ export interface ResolveProblemTextbookInput {
   hint: AITextbookHint | null
   textbooks: Textbook[]
   legacyCurrentTextbookId?: string | null
+  hintSource?: 'ai' | 'problem_metadata'
 }
 
 function normalized(value: string | null | undefined) {
@@ -37,6 +39,29 @@ function normalized(value: string | null | undefined) {
     .toLocaleLowerCase('zh-CN')
     .replace(/[\s\u3000·•,，、。:：;；/\\_\-—–()（）[\]【】]+/gu, '')
     .trim()
+}
+
+export function inferProblemTextbookHint(input: {
+  title?: string | null
+  stemMarkdown?: string | null
+}): AITextbookHint | null {
+  const source = `${input.title ?? ''} ${input.stemMarkdown ?? ''}`.normalize('NFKC')
+  const grade = source.match(/([一二三四五六七八九十\d]+)年级/u)?.[0] ?? null
+  const volume = source.match(/(上册|下册|全一册|第一册|第二册)/u)?.[0] ?? null
+  const publisher = source.match(/[\u4e00-\u9fff]{2,16}(?:教育)?出版社/u)?.[0] ?? null
+  const edition = source.match(/(?:19|20)\d{2}年版/u)?.[0] ?? null
+  const title = source.match(/[\u4e00-\u9fff\d·]{2,30}(?:教科书|教材)[\u4e00-\u9fff\d·]{0,20}/u)?.[0] ?? null
+  const fields = [grade, volume, publisher, edition, title].filter(Boolean)
+  if (!fields.length) return null
+  return {
+    title,
+    grade,
+    volume,
+    publisher,
+    edition,
+    confidence: fields.length >= 2 ? 1 : 0.7,
+    evidence: `题目元数据：${fields.join('、')}`,
+  }
 }
 
 function gradeToken(value: string | null | undefined) {
@@ -141,7 +166,9 @@ export function resolveProblemTextbook(
     return { textbook: locked, confidence: 1, reason: '用户已锁定教材', source: 'user' }
   }
 
-  const available = candidates.filter((textbook) => textbook.archivedAt === null)
+  const available = candidates.filter((textbook) =>
+    textbook.archivedAt === null &&
+    (textbook.extractionStatus === 'completed' || textbook.extractionStatus === 'needs_review'))
   if (!available.length) {
     return { textbook: null, confidence: 0, reason: '当前科目没有可用教材', source: 'unresolved' }
   }
@@ -163,7 +190,9 @@ export function resolveProblemTextbook(
     const second = scored[1]
     if (best && best.score >= TEXTBOOK_MATCH_MIN_SCORE &&
       (!second || best.score - second.score >= TEXTBOOK_MATCH_TIE_MARGIN)) {
-      const source: ProblemTextbookMatchSource = best.score >= 0.72 ? 'metadata_match' : 'ai_hint'
+      const source: ProblemTextbookMatchSource = input.hintSource === 'problem_metadata' || best.score >= 0.72
+        ? 'metadata_match'
+        : 'ai_hint'
       return {
         textbook: best.textbook,
         confidence: best.score,

@@ -10,6 +10,7 @@ import {
   PROBLEM_ANALYSIS_PROMPT,
   PROBLEM_ANALYSIS_PROMPT_VERSION,
   buildLockedTextbookPromptSection,
+  buildResolvedTextbookPromptSection,
 } from './problemAnalysisContract'
 
 const valid = {
@@ -168,14 +169,31 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.repairStrategy).toBeNull()
   })
 
-  it('declares the locked-textbook alignment rule and bumps the prompt version', () => {
+  it('declares the constrained knowledge rule and bumps the prompt version', () => {
     expect(PROBLEM_ANALYSIS_PROMPT_VERSION).toBe(
-      'problem-understanding-v7-locked-textbook-context',
+      'problem-understanding-v8-constrained-knowledge',
     )
-    // 锁定教材对齐规则必须存在于 prompt，且 textbook_hint 可缺省语义保持不变
+    // 教材对齐与受控 ID 规则必须存在，且 textbook_hint 可缺省语义保持不变
     expect(PROBLEM_ANALYSIS_PROMPT).toContain('locked_textbook_json')
-    expect(PROBLEM_ANALYSIS_PROMPT).toContain('用户已确认并锁定的教材')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('resolved_textbook_context_json')
+    expect(PROBLEM_ANALYSIS_PROMPT).toContain('不得改写或虚构')
     expect(PROBLEM_ANALYSIS_PROMPT).toContain('textbook_hint 是可选字段')
+  })
+
+  it('parses controlled ids and unresolved candidates while retaining legacy compatibility', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      knowledge_tags: [{ ...valid.knowledge_tags[0], canonical_tag_id: 'tag-fraction' }],
+      unresolved_knowledge_candidates: [{
+        ...valid.knowledge_tags[0], name: '候选中不存在的知识', canonical_tag_id: null,
+      }],
+    }))
+    expect(parsed.analysis.knowledgeTags?.[0].canonicalTagId).toBe('tag-fraction')
+    expect(parsed.analysis.unresolvedKnowledgeCandidates?.[0]).toMatchObject({
+      name: '候选中不存在的知识', canonicalTagId: null,
+    })
+    expect(parseProblemAnalysis(JSON.stringify(valid)).analysis.unresolvedKnowledgeCandidates)
+      .toBeUndefined()
   })
 
   it('serializes locked textbook context as an additive prompt section', () => {
@@ -194,6 +212,23 @@ describe('parseProblemAnalysis', () => {
     expect(section).toContain('"volume":"下册"')
     // 附加段以换行开头，纯附加式拼接，不改变基础 prompt 正文
     expect(section.startsWith('\n\n<locked_textbook_json>')).toBe(true)
+  })
+
+  it('serializes only the supplied bounded canonical candidates', () => {
+    const section = buildResolvedTextbookPromptSection({
+      textbookId: 'book-math', title: '数学八年级下册', subject: '数学',
+      grade: '八年级', volume: '下册', publisher: null, edition: null,
+      taxonomyVersion: 4, totalKnowledgeCount: 120, candidateLimit: 30,
+      contextCharacterCount: 200, candidates: [{
+        canonicalTagId: 'tag-1', canonicalName: '全等三角形', aliases: ['三角形全等'],
+        knowledgeNodeId: 'node-1', chapter: '第十二章',
+        hierarchyPath: '第十二章/全等三角形', taxonomyVersion: 4, evidence: null,
+      }],
+    })
+    expect(section).toContain('<resolved_textbook_context_json>')
+    expect(section).toContain('"canonicalTagId":"tag-1"')
+    expect(section).toContain('"id":"book-math"')
+    expect(section).not.toContain('其他教材')
   })
 
   it('fills nullable textbook hint fields when a provider returns a partial object', () => {

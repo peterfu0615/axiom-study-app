@@ -11,6 +11,8 @@ type IconName =
   | 'rotate'
   | 'check'
   | 'chevron'
+  | 'close'
+  | 'alert'
   | 'ai'
   | 'sun'
   | 'moon'
@@ -80,6 +82,13 @@ const paths: Record<IconName, React.ReactNode> = {
   ),
   check: <path d="m5 12 4 4L19 6" />,
   chevron: <path d="m9 6 6 6-6 6" />,
+  close: <path d="m6 6 12 12M18 6 6 18" />,
+  alert: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5v5M12 16.5h.01" />
+    </>
+  ),
   ai: (
     <>
       <path d="M12 3.5 13.4 8l4.1 1.4-4.1 1.4L12 15.5l-1.4-4.7-4.1-1.4L10.6 8z" />

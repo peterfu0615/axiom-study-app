@@ -5,12 +5,14 @@ import {
   assertAIProviderKeySaveStatuses,
   classifyMediaPaths,
   completeProblemAIModelRun,
+  cancelProblemAI,
   extractReferencedMediaPaths,
   isSameDatabasePath,
   parseJSON,
   parseNullableSQLiteBoolean,
   parseSQLiteBoolean,
   recordProcessingModelRunOutput,
+  recoverProblemAITasks,
   scanOrphanedMedia,
   deleteOrphanedMedia,
 } from './database'
@@ -127,6 +129,7 @@ vi.mock('./native', () => ({
   migrateDatabase: vi.fn(async () => undefined),
   persistAIProviderProfiles: vi.fn(async () => undefined),
   recoverLegacyProviderApiKeys: vi.fn(async () => undefined),
+  recoverRelabelBatchItems: vi.fn(async () => undefined),
   removeProblemImage: vi.fn(async () => undefined),
 }))
 
@@ -499,6 +502,7 @@ describe('recordProcessingModelRunOutput', () => {
     // 错误信息必须脱敏后再落库
     expect(attempts[1].errorMessage).toBe('Bearer [已隐藏] leaked')
     expect(stored!.rawOutput).toBe('second-output')
+    expect(fakeDb.statements.filter((sql) => sql.startsWith('INSERT INTO provider_attempts'))).toHaveLength(2)
   })
 
   it('wraps the read-modify-write in a single transaction', async () => {
@@ -530,6 +534,42 @@ describe('recordProcessingModelRunOutput', () => {
         null,
       ),
     ).rejects.toThrow('AI Task 已不再处于处理中状态')
+  })
+})
+
+describe('recoverProblemAITasks', () => {
+  it('requeues interrupted work without deleting provider-attempt lineage', async () => {
+    fakeDb.reset()
+
+    await recoverProblemAITasks()
+
+    expect(fakeDb.statements.some((sql) =>
+      sql.includes("SET status = 'pending'") && sql.includes("WHERE status = 'processing'"),
+    )).toBe(true)
+    expect(fakeDb.statements.some((sql) =>
+      sql.includes("SET ai_status = 'pending'") && sql.includes("WHERE ai_status = 'processing'"),
+    )).toBe(true)
+    expect(fakeDb.statements.some((sql) => /(?:DELETE|UPDATE)\s+(?:FROM\s+)?provider_attempts/iu.test(sql))).toBe(false)
+  })
+})
+
+describe('cancelProblemAI', () => {
+  it('persists a terminal CANCELLED envelope and never leaves a processing problem', async () => {
+    fakeDb.reset()
+    fakeDb.selectHandlers.push({
+      match: (sql) => sql.includes("mr.status IN ('pending', 'processing')"),
+      rows: () => [{ id: 'run-cancel', provider: 'provider-a', model: 'model-a' }],
+    })
+    fakeDb.affectedOverrides.push({
+      match: (sql) => sql.includes("SET status = 'cancelled'"),
+      affected: () => 1,
+    })
+
+    await expect(cancelProblemAI('problem-1')).resolves.toBe(true)
+
+    const cancelStatement = fakeDb.statements.find((sql) => sql.includes("SET status = 'cancelled'"))
+    expect(cancelStatement).toContain('error_code = $2')
+    expect(fakeDb.statements.some((sql) => sql.includes("SET ai_status = 'failed'"))).toBe(true)
   })
 })
 

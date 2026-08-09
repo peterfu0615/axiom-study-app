@@ -50,10 +50,83 @@ vi.mock('./native', () => ({
 import {
   archiveTextbook,
   cancelRelabelBatch,
+  getCurriculumImportJob,
   getTextbookDeletionImpact,
   listHorizonSubjects,
   listTextbooks,
+  resolveProblemTextbookBeforeAnalysis,
+  resolveProblemTextbookContextBeforeAnalysis,
+  runCurriculumImportJob,
+  writeControlledProblemAnalysis,
 } from './horizonDatabase'
+import { verifyTextbookSource } from './native'
+
+const textbookRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'book-1', subject: '数学', title: '数学八年级下册', grade: '八年级',
+  volume: '下册', publisher: '人民教育出版社', edition: '2022年版',
+  source_type: 'pdf', source_path: null, content_hash: null,
+  extraction_status: 'completed', extraction_method: 'pdf_text', is_current: 0,
+  archived_at: null, created_at: 1, updated_at: 1, ...overrides,
+})
+
+const curriculumJobRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'job-1', original_source_path: '/tmp/math.pdf', source_path: '/tmp/math.pdf',
+  source_name: 'math.pdf', source_type: 'pdf', content_hash: 'hash',
+  status: 'ai_analyzing_structure', resume_stage: 'ai_analyzing_structure',
+  page_count: 1, extraction_method: 'pdf_text', extraction_json: '{"pageCount":1,"extractionMethod":"pdf_text","pages":[],"outline":[],"warnings":[]}',
+  metadata_json: null, provider: 'provider-1', model: 'model-1',
+  prompt_version: 'v1', schema_version: 'v1', input_hash: 'input', raw_output: null,
+  error_message: null, error_code: null, error_json: null, provider_task_id: null,
+  structure_json: null, tags_json: null, audit_json: null,
+  progress_current: 0, progress_total: 1, progress_fraction: 0, progress_label: '',
+  created_at: 1, updated_at: 1, ...overrides,
+})
+
+describe('curriculum structured failure compatibility', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+    vi.mocked(verifyTextbookSource).mockReset()
+  })
+
+  it('hydrates a persisted envelope and classifies a legacy error message', async () => {
+    const envelope = {
+      code: 'RATE_LIMIT_ERROR', title: '模型服务繁忙', userMessage: '请稍后重试。',
+      retryable: true, fallbackAllowed: true, providerId: 'provider-1', model: 'model-1',
+      httpStatus: 429, runId: null, attemptId: 'attempt-1', detailSafe: 'status=429', occurredAt: 1,
+    }
+    recorded.selectOverrides.push({
+      match: /SELECT \* FROM curriculum_import_jobs WHERE id = \$1/,
+      rows: [curriculumJobRow({ error_message: '旧版 timeout', error_json: JSON.stringify(envelope) })],
+    })
+    await expect(getCurriculumImportJob('job-1')).resolves.toMatchObject({ error: envelope })
+
+    recorded.selectOverrides[0].rows = [curriculumJobRow({ error_message: '旧版 timeout' })]
+    await expect(getCurriculumImportJob('job-1')).resolves.toMatchObject({
+      error: { code: 'TIMEOUT_ERROR', retryable: true },
+    })
+  })
+
+  it('persists source verification failures as machine-readable errors', async () => {
+    recorded.selectOverrides.push({
+      match: /SELECT \* FROM curriculum_import_jobs WHERE id = \$1/,
+      rows: [curriculumJobRow()],
+    })
+    vi.mocked(verifyTextbookSource).mockRejectedValueOnce(new Error('network connection failed'))
+
+    await runCurriculumImportJob('job-1')
+
+    const update = recorded.calls.find((call) =>
+      call.sql.startsWith("UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable'"),
+    )
+    expect(update?.sql).toContain('error_code = $3, error_json = $4')
+    expect(update?.params[2]).toBe('NETWORK_ERROR')
+    expect(JSON.parse(String(update?.params[3]))).toMatchObject({
+      code: 'NETWORK_ERROR', providerId: 'provider-1', model: 'model-1',
+    })
+  })
+})
 
 describe('cancelRelabelBatch', () => {
   beforeEach(() => {
@@ -232,5 +305,167 @@ describe('getTextbookDeletionImpact', () => {
     const problemQuery = recorded.calls.find((call) => call.sql.includes('FROM problems'))!
     expect(problemQuery.sql).toContain('matched_textbook_id = $1')
     expect(problemQuery.sql).toContain('deleted_at IS NULL')
+  })
+})
+
+describe('resolveProblemTextbookBeforeAnalysis', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  function seed(problem: Record<string, unknown>, books: Array<Record<string, unknown>>) {
+    recorded.selectOverrides.push(
+      { match: /COALESCE\(NULLIF\(user_title/, rows: [{
+        effective_subject: '数学', title: '八年级下册一次函数', stem_markdown: '求解析式',
+        matched_textbook_id: null, textbook_match_locked: 0, ...problem,
+      }] },
+      { match: /SELECT \* FROM textbooks WHERE subject = \$1 ORDER BY/, rows: books },
+      { match: /SELECT p\.id, trim/, rows: [{
+        id: 'problem-1', effective_subject: '数学', matched_textbook_id: books[0]?.id ?? null,
+        textbook_match_confidence: books.length === 1 ? .95 : 0,
+        textbook_match_reason: books.length === 1 ? '当前科目只有一本未归档教材' : '教材元数据不足以安全匹配',
+        textbook_match_source: books.length === 1 ? 'single_subject_textbook' : 'unresolved',
+        textbook_match_locked: Number(problem.textbook_match_locked ?? 0),
+        textbook_resolver_version: 'problem-textbook-resolver-v1',
+        textbook_candidate_count: books.length, textbook_decision_json: '{}',
+        textbook_id: books[0]?.id ?? null, textbook_subject: books[0]?.subject,
+        textbook_title: books[0]?.title, textbook_grade: books[0]?.grade,
+        textbook_volume: books[0]?.volume, textbook_publisher: books[0]?.publisher,
+        textbook_edition: books[0]?.edition, textbook_source_type: books[0]?.source_type,
+        textbook_source_path: null, textbook_content_hash: null,
+        textbook_extraction_status: books[0]?.extraction_status,
+        textbook_extraction_method: books[0]?.extraction_method,
+        textbook_is_current: 0, textbook_archived_at: null,
+        textbook_created_at: 1, textbook_updated_at: 1,
+      }] },
+      { match: /archived_at IS NULL\s+AND extraction_status/, rows: books },
+    )
+  }
+
+  it('auto-selects the only eligible textbook before provider dispatch', async () => {
+    seed({}, [textbookRow()])
+    await expect(resolveProblemTextbookBeforeAnalysis('problem-1')).resolves.toMatchObject({
+      textbook: { id: 'book-1' }, source: 'single_subject_textbook',
+    })
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
+    expect(update.params).toEqual([
+      'book-1', .95, '当前科目只有一本未归档教材', 'single_subject_textbook',
+      expect.any(Number), 'problem-textbook-resolver-v1', 1, expect.any(String), 'problem-1',
+    ])
+  })
+
+  it('preserves a user lock while refreshing resolver audit metadata', async () => {
+    seed({ matched_textbook_id: 'book-1', textbook_match_locked: 1 }, [textbookRow()])
+    await resolveProblemTextbookBeforeAnalysis('problem-1')
+    expect(recorded.calls.some((call) => call.sql.includes('textbook_resolver_version = $1'))).toBe(true)
+    expect(recorded.calls.some((call) => call.sql.includes('matched_textbook_id = $1'))).toBe(false)
+  })
+
+  it('rejects a locked textbook that is outside the effective subject candidates', async () => {
+    seed({ matched_textbook_id: 'other-subject-book', textbook_match_locked: 1 }, [textbookRow()])
+    await expect(resolveProblemTextbookBeforeAnalysis('problem-1'))
+      .rejects.toThrow('锁定教材与题目科目不一致')
+    expect(recorded.calls.some((call) => call.sql.includes('UPDATE problems SET'))).toBe(false)
+  })
+
+  it('records unresolved without inventing a textbook when no eligible book exists', async () => {
+    seed({}, [])
+    await resolveProblemTextbookBeforeAnalysis('problem-1')
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
+    expect(update.params[0]).toBeNull()
+    expect(update.params[3]).toBe('unresolved')
+    expect(update.params[6]).toBe(0)
+  })
+
+  it('retrieves a bounded canonical context only from the selected textbook', async () => {
+    seed({}, [textbookRow()])
+    recorded.selectOverrides.push(
+      { match: /AS problem_text/, rows: [{ problem_text: '利用全等判定证明三角形全等' }] },
+      { match: /td\.id AS canonical_tag_id/, rows: [{
+        canonical_tag_id: 'tag-1', canonical_name: '三角形全等的判定', taxonomy_version: 4,
+        knowledge_node_id: 'node-1', path: '第十二章/三角形全等的判定',
+        evidence_text: '教材第十二章', aliases: `全等判定${String.fromCharCode(31)}判定全等`,
+      }] },
+    )
+    const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
+    expect(result.context).toMatchObject({
+      textbookId: 'book-1', subject: '数学', taxonomyVersion: 4,
+      totalKnowledgeCount: 1, candidateLimit: 30,
+      candidates: [{ canonicalTagId: 'tag-1', knowledgeNodeId: 'node-1' }],
+    })
+    const query = recorded.calls.find((call) => call.sql.includes('td.id AS canonical_tag_id'))!
+    expect(query.params).toEqual(['数学', 'book-1'])
+    expect(query.sql).toContain("td.lifecycle_status = 'active'")
+    expect(query.sql).toContain('kn.textbook_id = $2')
+  })
+
+  it('does not query or fabricate canonical knowledge when resolution is unresolved', async () => {
+    seed({}, [])
+    const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
+    expect(result.context).toBeNull()
+    expect(recorded.calls.some((call) => call.sql.includes('canonical_tag_id'))).toBe(false)
+  })
+})
+
+describe('writeControlledProblemAnalysis', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+    recorded.selectOverrides.push(
+      { match: /SELECT textbook_match_locked FROM problems/, rows: [{ textbook_match_locked: 0 }] },
+      { match: /SELECT version FROM taxonomy_versions/, rows: [{ version: 5 }] },
+      { match: /SELECT id FROM problem_difficulties/, rows: [] },
+    )
+  })
+
+  it('persists unknown knowledge as an unresolved ProblemTag without minting a fake definition', async () => {
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-1', subject: '数学', now: 100,
+      textbookMatch: { textbook: textbookRow() as never, confidence: .9, reason: '单本教材', source: 'single_subject_textbook' },
+      definitions: [],
+      candidateGroups: [['knowledge', [{
+        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary', confidence: .7,
+        evidence: '题面证据', source: 'problem',
+      }]]],
+      difficulty: null,
+    })
+    expect(recorded.calls.some((call) => call.sql.startsWith('INSERT OR IGNORE INTO tag_definitions')))
+      .toBe(false)
+    const insert = recorded.calls.find((call) => call.sql.startsWith('INSERT OR IGNORE INTO problem_tags'))!
+    expect(insert.params[4]).toBeNull()
+    expect(insert.params[5]).toBe('候选中不存在的知识')
+    expect(insert.params[7]).toBe('unmapped')
+  })
+
+  it('supersedes only unlocked unconfirmed model tags during re-analysis', async () => {
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 200,
+      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      definitions: [], candidateGroups: [], difficulty: null,
+    })
+    const supersede = recorded.calls.find((call) =>
+      call.sql.startsWith('UPDATE problem_tags SET superseded_at'))!
+    expect(supersede.sql).toContain("source = 'model'")
+    expect(supersede.sql).toContain('is_locked = 0')
+    expect(supersede.sql).toContain("verification_status != 'user_verified'")
+  })
+
+  it('does not replace a locked or user-confirmed difficulty during re-analysis', async () => {
+    const difficultyRows = recorded.selectOverrides.find((entry) =>
+      entry.match.test('SELECT id FROM problem_difficulties'))!
+    difficultyRows.rows = [{ id: 'difficulty-user' }]
+    await writeControlledProblemAnalysis({
+      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 300,
+      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      definitions: [], candidateGroups: [],
+      difficulty: { level: 'advanced', score: .9, reason: '综合题', confidence: .95 },
+    })
+    expect(recorded.calls.some((call) => call.sql.startsWith('INSERT INTO problem_difficulties')))
+      .toBe(false)
+    expect(recorded.calls.some((call) => call.sql.startsWith('UPDATE problem_difficulties SET superseded_at')))
+      .toBe(false)
   })
 })

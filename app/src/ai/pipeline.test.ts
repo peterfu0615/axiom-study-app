@@ -32,8 +32,8 @@ const {
   removeProblemDiagram: vi.fn(),
 }))
 
-const { getProblemTextbookMatch } = vi.hoisted(() => ({
-  getProblemTextbookMatch: vi.fn(),
+const { resolveProblemTextbookContextBeforeAnalysis } = vi.hoisted(() => ({
+  resolveProblemTextbookContextBeforeAnalysis: vi.fn(),
 }))
 
 vi.mock('../platform/database', () => ({
@@ -60,11 +60,12 @@ vi.mock('../platform/native', () => ({
 }))
 
 vi.mock('../platform/horizonDatabase', () => ({
-  getProblemTextbookMatch,
+  resolveProblemTextbookContextBeforeAnalysis,
 }))
 
-import { runProblemAIWorker } from './pipeline'
-import { setAIProviderForTests } from './provider'
+import { resumeProblemAIPipeline, runProblemAIWorker } from './pipeline'
+import { AIProviderFailure, setAIProviderForTests } from './provider'
+import { createAIError } from '../domain/aiError'
 
 const run: ModelRun = {
   id: 'run-1',
@@ -119,7 +120,7 @@ describe('problem AI worker', () => {
       created: true,
     })
     removeProblemDiagram.mockResolvedValue(undefined)
-    getProblemTextbookMatch.mockResolvedValue(null)
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({ match: null, context: null })
     setAIProviderForTests({
       id: 'test',
       model: 'test-v1',
@@ -152,6 +153,21 @@ describe('problem AI worker', () => {
     )
     expect(failProblemAIModelRun).not.toHaveBeenCalled()
     expect(queueProblemSolution).toHaveBeenCalledWith(run.problemId)
+  })
+
+  it('recovers interrupted runs before claiming resumed work', async () => {
+    const order: string[] = []
+    recoverProblemAITasks.mockImplementationOnce(async () => {
+      order.push('recover')
+    })
+    claimNextProblemAIModelRun.mockImplementationOnce(async () => {
+      order.push('claim')
+      return null
+    })
+
+    await resumeProblemAIPipeline()
+
+    expect(order).toEqual(['recover', 'claim'])
   })
 
   it('crops a detected diagram and removes the superseded crop', async () => {
@@ -220,10 +236,62 @@ describe('problem AI worker', () => {
     expect(failProblemAIModelRun).toHaveBeenCalledWith(
       run,
       expect.objectContaining({
-        message: expect.stringContaining('provider unavailable'),
+        envelope: expect.objectContaining({
+          code: 'PROVIDER_ERROR',
+          detailSafe: 'provider unavailable',
+        }),
       }),
     )
     expect(completeProblemAIModelRun).not.toHaveBeenCalled()
+  })
+
+  it('does not retry or fallback authentication failures', async () => {
+    const analyze = vi.fn().mockRejectedValue(new AIProviderFailure(
+      createAIError('AUTHENTICATION_ERROR', { httpStatus: 401 }),
+    ))
+    setAIProviderForTests({
+      id: 'test', model: 'test-v1', supportsVision: true, supportsText: true,
+      analyzeProblemImage: analyze,
+    })
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyze).toHaveBeenCalledTimes(1)
+    expect(failProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({
+      envelope: expect.objectContaining({ code: 'AUTHENTICATION_ERROR', fallbackAllowed: false }),
+    }))
+  })
+
+  it('retries a rate limit failure once before completing', async () => {
+    const analyze = vi.fn()
+      .mockRejectedValueOnce(new AIProviderFailure(createAIError('RATE_LIMIT_ERROR', { httpStatus: 429 })))
+      .mockResolvedValueOnce({ analysis, rawOutput: '{}', repairStrategy: null })
+    setAIProviderForTests({
+      id: 'test', model: 'test-v1', supportsVision: true, supportsText: true,
+      analyzeProblemImage: analyze,
+    })
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyze).toHaveBeenCalledTimes(2)
+    expect(completeProblemAIModelRun).toHaveBeenCalled()
+    expect(failProblemAIModelRun).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['canonical tag mapping failed', 'MAPPING_ERROR'],
+    ['SQLite transaction failed', 'PERSISTENCE_ERROR'],
+  ])('records completion failure %s separately from provider failure', async (message, code) => {
+    completeProblemAIModelRun.mockRejectedValueOnce(new Error(message))
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(failProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({
+      envelope: expect.objectContaining({ code }),
+    }))
   })
 
   it('drains a task queued while the worker is finishing', async () => {
@@ -286,20 +354,27 @@ describe('locked textbook context injection', () => {
     queueProblemSolution.mockResolvedValue(undefined)
     queueStudentAttempt.mockResolvedValue(undefined)
     getProblemRegions.mockResolvedValue([])
-    getProblemTextbookMatch.mockResolvedValue(null)
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({ match: null, context: null })
   })
 
   it('injects textbook context when the problem match is user-locked', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    getProblemTextbookMatch.mockResolvedValue({
-      textbook: lockedTextbook,
-      confidence: 1,
-      reason: '用户手动选择',
-      source: 'user',
-      problemId: 'problem-1',
-      subject: '数学',
-      locked: true,
-      candidates: [],
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({
+      match: { textbook: lockedTextbook, source: 'user' },
+      context: {
+        textbookId: lockedTextbook.id,
+        title: lockedTextbook.title,
+        subject: lockedTextbook.subject,
+        grade: lockedTextbook.grade,
+        volume: lockedTextbook.volume,
+        publisher: lockedTextbook.publisher,
+        edition: lockedTextbook.edition,
+        taxonomyVersion: 2,
+        candidates: [],
+        totalKnowledgeCount: 0,
+        candidateLimit: 30,
+        contextCharacterCount: 2,
+      },
     })
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
@@ -307,32 +382,40 @@ describe('locked textbook context injection', () => {
 
     await runProblemAIWorker()
 
-    expect(getProblemTextbookMatch).toHaveBeenCalledWith(run.problemId)
+    expect(resolveProblemTextbookContextBeforeAnalysis).toHaveBeenCalledWith(run.problemId)
     expect(analyzeProblem).toHaveBeenCalledWith(
       expect.objectContaining({
-        lockedTextbookContext: {
+        resolvedTextbookContext: expect.objectContaining({
+          textbookId: lockedTextbook.id,
           title: '义务教育教科书·数学八年级下册',
           subject: '数学',
           grade: '八年级',
           volume: '下册',
           publisher: '人民教育出版社',
           edition: null,
-        },
+        }),
       }),
     )
   })
 
-  it('does not inject textbook context when the match is not locked', async () => {
+  it('injects a deterministically resolved textbook even when it is not user locked', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    getProblemTextbookMatch.mockResolvedValue({
-      textbook: lockedTextbook,
-      confidence: 0.9,
-      reason: 'AI 推断',
-      source: 'ai',
-      problemId: 'problem-1',
-      subject: '数学',
-      locked: false,
-      candidates: [],
+    resolveProblemTextbookContextBeforeAnalysis.mockResolvedValue({
+      match: { textbook: lockedTextbook, source: 'metadata_match' },
+      context: {
+        textbookId: lockedTextbook.id,
+        title: lockedTextbook.title,
+        subject: lockedTextbook.subject,
+        grade: lockedTextbook.grade,
+        volume: lockedTextbook.volume,
+        publisher: lockedTextbook.publisher,
+        edition: lockedTextbook.edition,
+        taxonomyVersion: 2,
+        candidates: [],
+        totalKnowledgeCount: 0,
+        candidateLimit: 30,
+        contextCharacterCount: 2,
+      },
     })
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
@@ -341,12 +424,14 @@ describe('locked textbook context injection', () => {
     await runProblemAIWorker()
 
     expect(analyzeProblem).toHaveBeenCalledTimes(1)
-    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toBeUndefined()
+    expect(analyzeProblem.mock.calls[0][0].resolvedTextbookContext).toEqual(
+      expect.objectContaining({ textbookId: lockedTextbook.id, subject: '数学' }),
+    )
   })
 
   it('continues without injection when the textbook lookup fails', async () => {
     const analyzeProblem = setupAnalyzeProblemProvider()
-    getProblemTextbookMatch.mockRejectedValue(new Error('db unavailable'))
+    resolveProblemTextbookContextBeforeAnalysis.mockRejectedValue(new Error('db unavailable'))
     claimNextProblemAIModelRun
       .mockResolvedValueOnce(run)
       .mockResolvedValueOnce(null)
@@ -354,7 +439,7 @@ describe('locked textbook context injection', () => {
     await runProblemAIWorker()
 
     expect(analyzeProblem).toHaveBeenCalledTimes(1)
-    expect(analyzeProblem.mock.calls[0][0].lockedTextbookContext).toBeUndefined()
+    expect(analyzeProblem.mock.calls[0][0].resolvedTextbookContext).toBeUndefined()
     expect(completeProblemAIModelRun).toHaveBeenCalled()
   })
 })

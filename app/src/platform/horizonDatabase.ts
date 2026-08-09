@@ -1,7 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AIProblemAnalysis, HorizonTagType } from '../domain/models'
+import type {
+  AIProblemAnalysis,
+  CanonicalKnowledgeCandidate,
+  HorizonTagType,
+  ResolvedTextbookContext,
+} from '../domain/models'
 import {
   mapCandidatesToControlledTags,
+  mergeKnowledgeCandidateOutputs,
   normalizeTagName,
   type CurriculumImportJob,
   type KnowledgeNode,
@@ -12,9 +18,16 @@ import {
   type TextbookRecognition,
 } from '../domain/horizon'
 import {
+  AIProviderFailure,
   getTextbookRecognitionProvider,
   getCurriculumAnalysisProvider,
 } from '../ai/provider'
+import {
+  classifyAIError,
+  isAIErrorEnvelope,
+  publicAIErrorMessage,
+  type AIErrorEnvelope,
+} from '../domain/aiError'
 import {
   buildCurriculumAuditPrompt,
   buildCurriculumTagPrompt,
@@ -64,10 +77,16 @@ import {
   type TextbookExtractionProgress,
 } from './native'
 import {
+  inferProblemTextbookHint,
   resolveProblemTextbook,
+  TEXTBOOK_RESOLVER_VERSION,
   type ProblemTextbookMatch,
 } from '../domain/problemTextbook'
 import { withTransactionLock } from './transactionLock'
+import {
+  KNOWLEDGE_CONTEXT_CANDIDATE_LIMIT,
+  rankCanonicalKnowledgeCandidates,
+} from '../domain/knowledgeContext'
 
 interface ExecuteResult {
   rowsAffected: number
@@ -347,6 +366,8 @@ function rowToTextbook(row: Record<string, unknown>): Textbook {
 
 function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImportJob {
   const storedRecognition = parseJSON<Record<string, unknown> | null>(row.metadata_json, null)
+  const storedError = parseJSON<AIErrorEnvelope | null>(row.error_json, null)
+  const errorMessage = nullableString(row.error_message)
   return {
     id: String(row.id),
     originalSourcePath: String(row.original_source_path),
@@ -371,7 +392,12 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
     schemaVersion: nullableString(row.schema_version),
     inputHash: nullableString(row.input_hash),
     rawOutput: nullableString(row.raw_output),
-    errorMessage: nullableString(row.error_message),
+    errorMessage,
+    error: isAIErrorEnvelope(storedError)
+      ? storedError
+      : errorMessage
+        ? classifyAIError(errorMessage)
+        : null,
     providerTaskId: nullableString(row.provider_task_id),
     structure: parseJSON<unknown | null>(row.structure_json, null),
     tags: parseJSON<unknown | null>(row.tags_json, null),
@@ -463,6 +489,9 @@ export interface ProblemTextbookMatchView extends ProblemTextbookMatch {
   subject: string
   locked: boolean
   candidates: Textbook[]
+  resolverVersion: string | null
+  candidateCount: number
+  decisionDetail: Record<string, unknown> | null
 }
 
 export async function getProblemTextbookMatch(problemId: string): Promise<ProblemTextbookMatchView | null> {
@@ -470,6 +499,7 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
     `SELECT p.id, trim(COALESCE(NULLIF(p.user_subject, ''), NULLIF(p.ai_subject, ''), NULLIF(p.subject, ''))) AS effective_subject,
        p.matched_textbook_id, p.textbook_match_confidence, p.textbook_match_reason,
        p.textbook_match_source, p.textbook_match_locked, p.textbook_match_updated_at,
+       p.textbook_resolver_version, p.textbook_candidate_count, p.textbook_decision_json,
        t.id AS textbook_id, t.subject AS textbook_subject, t.title AS textbook_title,
        t.grade AS textbook_grade, t.volume AS textbook_volume, t.publisher AS textbook_publisher,
        t.edition AS textbook_edition, t.source_type AS textbook_source_type,
@@ -487,7 +517,8 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
   const subject = String(row.effective_subject || '')
   const candidateRows = subject
     ? await select<Record<string, unknown>[]>(
-      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL ORDER BY updated_at DESC`,
+      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL
+       AND extraction_status IN ('completed', 'needs_review') ORDER BY updated_at DESC`,
       [subject],
     )
     : []
@@ -509,6 +540,159 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
     subject,
     locked: bool(row.textbook_match_locked),
     candidates: candidateRows.map(rowToTextbook),
+    resolverVersion: nullableString(row.textbook_resolver_version),
+    candidateCount: Number(row.textbook_candidate_count ?? candidateRows.length),
+    decisionDetail: parseJSON<Record<string, unknown> | null>(row.textbook_decision_json, null),
+  }
+}
+
+export async function resolveProblemTextbookBeforeAnalysis(
+  problemId: string,
+): Promise<ProblemTextbookMatchView | null> {
+  const now = Date.now()
+  await transaction(async () => {
+    const problems = await select<Array<{
+      effective_subject: string
+      title: string | null
+      stem_markdown: string | null
+      matched_textbook_id: string | null
+      textbook_match_locked: number
+    }>>(
+      `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
+       COALESCE(NULLIF(user_title, ''), NULLIF(ai_title, ''), title) AS title,
+       COALESCE(NULLIF(user_stem_markdown, ''), NULLIF(ai_stem_markdown, ''), stem_markdown) AS stem_markdown,
+       matched_textbook_id, textbook_match_locked
+       FROM problems WHERE id = $1 AND status = 'saved' AND deleted_at IS NULL LIMIT 1`,
+      [problemId],
+    )
+    const problem = problems[0]
+    if (!problem) throw new Error('错题不存在或状态已发生变化')
+    const subject = String(problem.effective_subject || '')
+    const textbookRows = subject
+      ? await select<Record<string, unknown>[]>(
+        `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`,
+        [subject],
+      )
+      : []
+    const textbooks = textbookRows.map(rowToTextbook)
+    const eligibleCount = textbooks.filter((book) => book.archivedAt === null &&
+      (book.extractionStatus === 'completed' || book.extractionStatus === 'needs_review')).length
+    const hint = inferProblemTextbookHint({ title: problem.title, stemMarkdown: problem.stem_markdown })
+    const resolution = resolveProblemTextbook({
+      subject,
+      lockedTextbookId: Number(problem.textbook_match_locked) === 1
+        ? nullableString(problem.matched_textbook_id)
+        : null,
+      hint,
+      hintSource: 'problem_metadata',
+      textbooks,
+      legacyCurrentTextbookId: null,
+    })
+    if (Number(problem.textbook_match_locked) === 1 && problem.matched_textbook_id &&
+      resolution.source !== 'user') {
+      throw new Error('锁定教材与题目科目不一致')
+    }
+    const decision = {
+      resolverVersion: TEXTBOOK_RESOLVER_VERSION,
+      subject,
+      candidateCount: eligibleCount,
+      selectedTextbookId: resolution.textbook?.id ?? null,
+      source: resolution.source,
+      confidence: resolution.confidence,
+      reason: resolution.reason,
+      metadataEvidence: hint?.evidence ?? null,
+    }
+    if (Number(problem.textbook_match_locked) === 1 && resolution.source === 'user') {
+      await execute(
+        `UPDATE problems SET textbook_resolver_version = $1,
+         textbook_candidate_count = $2, textbook_decision_json = $3,
+         textbook_match_updated_at = $4, updated_at = $4 WHERE id = $5`,
+        [TEXTBOOK_RESOLVER_VERSION, eligibleCount, JSON.stringify(decision), now, problemId],
+      )
+      return
+    }
+    await execute(
+      `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
+       textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
+       textbook_match_updated_at = $5, textbook_resolver_version = $6,
+       textbook_candidate_count = $7, textbook_decision_json = $8, updated_at = $5
+       WHERE id = $9`,
+      [resolution.textbook?.id ?? null, resolution.confidence, resolution.reason,
+        resolution.source, now, TEXTBOOK_RESOLVER_VERSION, eligibleCount,
+        JSON.stringify(decision), problemId],
+    )
+  })
+  return getProblemTextbookMatch(problemId)
+}
+
+export async function resolveProblemTextbookContextBeforeAnalysis(
+  problemId: string,
+): Promise<{
+  match: ProblemTextbookMatchView | null
+  context: ResolvedTextbookContext | null
+}> {
+  const match = await resolveProblemTextbookBeforeAnalysis(problemId)
+  if (!match?.textbook) return { match, context: null }
+
+  const problemRows = await select<Array<{ problem_text: string }>>(
+    `SELECT COALESCE(NULLIF(user_title, ''), NULLIF(ai_title, ''), title, '') || ' ' ||
+       COALESCE(NULLIF(user_stem_markdown, ''), NULLIF(ai_stem_markdown, ''), stem_markdown, '') AS problem_text
+     FROM problems WHERE id = $1 LIMIT 1`,
+    [problemId],
+  )
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT td.id AS canonical_tag_id, td.canonical_name, td.taxonomy_version,
+       kn.id AS knowledge_node_id, kn.path, kn.evidence_text,
+       COALESCE(group_concat(ta.alias, char(31)), '') AS aliases
+     FROM tag_definitions td
+     JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+     LEFT JOIN tag_aliases ta ON ta.tag_id = td.id AND ta.subject = td.subject
+     WHERE td.subject = $1 AND td.tag_type = 'knowledge'
+       AND td.lifecycle_status = 'active' AND td.archived_at IS NULL
+       AND kn.textbook_id = $2 AND kn.subject = $1
+       AND kn.archived_at IS NULL AND kn.merged_into_id IS NULL
+     GROUP BY td.id
+     ORDER BY kn.sort_order, td.canonical_name COLLATE NOCASE`,
+    [match.subject, match.textbook.id],
+  )
+  const allCandidates: CanonicalKnowledgeCandidate[] = rows.map((row) => {
+    const hierarchyPath = String(row.path || row.canonical_name || '')
+    const pathParts = hierarchyPath.split('/').map((part) => part.trim()).filter(Boolean)
+    return {
+      canonicalTagId: String(row.canonical_tag_id),
+      canonicalName: String(row.canonical_name),
+      aliases: String(row.aliases || '').split(String.fromCharCode(31)).filter(Boolean),
+      knowledgeNodeId: String(row.knowledge_node_id),
+      chapter: pathParts.length > 1 ? pathParts[0] : null,
+      hierarchyPath,
+      taxonomyVersion: Number(row.taxonomy_version),
+      evidence: nullableString(row.evidence_text),
+    }
+  })
+  const ranked = rankCanonicalKnowledgeCandidates(
+    allCandidates,
+    String(problemRows[0]?.problem_text || ''),
+  )
+  const taxonomyVersion = allCandidates.reduce(
+    (latest, candidate) => Math.max(latest, candidate.taxonomyVersion),
+    0,
+  )
+  return {
+    match,
+    context: {
+      textbookId: match.textbook.id,
+      title: match.textbook.title,
+      subject: match.textbook.subject,
+      grade: match.textbook.grade,
+      volume: match.textbook.volume,
+      publisher: match.textbook.publisher,
+      edition: match.textbook.edition,
+      taxonomyVersion,
+      candidates: ranked.candidates,
+      totalKnowledgeCount: allCandidates.length,
+      candidateLimit: KNOWLEDGE_CONTEXT_CANDIDATE_LIMIT,
+      contextCharacterCount: ranked.contextCharacterCount,
+    },
   }
 }
 
@@ -527,10 +711,11 @@ export async function setProblemTextbookMatch(
     if (!subject) throw new Error('题目尚未确认科目')
     if (textbookId) {
       const textbooks = await select<Array<Record<string, unknown>>>(
-        `SELECT * FROM textbooks WHERE id = $1 AND subject = $2 AND archived_at IS NULL LIMIT 1`,
+        `SELECT * FROM textbooks WHERE id = $1 AND subject = $2 AND archived_at IS NULL
+         AND extraction_status IN ('completed', 'needs_review') LIMIT 1`,
         [textbookId, subject],
       )
-      if (!textbooks[0]) throw new Error('只能选择当前科目的未归档教材')
+      if (!textbooks[0]) throw new Error('只能选择当前科目且已完成提取的未归档教材')
       await execute(
         `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = 1,
          textbook_match_reason = '用户手动选择', textbook_match_source = 'user',
@@ -728,10 +913,43 @@ async function failCurriculumAttempt(
   lease: CurriculumImportAttemptLease,
   error: unknown,
 ) {
+  const job = await getCurriculumImportJob(jobId)
+  const source = error instanceof AIProviderFailure ? error.error : error
+  const envelope = classifyAIError(source, {
+    providerId: job?.provider ?? null,
+    model: job?.model ?? null,
+    attemptId: lease.attemptId,
+    detailSafe: error instanceof AIProviderFailure
+      ? error.error.detailSafe ?? `stage=${stage}`
+      : `${readableAttemptError(error)} · stage=${stage}`,
+  })
   await failCurriculumImportAttempt({
     ...attemptIdentity(jobId, stage, lease),
-    errorMessage: readableAttemptError(error),
+    errorMessage: publicAIErrorMessage(envelope),
+    errorCode: envelope.code,
+    errorJson: JSON.stringify(envelope),
   })
+}
+
+async function persistCurriculumJobFailure(
+  jobId: string,
+  error: unknown,
+  resumeStage?: CurriculumImportJob['stage'],
+) {
+  const job = await getCurriculumImportJob(jobId)
+  const envelope = classifyAIError(error, {
+    providerId: job?.provider ?? null,
+    model: job?.model ?? null,
+    detailSafe: readableAttemptError(error),
+  })
+  await execute(
+    `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
+     resume_stage = COALESCE($1, resume_stage), error_message = $2,
+     error_code = $3, error_json = $4, progress_label = '分析已暂停',
+     updated_at = $5 WHERE id = $6`,
+    [resumeStage ?? null, publicAIErrorMessage(envelope), envelope.code,
+      JSON.stringify(envelope), Date.now(), jobId],
+  )
 }
 
 async function runStructureStage(
@@ -948,13 +1166,7 @@ export async function createCurriculumImportJob(
   // late-result checks, so the UI can poll the single slot while this pipeline
   // advances through structure, tags, and audit in the background.
   void runStructureStage(jobId).catch(async (error) => {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       resume_stage = 'waiting_for_review', error_message = $1,
-       progress_label = '分析已暂停', updated_at = $2
-       WHERE id = $3`,
-      [readableAttemptError(error), Date.now(), jobId],
-    ).catch(() => {})
+    await persistCurriculumJobFailure(jobId, error, 'waiting_for_review').catch(() => {})
   })
   return getCurriculumImportJob(jobId)
 }
@@ -967,19 +1179,15 @@ export async function runCurriculumImportJob(
   try {
     await verifyTextbookSource(job.originalSourcePath, job.contentHash ?? '')
   } catch (error) {
-    await execute(
-      `UPDATE curriculum_import_jobs SET status = 'ai_failed_recoverable',
-       error_message = $1, progress_label = '分析已暂停',
-       updated_at = $2 WHERE id = $3`,
-      [String(error), Date.now(), jobId],
-    )
+    await persistCurriculumJobFailure(jobId, error)
     return getCurriculumImportJob(jobId)
   }
   if (job.stage === 'waiting_for_review') {
     if (job.status === 'ai_failed_recoverable') {
       await execute(
         `UPDATE curriculum_import_jobs SET status = 'waiting_for_review',
-         error_message = NULL, progress_current = 1, progress_total = 1,
+         error_message = NULL, error_code = NULL, error_json = NULL,
+         progress_current = 1, progress_total = 1,
          progress_fraction = 1, progress_label = '分析完成',
          updated_at = $1 WHERE id = $2`,
         [Date.now(), jobId],
@@ -1960,31 +2168,44 @@ export async function prepareControlledProblemAnalysis(
     effective_subject: string
     matched_textbook_id: string | null
     textbook_match_locked: number
+    textbook_match_confidence: number
+    textbook_match_reason: string
+    textbook_match_source: ProblemTextbookMatch['source']
   }>>(
     `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
-       matched_textbook_id, textbook_match_locked
+       matched_textbook_id, textbook_match_locked, textbook_match_confidence,
+       textbook_match_reason, textbook_match_source
      FROM problems WHERE id = $1`,
     [problemId],
   )
   const subject = String(problems[0]?.effective_subject || '')
   if (!subject) return null
   if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
-    return null
+    throw new Error('受控知识标签映射失败：模型科目与题目有效科目不一致')
   }
   const textbooks = (await select<Record<string, unknown>[]>(
     `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
   )).map(rowToTextbook)
-  const legacyCurrentTextbookId = textbooks.find((book) => book.isCurrent && book.archivedAt === null)?.id ?? null
-  const textbookMatch = resolveProblemTextbook({
-    subject,
-    lockedTextbookId: Number(problems[0]?.textbook_match_locked ?? 0) === 1
-      ? nullableString(problems[0]?.matched_textbook_id)
-      : null,
-    hint: analysis.textbookHint ?? null,
-    textbooks,
-    legacyCurrentTextbookId,
-  })
+  const matchedTextbookId = nullableString(problems[0]?.matched_textbook_id)
+  const selectedTextbook = matchedTextbookId
+    ? textbooks.find((book) => book.id === matchedTextbookId) ?? null
+    : null
+  if (matchedTextbookId && !selectedTextbook) {
+    throw new Error('受控知识标签映射失败：分析前选择的教材不属于题目有效科目')
+  }
+  // The provider output must never re-route the textbook. This snapshot is
+  // the decision persisted by the pre-analysis resolver and used in prompt.
+  const textbookMatch: ProblemTextbookMatch = {
+    textbook: selectedTextbook,
+    confidence: Number(problems[0]?.textbook_match_confidence ?? 0),
+    reason: String(problems[0]?.textbook_match_reason || '分析前未匹配教材'),
+    source: problems[0]?.textbook_match_source ?? 'unresolved',
+  }
   const definitions = await listTagDefinitions(subject)
+  const knowledgeCandidates = mergeKnowledgeCandidateOutputs(
+    analysis.knowledgeTags ?? [],
+    analysis.unresolvedKnowledgeCandidates ?? [],
+  )
   return {
     problemId,
     modelRunId,
@@ -1993,7 +2214,7 @@ export async function prepareControlledProblemAnalysis(
     textbookMatch,
     definitions,
     candidateGroups: [
-      ['knowledge', analysis.knowledgeTags ?? []],
+      ['knowledge', knowledgeCandidates],
       ['method', analysis.methodTags ?? []],
       ['model', analysis.modelTags ?? []],
       ['error', analysis.errorCategories ?? []],
@@ -2032,7 +2253,10 @@ export async function writeControlledProblemAnalysis(
       subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
     )
     for (const mapping of mappings) {
-      if (!mapping.definition) {
+      // Unknown textbook knowledge remains an unresolved ProblemTag. Creating
+      // a tag_definition without a valid KnowledgeNode would mint a fake
+      // canonical ID and make the candidate appear detached from its book.
+      if (!mapping.definition && tagType !== 'knowledge') {
         await execute(
           `INSERT OR IGNORE INTO tag_definitions (
             id, subject, tag_type, canonical_name, source, verification_status,

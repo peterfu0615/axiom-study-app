@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveProblemTextbook, type ProblemTextbookMatchSource } from './problemTextbook'
+import { inferProblemTextbookHint, resolveProblemTextbook, type ProblemTextbookMatchSource } from './problemTextbook'
 import type { Textbook } from './horizon'
 
 function textbook(overrides: Partial<Textbook> = {}): Textbook {
@@ -95,6 +95,13 @@ describe('resolveProblemTextbook', () => {
     expect(result.textbook).toBeNull()
   })
 
+  it('does not route through pending, processing, or failed textbooks', () => {
+    for (const extractionStatus of ['pending', 'processing', 'failed'] as const) {
+      const result = resolve({ textbooks: [textbook({ extractionStatus })], hint: null })
+      expect(result.textbook).toBeNull()
+    }
+  })
+
   it('preserves a user-locked match even when it is archived', () => {
     const result = resolve({
       lockedTextbookId: 'locked',
@@ -127,5 +134,17 @@ describe('resolveProblemTextbook', () => {
     const result = resolve({ hint: { ...hint, confidence: 0.1 }, textbooks: [textbook(), textbook({ id: 'other', title: '另一教材' })] })
     expect(result.textbook).toBeNull()
     expect(result.source).toBe('unresolved')
+  })
+})
+
+describe('inferProblemTextbookHint', () => {
+  it('extracts deterministic grade and volume metadata from problem text', () => {
+    expect(inferProblemTextbookHint({ title: '八年级下册一次函数练习' })).toMatchObject({
+      grade: '八年级', volume: '下册', confidence: 1,
+    })
+  })
+
+  it('returns null when problem content contains no textbook metadata', () => {
+    expect(inferProblemTextbookHint({ stemMarkdown: '求一次函数的解析式' })).toBeNull()
   })
 })

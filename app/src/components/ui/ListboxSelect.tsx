@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { getListboxNavigationIndex, getListboxTypeaheadIndex } from './ListboxSelect.utils'
+import { Icon } from '../Icon'
 
 export interface SelectOption {
   value: string
@@ -113,7 +114,17 @@ export function ListboxSelect({
       }
     }
     document.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
   }, [open])
 
   useEffect(() => {
@@ -231,7 +242,7 @@ export function ListboxSelect({
                   <span className="ax-listbox__option-label">{option.label}</span>
                   {option.description && <small>{option.description}</small>}
                 </span>
-                {value === option.value && <span aria-hidden="true" className="ax-listbox__check">✓</span>}
+                {value === option.value && <span aria-hidden="true" className="ax-listbox__check"><Icon name="check" size={16} /></span>}
               </button>
             ))}
           </div>
@@ -259,7 +270,7 @@ export function ListboxSelect({
         <span className={`ax-listbox-trigger__value${selectedOption ? '' : ' is-placeholder'}`}>
           {selectedOption?.label ?? placeholder}
         </span>
-        <span aria-hidden="true" className="ax-listbox-trigger__arrow">⌄</span>
+        <span aria-hidden="true" className="ax-listbox-trigger__arrow"><Icon name="chevron" size={16} /></span>
       </button>
       {menu}
     </div>
