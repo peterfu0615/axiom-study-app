@@ -46,8 +46,13 @@ describe('autonomous compact tag UI contract', () => {
     expect(css).toContain('container-type: inline-size')
     expect(css).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
     expect(css).toContain('@container problem-tags')
-    expect(css).toContain('.controlled-problem-tag__heading')
+    expect(css).toContain('.problem-tag-collection { display: flex')
+    expect(css).toContain('flex-wrap: wrap')
+    expect(css).toContain('.controlled-problem-tag { display: inline-flex')
+    expect(css).toContain('width: fit-content')
+    expect(css).toContain('max-width: 100%')
     expect(css).toContain('overflow-wrap: anywhere')
+    expect(css).not.toContain('.controlled-problem-tag { width: 100%')
   })
 
   it('centers a bounded ErrorState while preserving left-aligned copy', () => {
