@@ -29,12 +29,16 @@ describe('confidence-free active contracts', () => {
   })
 })
 
-describe('simplified tag and responsive UI contract', () => {
-  it('does not expose mapping or confidence language in ProblemTags', () => {
+describe('autonomous compact tag UI contract', () => {
+  it('exposes only tag results and icon actions in ProblemTags', () => {
     const source = read('./features/library/ProblemTags.tsx')
-    expect(source).not.toMatch(/置信度|未映射|选择对应标签|AI 标签映射结果/u)
-    expect(source).toContain('keepProblemTag')
-    expect(source).toContain('保留')
+    expect(source).not.toMatch(/置信度|未映射|选择对应标签|AI 标签映射结果|AI 识别|手动添加|已确认|待处理|识别依据|选择本题教材/u)
+    expect(source).toContain('className="problem-tag-add"')
+    expect(source).toContain('className="problem-tag-remove"')
+    expect(source).toContain('label={`添加${labels[type]}`}')
+    expect(source).toContain('label={`移除${tag.canonicalName}`}')
+    expect(source).not.toContain('>添加</Button>')
+    expect(source).not.toContain('>移除</Button>')
   })
 
   it('reflows from component width and constrains every long-content layer', () => {
@@ -47,7 +51,10 @@ describe('simplified tag and responsive UI contract', () => {
   })
 
   it('centers a bounded ErrorState while preserving left-aligned copy', () => {
+    const source = read('./components/ui/index.tsx')
     const css = read('./components/ui/ui.css')
+    expect(source).toContain('<summary>详情</summary>')
+    expect(source).not.toContain('<summary>技术信息</summary>')
     expect(css).toContain('width: min(100%, var(--ax-state-panel-max))')
     expect(css).toContain('margin-inline: auto')
     expect(css).toContain('text-align: left')
