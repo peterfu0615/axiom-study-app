@@ -962,13 +962,15 @@ export function ProblemLibrary() {
                         </div>
 
                         {selected.aiStatus === 'failed' && (
-                          <ErrorState
-                            error={activeModelRun?.error ?? classifyAIError(
-                              activeModelRun?.errorMessage || 'Provider 未返回错误详情',
-                              { runId: activeModelRun?.id ?? null },
-                            )}
-                            onRetry={updating ? undefined : () => void retryAI()}
-                          />
+                          <div className="problem-ai-error-region">
+                            <ErrorState
+                              error={activeModelRun?.error ?? classifyAIError(
+                                activeModelRun?.errorMessage || 'Provider 未返回错误详情',
+                                { runId: activeModelRun?.id ?? null },
+                              )}
+                              onRetry={updating ? undefined : () => void retryAI()}
+                            />
+                          </div>
                         )}
                       </section>
 
@@ -1127,16 +1129,6 @@ export function ProblemLibrary() {
                           <div>
                             <dt>题型</dt>
                             <dd>{selected.aiProblemType || '未识别'}</dd>
-                          </div>
-                          <div>
-                            <dt>置信度</dt>
-                            <dd>
-                              {selected.aiConfidence === null
-                                ? '—'
-                                : `${Math.round(
-                                    selected.aiConfidence * 100,
-                                  )}%`}
-                            </dd>
                           </div>
                           <div>
                             <dt>图形识别</dt>
