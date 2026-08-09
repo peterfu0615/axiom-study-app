@@ -127,7 +127,6 @@ function structureTagReference(candidate: CurriculumTagAnalysis['candidates'][nu
     chapterName: candidate.chapterName,
     pageNumbers: candidate.pageNumbers,
     evidenceText: candidate.evidenceText,
-    confidence: candidate.confidence,
   }
 }
 
@@ -533,7 +532,6 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
   }) : null
   return {
     textbook,
-    confidence: Number(row.textbook_match_confidence ?? 0),
     reason: nullableString(row.textbook_match_reason),
     source: String(row.textbook_match_source || 'unresolved') as ProblemTextbookMatch['source'],
     problemId,
@@ -598,7 +596,6 @@ export async function resolveProblemTextbookBeforeAnalysis(
       candidateCount: eligibleCount,
       selectedTextbookId: resolution.textbook?.id ?? null,
       source: resolution.source,
-      confidence: resolution.confidence,
       reason: resolution.reason,
       metadataEvidence: hint?.evidence ?? null,
     }
@@ -617,7 +614,7 @@ export async function resolveProblemTextbookBeforeAnalysis(
        textbook_match_updated_at = $5, textbook_resolver_version = $6,
        textbook_candidate_count = $7, textbook_decision_json = $8, updated_at = $5
        WHERE id = $9`,
-      [resolution.textbook?.id ?? null, resolution.confidence, resolution.reason,
+      [resolution.textbook?.id ?? null, 0, resolution.reason,
         resolution.source, now, TEXTBOOK_RESOLVER_VERSION, eligibleCount,
         JSON.stringify(decision), problemId],
     )
@@ -1314,7 +1311,7 @@ async function persistImportedTextbook(
             `INSERT OR IGNORE INTO curriculum_tag_knowledge_links (
               tag_id, knowledge_node_id, source, confidence, created_at
             ) VALUES ($1, $2, 'ai_inferred', $3, $4)`,
-            [candidate.existingTagId, linked.id, candidate.confidence, now],
+            [candidate.existingTagId, linked.id, 0, now],
           )
         }
         continue
@@ -1349,7 +1346,7 @@ async function persistImportedTextbook(
           ) VALUES ($1, $2, $3, $4, $5)`,
           [persistedTagId, linked.id,
             candidate.origin === 'textbook_extracted' ? 'textbook_extracted' : 'ai_inferred',
-            candidate.confidence, now],
+            0, now],
         )
       }
     }
@@ -1784,7 +1781,6 @@ export interface TagReviewItem {
   tagId: string | null
   tagType?: HorizonTagType
   candidateName: string
-  confidence: number
   evidence: string
   source?: ProblemTag['source']
   currentTargetName?: string | null
@@ -1819,7 +1815,7 @@ export async function listTagReviewItems(
   return rows.map((row): TagReviewItem => ({
     id: String(row.id), problemId: String(row.problem_id), tagId: nullableString(row.tag_id),
     tagType: String(row.tag_type) as HorizonTagType,
-    candidateName: String(row.candidate_name ?? ''), confidence: Number(row.confidence),
+    candidateName: String(row.candidate_name ?? ''),
     evidence: String(row.evidence ?? ''),
     source: String(row.source || 'model') as ProblemTag['source'],
     currentTargetName: nullableString(row.current_target_name),
@@ -2058,6 +2054,17 @@ export async function confirmProblemTag(problemTagId: string, tagId?: string) {
   }
 }
 
+/** Keep an unresolved AI label without asking the user to maintain taxonomy. */
+export async function keepProblemTag(problemTagId: string) {
+  const result = await execute(
+    `UPDATE problem_tags SET verification_status = 'user_verified', is_locked = 1,
+     updated_at = $1 WHERE id = $2 AND superseded_at IS NULL
+       AND mapping_status != 'rejected' AND verification_status != 'rejected'`,
+    [Date.now(), problemTagId],
+  )
+  if (result.rowsAffected !== 1) throw new Error('标签已变化，请刷新后重试')
+}
+
 export async function rejectProblemTag(problemTagId: string) {
   const now = Date.now()
   await execute(
@@ -2110,7 +2117,6 @@ export interface ProblemDifficultyView {
   level: 'basic' | 'intermediate' | 'advanced'
   score: number | null
   reason: string
-  confidence: number
   source: 'model' | 'user' | 'legacy'
   verificationStatus: string
   isLocked: boolean
@@ -2125,7 +2131,7 @@ export async function getProblemDifficulty(problemId: string): Promise<ProblemDi
   return row ? {
     id: String(row.id), level: String(row.level) as ProblemDifficultyView['level'],
     score: nullableNumber(row.score), reason: String(row.reason || ''),
-    confidence: Number(row.confidence), source: String(row.source) as ProblemDifficultyView['source'],
+    source: String(row.source) as ProblemDifficultyView['source'],
     verificationStatus: String(row.verification_status), isLocked: bool(row.is_locked),
   } : null
 }
@@ -2197,7 +2203,6 @@ export async function prepareControlledProblemAnalysis(
   // the decision persisted by the pre-analysis resolver and used in prompt.
   const textbookMatch: ProblemTextbookMatch = {
     textbook: selectedTextbook,
-    confidence: Number(problems[0]?.textbook_match_confidence ?? 0),
     reason: String(problems[0]?.textbook_match_reason || '分析前未匹配教材'),
     source: problems[0]?.textbook_match_source ?? 'unresolved',
   }
@@ -2237,7 +2242,7 @@ export async function writeControlledProblemAnalysis(
       `UPDATE problems SET matched_textbook_id = $1, textbook_match_confidence = $2,
        textbook_match_reason = $3, textbook_match_source = $4, textbook_match_locked = 0,
        textbook_match_updated_at = $5, updated_at = $5 WHERE id = $6`,
-      [textbookMatch.textbook?.id ?? null, textbookMatch.confidence, textbookMatch.reason,
+      [textbookMatch.textbook?.id ?? null, 0, textbookMatch.reason,
         textbookMatch.source, now, problemId],
     )
   }
@@ -2276,7 +2281,7 @@ export async function writeControlledProblemAnalysis(
           $12, $13, 0, $14, $14)`,
         [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
           mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
-          mapping.mappingStatus, mapping.candidate.confidence, mapping.candidate.evidence,
+          mapping.mappingStatus, 0, mapping.candidate.evidence,
           mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,
           mapping.verificationStatus, now],
       )
@@ -2299,8 +2304,7 @@ export async function writeControlledProblemAnalysis(
         model_run_id, verification_status, is_locked, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'model', $8, $9, 0, $10, $10)`,
       [id(), problemId, subject, plan.difficulty.level, plan.difficulty.score,
-        plan.difficulty.reason, plan.difficulty.confidence, modelRunId,
-        plan.difficulty.confidence >= 0.72 ? 'ai_verified' : 'needs_review', now],
+        plan.difficulty.reason, 0, modelRunId, 'needs_review', now],
     )
   }
 }

@@ -104,7 +104,6 @@ const analysis: AIProblemAnalysis = {
   difficulty: null,
   errorCategories: [],
   textbookHint: null,
-  confidence: 0.8,
   warnings: [],
 }
 

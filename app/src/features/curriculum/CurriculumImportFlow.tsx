@@ -323,11 +323,11 @@ export function CurriculumImportFlow({
 
       {phase === 'confirm' && job?.recognition && (
         <section className="curriculum-import-card curriculum-metadata-form">
-          <div className="curriculum-section-heading"><div><h2>确认教材信息</h2><p>通常只需确认。标记为“请确认”的字段来自低置信度识别。</p></div><StatusBadge tone={job.recognition.overallConfidence >= .72 ? 'success' : 'warning'}>{Math.round(job.recognition.overallConfidence * 100)}% 识别可信度</StatusBadge></div>
+          <div className="curriculum-section-heading"><div><h2>确认教材信息</h2><p>请检查自动填写的信息；缺少内容的字段需要补充。</p></div><StatusBadge tone="warning">待确认</StatusBadge></div>
           <div className="curriculum-metadata-grid">
             {fieldLabels.map(([key, label, recognitionKey]) => {
               const recognition = job.recognition?.[recognitionKey]
-              const needsReview = !recognition?.value || recognition.confidence < .72
+              const needsReview = !recognition?.value
               return <label className={needsReview ? 'needs-review' : ''} key={key}><span>{label}{needsReview && <em>请确认</em>}</span><input onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} value={form[key]} />{recognition?.evidence && <small>{recognition.evidence}</small>}</label>
             })}
           </div>
@@ -338,7 +338,7 @@ export function CurriculumImportFlow({
 
       {phase === 'structure' && job?.extraction && (
         <section className="curriculum-import-card curriculum-outline-review">
-          <div className="curriculum-section-heading"><div><h2>检查课程结构</h2><p>已识别 {job.extraction.pageCount} 页、{outline.length} 个目录节点。你可以直接修改名称与层级。</p></div><StatusBadge tone="warning">{outline.filter((item) => item.confidence < .72).length} 项待确认</StatusBadge></div>
+          <div className="curriculum-section-heading"><div><h2>检查课程结构</h2><p>已识别 {job.extraction.pageCount} 页、{outline.length} 个目录节点。你可以直接修改名称与层级。</p></div><StatusBadge tone="warning">待确认</StatusBadge></div>
           <div className="curriculum-outline-list">
             {outline.map((item, index) => (
               <div className="curriculum-outline-row" key={`${item.title}-${index}`}>
@@ -350,7 +350,7 @@ export function CurriculumImportFlow({
                   value={String(item.level > 1 ? 2 : 1)}
                 />
                 <input aria-label="目录名称" onChange={(event) => setOutline((items) => items.map((current, currentIndex) => currentIndex === index ? { ...current, title: event.target.value } : current))} value={item.title} />
-                <small>p.{item.pageNumber} · {Math.round(item.confidence * 100)}%</small>
+                <small>p.{item.pageNumber}</small>
               </div>
             ))}
             {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" title="目录需要手动建立" />}

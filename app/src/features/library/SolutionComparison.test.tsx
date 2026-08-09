@@ -45,7 +45,6 @@ const attempt: StudentAttempt = {
     {
       index: 1,
       contentMarkdown: String.raw`$AB\parallel CD$`,
-      confidence: 0.9,
     },
   ],
   status: 'completed',

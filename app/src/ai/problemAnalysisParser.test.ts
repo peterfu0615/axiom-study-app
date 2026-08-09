@@ -25,7 +25,6 @@ const valid = {
   knowledge_tags: [{
     name: '分式',
     role: 'primary',
-    confidence: 0.93,
     evidence: '题干要求化简分式',
     source: 'problem',
   }],
@@ -34,12 +33,10 @@ const valid = {
   difficulty: {
     level: 'basic',
     score: 0.2,
-    confidence: 0.8,
     reason: '直接应用分式化简规则',
   },
   error_categories: [],
   textbook_hint: null,
-  confidence: 0.9,
   warnings: [],
 }
 
@@ -114,7 +111,7 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.repairStrategy).toBeNull()
   })
 
-  it.each(['level', 'confidence', 'reason'] as const)(
+  it.each(['level', 'reason'] as const)(
     'still rejects a difficulty object without %s',
     (field) => {
       const difficulty = { ...valid.difficulty }
@@ -138,7 +135,7 @@ describe('parseProblemAnalysis', () => {
       },
     }))
     expect(parsed.analysis.textbookHint?.volume).toBe('下册')
-    expect(parsed.analysis.textbookHint?.confidence).toBeCloseTo(0.82)
+    expect(parsed.analysis.textbookHint).not.toHaveProperty('confidence')
   })
 
   it('keeps compatibility with older output that has no textbook hint', () => {
@@ -171,7 +168,7 @@ describe('parseProblemAnalysis', () => {
 
   it('declares the constrained knowledge rule and bumps the prompt version', () => {
     expect(PROBLEM_ANALYSIS_PROMPT_VERSION).toBe(
-      'problem-understanding-v8-constrained-knowledge',
+      'problem-understanding-v9-simplified-tags',
     )
     // 教材对齐与受控 ID 规则必须存在，且 textbook_hint 可缺省语义保持不变
     expect(PROBLEM_ANALYSIS_PROMPT).toContain('locked_textbook_json')
@@ -239,7 +236,6 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.analysis.textbookHint).toEqual(expect.objectContaining({
       title: null,
       grade: '八年级',
-      confidence: 0,
       evidence: '',
     }))
   })

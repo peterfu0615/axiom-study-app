@@ -1541,7 +1541,6 @@ function analysisOutputJSON(analysis: AIProblemAnalysis) {
     difficulty: analysis.difficulty ?? null,
     error_categories: analysis.errorCategories ?? [],
     textbook_hint: analysis.textbookHint ?? null,
-    confidence: analysis.confidence,
     warnings: analysis.warnings,
   })
 }
@@ -1995,7 +1994,6 @@ export async function recoverIntelligenceTasks() {
           return {
             index: Number(value.index ?? index + 1),
             contentMarkdown: String(value.content_markdown ?? ''),
-            confidence: Number(value.confidence ?? 0),
           }
         })
       : []
@@ -2205,7 +2203,6 @@ export async function completeStudentAttemptModelRun(
     steps: attempt.steps.map((step) => ({
       index: step.index,
       content_markdown: step.contentMarkdown,
-      confidence: step.confidence,
     })),
   })
   await inDatabaseTransaction(db, async () => {
@@ -2795,7 +2792,7 @@ export async function completeProblemAIModelRun(
           JSON.stringify(analysis.diagramBBox),
           diagramImagePath,
           JSON.stringify(analysis.knowledgePoints),
-          analysis.confidence,
+          null,
           JSON.stringify(analysis.warnings),
           now,
           run.problemId,

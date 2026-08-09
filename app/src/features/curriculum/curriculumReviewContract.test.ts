@@ -13,7 +13,9 @@ describe('curriculum review center contract', () => {
     expect(tagSource).not.toContain('bulkReviewTagScope')
     expect(reviewSource).toContain('一键批准')
     expect(reviewSource).toContain('一键驳回')
-    expect(reviewSource).toContain('mappingItem')
+    expect(reviewSource).toContain('keepProblemTag')
+    expect(reviewSource).not.toContain('选择映射目标')
+    expect(reviewSource).not.toContain('确认映射并批准')
   })
 
   it('exposes review as a third course-level view', () => {

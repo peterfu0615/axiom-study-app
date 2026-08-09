@@ -102,7 +102,6 @@ export interface AITagCandidate {
   canonicalTagId?: string | null
   name: string
   role: HorizonTagRole
-  confidence: number
   evidence: string
   source: 'problem' | 'solution' | 'student_attempt' | 'textbook_hint'
 }
@@ -110,7 +109,6 @@ export interface AITagCandidate {
 export interface AIDifficulty {
   level: DifficultyLevel
   score: number | null
-  confidence: number
   reason: string
 }
 
@@ -120,7 +118,6 @@ export interface AITextbookHint {
   volume: string | null
   publisher: string | null
   edition: string | null
-  confidence: number
   evidence: string
 }
 
@@ -150,7 +147,6 @@ export interface AIProblemAnalysis {
   difficulty?: AIDifficulty | null
   errorCategories?: AITagCandidate[]
   textbookHint?: AITextbookHint | null
-  confidence: number
   warnings: string[]
 }
 
@@ -223,7 +219,6 @@ export interface ProblemRegion {
 export interface StudentAttemptStep {
   index: number
   contentMarkdown: string
-  confidence: number | null
 }
 
 export interface StudentAttempt {

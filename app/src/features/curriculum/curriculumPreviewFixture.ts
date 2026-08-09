@@ -96,7 +96,6 @@ export function curriculumPreviewImportJob(state: string): CurriculumImportJob {
       },
       { title: '第二章 整式的加减', pageStart: 25, pageEnd: 50, evidenceText: '目录：第二章 整式的加减', knowledgePoints: [] },
     ],
-    overallConfidence: .84,
     warnings: ['版本信息识别不完整，建议确认。'],
   }
   const extraction = { pageCount: 128, extractionMethod: 'pdf_text' as const, pages: [], outline: [

@@ -15,6 +15,7 @@ import type { Textbook } from '../../domain/horizon'
 import {
   bulkReviewTagScope,
   confirmProblemTag,
+  keepProblemTag,
   listTagDefinitionSummaries,
   listTagReviewItems,
   rejectProblemTag,
@@ -37,8 +38,8 @@ const dimensions: Array<{ value: HorizonTagType; label: string }> = [
 const projectFilters: Array<{ value: ReviewProjectFilter; label: string }> = [
   { value: 'all', label: '全部项目' },
   { value: 'definition', label: '标签定义' },
-  { value: 'mapping', label: '错题映射' },
-  { value: 'unmapped', label: '未映射' },
+  { value: 'mapping', label: '错题标签' },
+  { value: 'unmapped', label: '独立标签' },
 ]
 
 function isPendingDefinition(definition: TagDefinitionSummary) {
@@ -95,8 +96,6 @@ export function ReviewCenter({
   const [rowBusy, setRowBusy] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [bulkDecision, setBulkDecision] = useState<'approve' | 'reject' | null>(null)
-  const [mappingItem, setMappingItem] = useState<TagReviewItem | null>(null)
-  const [mappingTagId, setMappingTagId] = useState('')
   const [feedback, setFeedback] = useState<Feedback>(null)
 
   const refresh = useCallback(async () => {
@@ -179,8 +178,6 @@ export function ReviewCenter({
   const approveCount = bulkScope.definitionIds.length + bulkScope.approveProblemTagIds.length
   const rejectCount = bulkScope.definitionIds.length + bulkScope.rejectProblemTagIds.length
   const unmappedCount = visibleProblemTags.filter((item) => isPendingProblemTag(item) && item.mappingStatus !== 'mapped').length
-  const mappingOptions = definitions.filter((definition) =>
-    definition.lifecycleStatus === 'active' && definition.verificationStatus !== 'rejected')
 
   const runRowAction = async (row: ReviewRow, action: () => Promise<void>) => {
     const key = rowKey(row)
@@ -200,8 +197,7 @@ export function ReviewCenter({
 
   const approveProblem = (item: TagReviewItem) => {
     if (!item.tagId) {
-      setMappingItem(item)
-      setMappingTagId('')
+      void runRowAction({ kind: 'problem', value: item }, () => keepProblemTag(item.id))
       return
     }
     void runRowAction({ kind: 'problem', value: item }, () => confirmProblemTag(item.id))
@@ -212,15 +208,6 @@ export function ReviewCenter({
       void runRowAction(row, () => reviewTagDefinition(row.value, 'reject'))
     } else {
       void runRowAction(row, () => rejectProblemTag(row.value.id))
-    }
-  }
-
-  const confirmMapping = async () => {
-    if (!mappingItem || !mappingTagId) return
-    const row: ReviewRow = { kind: 'problem', value: mappingItem }
-    if (await runRowAction(row, () => confirmProblemTag(mappingItem.id, mappingTagId))) {
-      setMappingItem(null)
-      setMappingTagId('')
     }
   }
 
@@ -281,7 +268,7 @@ export function ReviewCenter({
 
       <div className="curriculum-review-center__body">
         <div className="curriculum-review-toolbar">
-          <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、证据或映射目标" value={query} /></label>
+          <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或依据" value={query} /></label>
           <ListboxSelect ariaLabel="审核项目类型" onValueChange={(value) => setProjectFilter(value as ReviewProjectFilter)} options={projectFilters} value={projectFilter} />
           <ListboxSelect ariaLabel="审核状态" onValueChange={(value) => setStatusFilter(value as ReviewStatusFilter)} options={[{ value: 'pending', label: '待处理' }, { value: 'all', label: '全部状态' }, { value: 'rejected', label: '已驳回' }]} value={statusFilter} />
           <div className="curriculum-review-bulk-actions">
@@ -298,25 +285,24 @@ export function ReviewCenter({
             : rows.map((row) => {
               const key = rowKey(row)
               const pending = row.kind === 'definition' ? isPendingDefinition(row.value) : isPendingProblemTag(row.value)
-              const name = row.kind === 'definition' ? row.value.canonicalName : row.value.candidateName || row.value.currentTargetName || '未命名映射'
+              const name = row.kind === 'definition' ? row.value.canonicalName : row.value.candidateName || row.value.currentTargetName || '未命名标签'
               const source = sourceLabel(row.value.source)
               const evidence = row.kind === 'definition' ? row.value.description || '标签定义候选' : row.value.evidence || '暂无题目依据'
               const scope = row.kind === 'definition'
                 ? row.value.textbookId ? textbook?.title || '当前教材' : subject
                 : row.value.textbookTitle || (tagType === 'knowledge' ? textbook?.title || '当前教材' : subject)
-              const target = row.kind === 'definition' ? '—' : row.value.currentTargetName || (row.value.tagId ? '已映射标签' : '未映射')
-              const confidence = row.kind === 'definition' ? '—' : `${Math.round(row.value.confidence * 100)}%`
+              const tagState = row.kind === 'definition' ? '课程标签' : row.value.tagId ? '已有标签' : '独立标签'
               const rejected = row.kind === 'definition' ? isRejectedDefinition(row.value) : isRejectedProblemTag(row.value)
               return (
                 <article className="curriculum-review-row" key={key}>
                   <div className="curriculum-review-row__main">
                     <strong>{name}</strong>
-                    <small>{row.kind === 'definition' ? '标签定义' : row.value.mappingStatus === 'mapped' ? '错题映射' : '未映射'}</small>
+                    <small>{row.kind === 'definition' ? '标签定义' : '错题标签'}</small>
                   </div>
                   <div><span>来源</span><strong>{source}</strong></div>
                   <div><span>证据</span><strong title={evidence}>{evidence}</strong></div>
                   <div><span>{row.kind === 'definition' ? '作用域' : '对应教材/科目'}</span><strong title={scope}>{scope}</strong></div>
-                  <div><span>{row.kind === 'definition' ? '置信度' : '映射目标 · 置信度'}</span><strong title={row.kind === 'definition' ? confidence : `${target} · ${confidence}`}>{row.kind === 'definition' ? confidence : `${target} · ${confidence}`}</strong></div>
+                  <div><span>标签状态</span><strong>{tagState}</strong></div>
                   <StatusBadge tone={rejected ? 'neutral' : pending ? 'warning' : 'success'}>{pending ? '待处理' : '已驳回'}</StatusBadge>
                   <div className="curriculum-review-row__actions">
                     <IconButton aria-busy={rowBusy.has(key) || undefined} disabled={busy || rowBusy.has(key) || !pending} label={`批准“${name}”`} onClick={() => row.kind === 'definition' ? void runRowAction(row, () => reviewTagDefinition(row.value, 'approve')) : approveProblem(row.value)}>{rowBusy.has(key) ? <span aria-hidden="true" className="ax-spinner curriculum-review-row__spinner" /> : '✓'}</IconButton>
@@ -332,19 +318,12 @@ export function ReviewCenter({
       <Dialog onClose={() => { if (!busy) setBulkDecision(null) }} open={Boolean(bulkDecision)} title={bulkDecision === 'approve' ? '一键批准审核项目' : '一键驳回审核项目'}>
         <div className="curriculum-dialog-form">
           {bulkDecision === 'approve'
-            ? <p>将批准 {bulkScope.definitionIds.length} 个 TagDefinition 和 {bulkScope.approveProblemTagIds.length} 个已映射 ProblemTag；{unmappedCount} 个未映射项目会被跳过。当前科目：{subject}。{tagType === 'knowledge' ? `当前教材：${textbook?.title ?? '未选择教材'}。` : ''}</p>
+            ? <p>将批准 {bulkScope.definitionIds.length} 个课程标签和 {bulkScope.approveProblemTagIds.length} 个错题标签；{unmappedCount} 个独立标签保持原样，可在题目中单独处理。当前科目：{subject}。{tagType === 'knowledge' ? `当前教材：${textbook?.title ?? '未选择教材'}。` : ''}</p>
             : <p>将驳回 {bulkScope.definitionIds.length + bulkScope.rejectProblemTagIds.length} 个审核项目。当前科目：{subject}。{tagType === 'knowledge' ? `当前教材：${textbook?.title ?? '未选择教材'}。` : ''}历史来源、证据和审计记录不会被删除。</p>}
           <div className="curriculum-dialog-actions"><Button disabled={busy} onClick={() => setBulkDecision(null)} variant="ghost">取消</Button><Button disabled={busy} loading={busy} onClick={() => void confirmBulk()} variant={bulkDecision === 'approve' ? 'primary' : 'danger'}>确认{bulkDecision === 'approve' ? '批准' : '驳回'}</Button></div>
         </div>
       </Dialog>
 
-      <Dialog onClose={() => { if (!busy) { setMappingItem(null); setMappingTagId('') } }} open={Boolean(mappingItem)} title="选择映射目标">
-        <div className="curriculum-dialog-form">
-          <p>“{mappingItem?.candidateName || '未命名候选'}”尚未映射到标签。选择有效目标后将立即批准并锁定。</p>
-          <ListboxSelect label="对应标签" onValueChange={setMappingTagId} options={[{ value: '', label: '请选择标签' }, ...mappingOptions.map((definition) => ({ value: definition.id, label: definition.canonicalName }))]} value={mappingTagId} />
-          <div className="curriculum-dialog-actions"><Button onClick={() => { setMappingItem(null); setMappingTagId('') }} variant="ghost">取消</Button><Button disabled={!mappingTagId} loading={Boolean(mappingItem && rowBusy.has(`problem:${mappingItem.id}`))} onClick={() => void confirmMapping()} variant="primary">确认映射并批准</Button></div>
-        </div>
-      </Dialog>
     </section>
   )
 }

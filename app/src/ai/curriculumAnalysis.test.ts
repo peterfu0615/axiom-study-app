@@ -65,16 +65,17 @@ describe('curriculum tag inference', () => {
       {
         tagType: 'method', canonicalName: '待定系数法', aliases: ['设系数法'],
         description: null, origin: 'ai_inferred', knowledgeNames: ['一次函数'],
-        pageNumbers: [], evidenceText: null, confidence: .7, existingTagId: null,
+        pageNumbers: [], evidenceText: null, existingTagId: null,
       },
       {
         tagType: 'method', canonicalName: '系数待定法', aliases: ['待定系数法'],
         description: '根据条件列方程确定参数', origin: 'ai_inferred', knowledgeNames: ['反比例函数'],
-        pageNumbers: [66], evidenceText: null, confidence: .85, existingTagId: null,
+        pageNumbers: [66], evidenceText: null, existingTagId: null,
       },
     ], [])
     expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({ canonicalName: '待定系数法', confidence: .85 })
+    expect(result[0]).toMatchObject({ canonicalName: '待定系数法' })
+    expect(result[0]).not.toHaveProperty('confidence')
     expect(result[0].knowledgeNames).toEqual(['一次函数', '反比例函数'])
     expect(result[0].pageNumbers).toEqual([66])
     expect(result[0].aliases).not.toContain('待定系数法')

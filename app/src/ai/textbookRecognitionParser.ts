@@ -53,20 +53,10 @@ function field(value: unknown): TextbookMetadataField {
     : {}
   const raw = source.value
   const name = typeof raw === 'string' && raw.trim() ? raw.trim() : null
-  const confidence = typeof source.confidence === 'number' && Number.isFinite(source.confidence)
-    ? Math.min(1, Math.max(0, source.confidence))
-    : 0
   return {
     value: name,
-    confidence,
     evidence: typeof source.evidence === 'string' ? source.evidence.trim() : '',
   }
-}
-
-function boundedConfidence(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.min(1, Math.max(0, value))
-    : 0
 }
 
 function positivePages(value: unknown) {
@@ -94,7 +84,6 @@ function knowledgePoint(value: unknown): TextbookKnowledgePointRecognition | nul
     evidence: typeof (source.evidence ?? source.evidence_text) === 'string'
       ? String(source.evidence ?? source.evidence_text).trim()
       : '',
-    confidence: boundedConfidence(source.confidence),
     chapterName: typeof (source.chapter_name ?? source.chapterName) === 'string'
       ? String(source.chapter_name ?? source.chapterName).trim() || null
       : null,
@@ -113,7 +102,6 @@ function mergeKnowledgePoint(
   existing.pageNumbers = [...new Set([...existing.pageNumbers, ...point.pageNumbers])]
     .sort((left, right) => left - right)
   if (!existing.evidence && point.evidence) existing.evidence = point.evidence
-  existing.confidence = Math.max(existing.confidence, point.confidence)
   existing.chapterName = existing.chapterName ?? point.chapterName
 }
 
@@ -168,7 +156,6 @@ function normalizeLegacyLevelList(value: unknown[]): TextbookChapterRecognition[
       name: title,
       pageNumbers: page ? [page] : [],
       evidence,
-      confidence: boundedConfidence(source.confidence),
       chapterName: currentChapter.isUnclassified ? null : currentChapter.title,
     })
   }
@@ -215,7 +202,6 @@ export function normalizeTextbookRecognitionChapters(value: Record<string, unkno
           name: title,
           pageNumbers: page ? [page] : [],
           evidence,
-          confidence: boundedConfidence(source.confidence),
           chapterName: currentChapter.isUnclassified ? null : currentChapter.title,
         })
       }
@@ -265,9 +251,6 @@ export function parseTextbookRecognition(rawOutput: string): TextbookRecognition
     )
   }
   const value = parsed as Record<string, unknown>
-  const overallConfidence = typeof value.overall_confidence === 'number' && Number.isFinite(value.overall_confidence)
-    ? Math.min(1, Math.max(0, value.overall_confidence))
-    : 0
   return {
     title: field(value.title),
     subject: field(value.subject),
@@ -276,7 +259,6 @@ export function parseTextbookRecognition(rawOutput: string): TextbookRecognition
     publisher: field(value.publisher),
     edition: field(value.edition),
     chapters: normalizeTextbookRecognitionChapters(value),
-    overallConfidence,
     warnings: Array.isArray(value.warnings)
       ? value.warnings.filter((warning): warning is string => typeof warning === 'string')
       : [],

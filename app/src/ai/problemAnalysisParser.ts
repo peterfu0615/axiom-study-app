@@ -150,7 +150,6 @@ function canonicalizeAnalysis(value: unknown) {
     difficulty: null,
     error_categories: [],
     textbook_hint: null,
-    confidence: null,
     warnings: [],
   }
   for (const [key, fallback] of Object.entries(defaults)) {
@@ -174,9 +173,28 @@ function canonicalizeAnalysis(value: unknown) {
     for (const key of ['title', 'grade', 'volume', 'publisher', 'edition']) {
       if (hint[key] === undefined) hint[key] = null
     }
-    if (hint.confidence === undefined) hint.confidence = 0
     if (hint.evidence === undefined) hint.evidence = ''
     source.textbook_hint = hint
+  }
+  // v5 and older ModelRuns may contain confidence fields. They remain
+  // readable, but the active v6 contract deliberately ignores them before
+  // validating the simplified shape.
+  delete source.confidence
+  for (const key of ['knowledge_tags', 'unresolved_knowledge_candidates', 'method_tags', 'model_tags', 'error_categories']) {
+    if (!Array.isArray(source[key])) continue
+    source[key] = (source[key] as unknown[]).map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+      const copy = { ...(item as Record<string, unknown>) }
+      delete copy.confidence
+      return copy
+    })
+  }
+  for (const key of ['difficulty', 'textbook_hint']) {
+    const item = source[key]
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const copy = { ...(item as Record<string, unknown>) }
+    delete copy.confidence
+    source[key] = copy
   }
   return source
 }

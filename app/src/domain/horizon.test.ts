@@ -34,7 +34,6 @@ function definition(overrides: Partial<TagDefinition> = {}): TagDefinition {
 const candidate = {
   name: '分解因式',
   role: 'primary' as const,
-  confidence: 0.9,
   evidence: '需要将多项式分解',
   source: 'problem' as const,
 }
@@ -119,11 +118,11 @@ describe('subject-scoped controlled tag mapping', () => {
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 
-  it('routes low-confidence matches to review without losing the stable id', () => {
+  it('routes model matches to review without a probability threshold', () => {
     const result = mapCandidatesToControlledTags(
       '数学',
       'knowledge',
-      [{ ...candidate, confidence: 0.4 }],
+      [candidate],
       [definition()],
       'math-book',
     )

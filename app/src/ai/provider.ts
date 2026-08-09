@@ -239,7 +239,6 @@ export class MockAIProvider implements AIProvider {
       model_tags: [],
       difficulty: null,
       error_categories: [],
-      confidence: 0.5,
       warnings: ['当前结果由 Mock Provider 生成，不代表真实题目内容。'],
     })
     const parsed = parseProblemAnalysis(rawOutput)
@@ -254,12 +253,12 @@ export class MockAIProvider implements AIProvider {
       attempt: {
         rawMarkdown: 'Mock AI 已识别用户解答。',
         steps: [
-          { index: 1, contentMarkdown: 'Mock 步骤', confidence: 0.5 },
+          { index: 1, contentMarkdown: 'Mock 步骤' },
         ],
       },
       rawOutput: JSON.stringify({
         raw_markdown: 'Mock AI 已识别用户解答。',
-        steps: [{ index: 1, content_markdown: 'Mock 步骤', confidence: 0.5 }],
+        steps: [{ index: 1, content_markdown: 'Mock 步骤' }],
       }),
       repairStrategy: null,
     }

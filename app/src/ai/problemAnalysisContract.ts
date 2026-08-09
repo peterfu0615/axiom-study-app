@@ -1,8 +1,8 @@
 import problemAnalysisSchema from './problemAnalysis.schema.json'
 import type { LockedTextbookContext, ResolvedTextbookContext } from '../domain/models'
 
-export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v5-controlled-knowledge'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v8-constrained-knowledge'
+export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v6-simplified-tags'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v9-simplified-tags'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -10,12 +10,11 @@ const antigravityTagCandidates = {
   type: 'array',
   items: {
     type: 'object',
-    required: ['name', 'role', 'confidence', 'evidence', 'source'],
+    required: ['name', 'role', 'evidence', 'source'],
     properties: {
       canonical_tag_id: {},
       name: { type: 'string' },
       role: { type: 'string', enum: ['primary', 'secondary'] },
-      confidence: { type: 'number' },
       evidence: { type: 'string' },
       source: {
         type: 'string',
@@ -44,7 +43,6 @@ export const problemAnalysisAntigravityJSONSchema = {
     'model_tags',
     'difficulty',
     'error_categories',
-    'confidence',
     'warnings',
   ],
   properties: {
@@ -96,7 +94,6 @@ export const problemAnalysisAntigravityJSONSchema = {
     error_categories: antigravityTagCandidates,
     textbook_hint: {},
     difficulty: {},
-    confidence: {},
     warnings: {
       type: 'array',
       items: { type: 'string' },
@@ -123,22 +120,22 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
    bbox 必须覆盖完整图形、坐标轴、箭头、点名、图例和必要标注，并保留少量安全边距。
    不要把公式、普通文字或选项框误判为图形。没有图形时 diagram 为 {"exists":false,"kind":null,"bbox":null}。
 10. 可选的附加答案/图形图片只用于补充识别，Problem Analysis 不得评价学生正误。
-11. confidence 是 0 到 1 的整体识别置信度。发现裁图残缺、模糊或信息矛盾时写入 warnings。
-12. 返回 knowledge_tags、method_tags、model_tags。每项必须给出 primary/secondary、题面依据、来源和置信度。
+11. 发现裁图残缺、模糊或信息矛盾时写入 warnings；不要输出概率或置信度字段。
+12. 返回 knowledge_tags、method_tags、model_tags。每项必须给出 primary/secondary、题面依据和来源。
     当附加上下文提供 <resolved_textbook_context_json> 时，knowledge_tags 优先从其中选择 canonical_tag_id；
     canonical_tag_id 必须逐字复制候选 ID，不得改写或虚构。候选中没有对应知识点时，将其放入
     unresolved_knowledge_candidates，canonical_tag_id 返回 null。method/model/error 不得伪装成教材知识节点。
+    如果候选的规范名或别名与题目概念语义等价，必须复用该 canonical_tag_id，不要另造近义标签。
 13. model_tags 必须描述稳定的问题结构或条件组合，禁止使用“选择题”“填空题”“解答题”等答题形式。
 14. 方法候选中的 primary 表示完成解答不可缺少的核心方法，secondary 表示可选辅助方法。
 15. difficulty 为 null，或必须严格返回以下完整对象：
-    {"level":"basic | intermediate | advanced","score":0 到 1 的数字或 null,
-     "confidence":0 到 1 的数字,"reason":"判断依据"}。
+    {"level":"basic | intermediate | advanced","score":0 到 1 的数字或 null,"reason":"判断依据"}。
     无法可靠量化 score 时必须返回 "score": null，绝对不能省略 score；
-    level、confidence 和 reason 仍然必须提供，不得用未知或空对象代替。
+    level 和 reason 仍然必须提供，不得用未知或空对象代替。
 16. error_categories 仅在附加的学生答案提供明确证据时识别；没有证据返回 []，不得根据错题身份猜测错因。
 17. textbook_hint 是可选字段（JSON Schema 未列入 required），可以整体省略；省略与返回 null 等价。
     只记录题面页眉、章节文字或教材版本信息中明确出现的线索，不得猜测或输出数据库 ID。
-    无法确认时返回 null；对象中的字段均可为 null，confidence 必须为 0 到 1，evidence 只写简短可审计依据。
+    无法确认时返回 null；对象中的字段均可为 null，evidence 只写简短可审计依据。
 18. 若附加上下文中提供了 <locked_textbook_json>，它表示已由服务层为本次分析解析的教材。
     textbook_hint 与 knowledge_points、知识类标签的命名应优先与该教材的标题、科目、年级、册别对齐；
     它只作为对齐参考，不能覆盖题面实际内容，也不得据此编造题面中不存在的章节或页码信息。
@@ -163,7 +160,6 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "difficulty": null,
   "error_categories": [],
   "textbook_hint": null,
-  "confidence": null,
   "warnings": []
 }
 `.trim()

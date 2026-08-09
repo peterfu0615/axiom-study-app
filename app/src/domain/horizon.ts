@@ -38,7 +38,6 @@ export interface Textbook {
 
 export interface TextbookMetadataField {
   value: string | null
-  confidence: number
   evidence: string
 }
 
@@ -46,7 +45,6 @@ export interface TextbookKnowledgePointRecognition {
   name: string
   pageNumbers: number[]
   evidence: string
-  confidence: number
   chapterName?: string | null
 }
 
@@ -67,7 +65,6 @@ export interface TextbookRecognition {
   publisher: TextbookMetadataField
   edition: TextbookMetadataField
   chapters: TextbookChapterRecognition[]
-  overallConfidence: number
   warnings: string[]
 }
 
@@ -256,23 +253,23 @@ export function summarizeProblemTagOutcome(input: {
   const unresolved = input.tags.filter((tag) => tag.mappingStatus !== 'mapped')
   if (unresolved.length) return {
     code: 'unresolved',
-    title: '有知识标签需要审核',
-    detail: `${unresolved.length} 项尚未映射到受控标签，可选择对应标签或移除。`,
+    title: '有 AI 标签待处理',
+    detail: `${unresolved.length} 项可以直接保留或移除，不需要维护标签对应关系。`,
   }
   if (mapped.some((tag) => !tag.isLocked && tag.verificationStatus !== 'user_verified')) return {
     code: 'needs_review',
     title: 'AI 标签等待确认',
-    detail: `${mapped.length} 项已映射到受控标签，确认后会保持锁定。`,
+    detail: `${mapped.length} 项由 AI 添加，确认后会在重新分析时保持不变。`,
   }
   if (mapped.length) return {
     code: 'mapped',
-    title: '受控标签已映射',
-    detail: `${mapped.length} 项标签已连接到当前 taxonomy。`,
+    title: '标签已保存',
+    detail: `${mapped.length} 项标签可用于整理和检索。`,
   }
   if (!input.selectedTextbookId) return {
     code: 'no_textbook',
     title: '未匹配教材',
-    detail: '分析可以继续，但不会生成伪装成教材知识点的 canonical 标签。',
+    detail: '分析可以继续，但不会添加教材知识点标签。',
   }
   const activeDefinitions = input.definitions.filter((definition) =>
     definition.lifecycleStatus === 'active' && definition.archivedAt === null &&
@@ -303,7 +300,6 @@ export function mapCandidatesToControlledTags(
   candidates: AITagCandidate[],
   definitions: TagDefinition[],
   matchedTextbookId: string | null,
-  confidenceThreshold = 0.72,
 ): ControlledTagMapping[] {
   const scoped = definitions.filter((definition) =>
     definition.subject === subject &&
@@ -341,9 +337,7 @@ export function mapCandidatesToControlledTags(
       candidate,
       definition,
       mappingStatus: 'mapped',
-      verificationStatus: candidate.confidence >= confidenceThreshold
-        ? 'ai_verified'
-        : 'needs_review',
+      verificationStatus: 'needs_review',
     }
   })
 }

@@ -20,7 +20,7 @@ describe('resolveProblemField', () => {
 })
 
 describe('normalizeAIProblemAnalysis', () => {
-  it('accepts snake_case output and clamps confidence and diagram bounds', () => {
+  it('accepts snake_case output, ignores legacy confidence, and clamps diagram bounds', () => {
     const result = normalizeAIProblemAnalysis({
       title: ' 数学 · 几何证明 ',
       subject: ' 数学 ',
@@ -53,7 +53,6 @@ describe('normalizeAIProblemAnalysis', () => {
       hasDiagram: true,
       diagramKind: 'geometry',
       knowledgePoints: ['全等三角形'],
-      confidence: 1,
       warnings: ['低清晰度'],
     })
     expect(result.diagramBBox.x).toBeCloseTo(0.78)

@@ -351,7 +351,7 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     })
     const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
     expect(update.params).toEqual([
-      'book-1', .95, '当前科目只有一本未归档教材', 'single_subject_textbook',
+      'book-1', 0, '当前科目只有一本未归档教材', 'single_subject_textbook',
       expect.any(Number), 'problem-textbook-resolver-v1', 1, expect.any(String), 'problem-1',
     ])
   })
@@ -424,10 +424,10 @@ describe('writeControlledProblemAnalysis', () => {
   it('persists unknown knowledge as an unresolved ProblemTag without minting a fake definition', async () => {
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-1', subject: '数学', now: 100,
-      textbookMatch: { textbook: textbookRow() as never, confidence: .9, reason: '单本教材', source: 'single_subject_textbook' },
+      textbookMatch: { textbook: textbookRow() as never, reason: '单本教材', source: 'single_subject_textbook' },
       definitions: [],
       candidateGroups: [['knowledge', [{
-        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary', confidence: .7,
+        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary',
         evidence: '题面证据', source: 'problem',
       }]]],
       difficulty: null,
@@ -443,7 +443,7 @@ describe('writeControlledProblemAnalysis', () => {
   it('supersedes only unlocked unconfirmed model tags during re-analysis', async () => {
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 200,
-      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [], difficulty: null,
     })
     const supersede = recorded.calls.find((call) =>
@@ -459,9 +459,9 @@ describe('writeControlledProblemAnalysis', () => {
     difficultyRows.rows = [{ id: 'difficulty-user' }]
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 300,
-      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [],
-      difficulty: { level: 'advanced', score: .9, reason: '综合题', confidence: .95 },
+      difficulty: { level: 'advanced', score: .9, reason: '综合题' },
     })
     expect(recorded.calls.some((call) => call.sql.startsWith('INSERT INTO problem_difficulties')))
       .toBe(false)
