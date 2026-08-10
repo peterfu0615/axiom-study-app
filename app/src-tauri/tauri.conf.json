@@ -36,9 +36,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": {
-      "binaries/axiom-vision-aarch64-apple-darwin": "bin/axiom-vision"
-    },
+    "externalBin": [
+      "binaries/axiom-vision"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -7,7 +7,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn build_vision_helper() {
-    use std::{env, fs, path::PathBuf, process::Command};
+    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 
     println!("cargo:rerun-if-changed=native/AxiomVision.swift");
 
@@ -56,4 +56,13 @@ fn build_vision_helper() {
     if !unchanged {
         fs::write(&output, compiled).expect("failed to update native helper");
     }
+    // Tauri externalBin only preserves an executable sidecar when the generated
+    // source file itself is executable. A fresh checkout has no ignored binary,
+    // so fs::write would otherwise create it as 0644 and every native workflow
+    // would fail with EACCES in the installed app.
+    let mut permissions = fs::metadata(&output)
+        .expect("failed to inspect native helper")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&output, permissions).expect("failed to mark native helper executable");
 }

@@ -482,15 +482,36 @@ fn validate_normalized_rect(rect: &NormalizedRect) -> Result<(), String> {
 
 #[cfg(all(target_os = "macos", debug_assertions))]
 fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(PathBuf::from(env!("AXIOM_VISION_HELPER")))
+    validate_vision_helper_path(PathBuf::from(env!("AXIOM_VISION_HELPER")))
 }
 
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
-fn vision_helper_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .resource_dir()
-        .map(|path| path.join("bin/axiom-vision"))
-        .map_err(|error| format!("无法定位图像处理器：{error}"))
+fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法定位应用程序：{error}"))?;
+    let helper = executable
+        .parent()
+        .ok_or_else(|| "无法定位应用程序目录".to_string())?
+        .join("axiom-vision");
+    validate_vision_helper_path(helper)
+}
+
+#[cfg(target_os = "macos")]
+fn validate_vision_helper_path(helper: PathBuf) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(&helper)
+        .map_err(|error| format!("图像处理器不可用（{}）：{error}", helper.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("图像处理器不是有效文件：{}", helper.display()));
+    }
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(format!(
+            "图像处理器缺少执行权限，请重新安装最新版 Axiom：{}",
+            helper.display()
+        ));
+    }
+    Ok(helper)
 }
 
 fn persist_bytes(
@@ -1115,10 +1136,12 @@ pub fn delete_media_file(app: AppHandle, path: String) -> Result<(), String> {
 mod tests {
     use super::{
         copy_and_hash_textbook, hash_textbook_file, validate_normalized_rect,
-        versioned_diagram_image_name, versioned_problem_image_name, ALLOWED_MEDIA_SUBDIRS,
+        validate_vision_helper_path, versioned_diagram_image_name, versioned_problem_image_name,
+        ALLOWED_MEDIA_SUBDIRS,
     };
     use crate::models::NormalizedRect;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
 
     #[test]
@@ -1176,6 +1199,26 @@ mod tests {
             ALLOWED_MEDIA_SUBDIRS,
             &["original", "corrected", "problems", "diagrams"]
         );
+    }
+
+    #[test]
+    fn vision_helper_must_be_executable() {
+        let path = std::env::temp_dir().join(format!("axiom-helper-test-{}", Uuid::new_v4()));
+        fs::write(&path, b"helper").expect("write helper fixture");
+
+        let mut permissions = fs::metadata(&path).expect("helper metadata").permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&path, permissions).expect("remove executable bit");
+        assert!(validate_vision_helper_path(path.clone()).is_err());
+
+        let mut permissions = fs::metadata(&path).expect("helper metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("restore executable bit");
+        assert_eq!(
+            validate_vision_helper_path(path.clone()).expect("executable helper"),
+            path
+        );
+        fs::remove_file(path).expect("remove helper fixture");
     }
 
     #[test]

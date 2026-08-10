@@ -68,18 +68,6 @@ jobs:
           esac
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
 
-      - name: Verify vision binary matches architecture
-        # externalBin 要求 binaries/axiom-vision-{triple} 存在，缺失则提前失败而非构建到一半报错。
-        run: |
-          triple="${{ steps.arch.outputs.triple }}"
-          bin="binaries/axiom-vision-$triple"
-          if [ ! -f "$bin" ]; then
-            echo "::error::Missing vision binary for $triple: $bin"
-            echo "Build arm64 on an arm64 runner, or add an x86_64 binary for Intel builds."
-            exit 1
-          fi
-          echo "Found vision binary: $bin"
-
       - name: Cargo fmt check
         run: cargo fmt -- --check
 
@@ -88,6 +76,18 @@ jobs:
 
       - name: Cargo check
         run: cargo check
+
+      - name: Verify generated vision sidecar
+        run: |
+          triple="${{ steps.arch.outputs.triple }}"
+          bin="binaries/axiom-vision-$triple"
+          test -f "$bin" || { echo "::error::Missing generated vision helper: $bin"; exit 1; }
+          test -x "$bin" || { echo "::error::Vision helper is not executable: $bin"; exit 1; }
+          file "$bin"
+          case "$triple" in
+            aarch64-*) file "$bin" | grep -q 'arm64' ;;
+            x86_64-*) file "$bin" | grep -q 'x86_64' ;;
+          esac
 
       - name: Cargo test
         run: cargo test --lib

@@ -126,6 +126,8 @@ xcrun stapler staple Axiom.dmg
 
 ### 4.5 签名后验证清单
 - [ ] `codesign -dv` 显示 `Signature=adhoc` → `Signature=valid`
+- [ ] `test -x Axiom.app/Contents/MacOS/axiom-vision` 通过，且 `file` 显示与发布架构一致
+- [ ] `codesign --verify --strict Axiom.app/Contents/MacOS/axiom-vision` 通过
 - [ ] `TeamIdentifier` 显示正确的 Team ID
 - [ ] `spctl -a -vv --assess Axiom.app` 通过（notarized）
 - [ ] 全新 Mac 双击 DMG 可直接安装，无 Gatekeeper 拦截

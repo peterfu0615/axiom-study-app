@@ -55,18 +55,6 @@ jobs:
           echo "arch=$arch" >> "$GITHUB_OUTPUT"
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
 
-      - name: Verify vision binary for detected architecture
-        run: |
-          triple="${{ steps.arch.outputs.triple }}"
-          bin="src-tauri/binaries/axiom-vision-$triple"
-          if [ ! -f "$bin" ]; then
-            echo "::error::Missing vision binary: $bin"
-            echo "arm64 runner 需要 binaries/axiom-vision-aarch64-apple-darwin"
-            echo "x86_64 runner 需要 binaries/axiom-vision-x86_64-apple-darwin"
-            exit 1
-          fi
-          echo "Found: $bin"
-
       - name: Determine version
         id: version
         run: |
@@ -133,6 +121,19 @@ jobs:
             codesign --force --deep --sign - "$app"
             codesign --verify --deep --strict "$app"
           fi
+
+      - name: Verify bundled vision sidecar
+        run: |
+          app="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/macos/Axiom.app"
+          helper="$app/Contents/MacOS/axiom-vision"
+          test -f "$helper" || { echo "::error::Missing bundled vision sidecar: $helper"; exit 1; }
+          test -x "$helper" || { echo "::error::Bundled vision sidecar is not executable: $helper"; exit 1; }
+          file "$helper"
+          case "${{ steps.arch.outputs.arch }}" in
+            arm64) file "$helper" | grep -q 'arm64' ;;
+            x86_64) file "$helper" | grep -q 'x86_64' ;;
+          esac
+          codesign --verify --strict "$helper"
 
       - name: Notarize (if signed)
         if: ${{ steps.signing.outputs.signing == 'enabled' }}
