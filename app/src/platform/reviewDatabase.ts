@@ -14,6 +14,7 @@ import {
   type ReviewUnitStatus,
 } from '../domain/review'
 import type { DifficultyLevel, HorizonTagType } from '../domain/models'
+import { buildSevenDayReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
 import { withTransactionLock } from './transactionLock'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
@@ -175,6 +176,10 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
       lastRating: previous?.lastRating ?? null,
     }
   })
+}
+
+export async function getSevenDayReviewForecast(timestamp = Date.now()): Promise<ReviewForecastDay[]> {
+  return buildSevenDayReviewForecast(await listReviewCandidates(), timestamp)
 }
 
 export interface TodayReviewUnit {

@@ -4,10 +4,12 @@ import { MathMarkdown } from '../../components/MathMarkdown'
 import { AsyncState, Badge, Button, EmptyState, Progress, StatusBadge } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewRating } from '../../domain/review'
+import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import {
   addTodayReviewUnit,
   deferTodayReviewUnit,
   getOrCreateTodayPlan,
+  getSevenDayReviewForecast,
   recordTodayReviewResult,
   refreshTodayPlan,
   replaceTodayReviewUnit,
@@ -23,6 +25,30 @@ const ratingOptions: Array<{ rating: ReviewRating; label: string; hint: string }
   { rating: 'good', label: '掌握', hint: '能够独立完成' },
   { rating: 'easy', label: '轻松', hint: '熟练且有余力' },
 ]
+const loadLabels = { empty: '无负载', light: '轻', normal: '中', heavy: '重' }
+
+function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
+  const maxUnits = Math.max(1, ...days.map((day) => day.estimatedUnitCount))
+  return <section className="today-forecast" aria-label="未来 7 天复习负载">
+    <div className="today-forecast__heading">
+      <div><p className="eyebrow">未来 7 天</p><h2>复习负载预览</h2></div>
+      <p>按当前状态静态估算，不会提前生成计划。</p>
+    </div>
+    <div className="today-forecast__days">
+      {days.map((day, index) => {
+        const date = new Date(day.dayStart)
+        const weekday = index === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)
+        return <article className={`today-forecast__day today-forecast__day--${day.loadLevel}${index === 0 ? ' is-today' : ''}`} key={day.date}>
+          <div><strong>{weekday}</strong><span>{date.getMonth() + 1}/{date.getDate()}</span></div>
+          <div className="today-forecast__track" aria-hidden="true"><i style={{ height: `${Math.max(day.estimatedUnitCount ? 18 : 3, day.estimatedUnitCount / maxUnits * 100)}%` }} /></div>
+          <strong>{day.estimatedUnitCount} 单元</strong>
+          <span>{day.estimatedProblemCount ? `${day.estimatedProblemCount} 道关联题` : '暂无到期内容'}</span>
+          <small>{loadLabels[day.loadLevel]}{day.overdueProblemCount ? ` · ${day.overdueProblemCount} 道逾期` : ''}</small>
+        </article>
+      })}
+    </div>
+  </section>
+}
 
 function minutes(seconds: number) {
   return Math.max(1, Math.round(seconds / 60))
@@ -142,6 +168,7 @@ function ReviewRunner({
 
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
+  const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
   const [activeUnitId, setActiveUnitId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -149,7 +176,10 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
-    try { setPlan(await getOrCreateTodayPlan()) }
+    try {
+      const [nextPlan, nextForecast] = await Promise.all([getOrCreateTodayPlan(), getSevenDayReviewForecast()])
+      setPlan(nextPlan); setForecast(nextForecast)
+    }
     catch (reason) { setError(String(reason)) }
     finally { setLoading(false) }
   }, [])
@@ -160,6 +190,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     try {
       const next = await operation()
       setPlan(next ?? await refreshTodayPlan())
+      setForecast(await getSevenDayReviewForecast())
     } catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
   }
@@ -209,6 +240,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         </section>
         <div className="today-more"><Button disabled={busy} onClick={() => void mutate(() => addTodayReviewUnit())} variant="secondary">今日加练</Button></div>
       </>}
+      {plan && forecast.length > 0 && <ForecastStrip days={forecast} />}
     </AsyncState>
     <footer className="today-horizon-mark">Powered by Horizon</footer>
   </main>

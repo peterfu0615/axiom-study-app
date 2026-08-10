@@ -330,3 +330,18 @@ export function localReviewDate(timestamp = Date.now()) {
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+
+export function startOfLocalReviewDay(timestamp: number) {
+  const date = new Date(timestamp)
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+}
+
+export function addLocalReviewDays(timestamp: number, days: number) {
+  const date = new Date(startOfLocalReviewDay(timestamp))
+  date.setDate(date.getDate() + days)
+  return date.getTime()
+}
+
+export function endOfLocalReviewDay(timestamp: number) {
+  return addLocalReviewDays(timestamp, 1) - 1
+}
