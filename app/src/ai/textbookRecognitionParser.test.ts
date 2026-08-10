@@ -97,6 +97,19 @@ describe('textbook recognition schema validation', () => {
       .toThrow(TextbookRecognitionParseError)
   })
 
+  it('canonicalizes omitted nullable chapter bounds without inventing pages', () => {
+    const payload = {
+      ...JSON.parse(response),
+      chapters: [{
+        title: '第一章 有理数',
+        page_start: 1,
+        knowledge_points: [],
+      }],
+    }
+    const result = parseTextbookRecognition(JSON.stringify(payload))
+    expect(result.chapters[0]).toMatchObject({ pageStart: 1, pageEnd: null })
+  })
+
   it('rejects a payload with wrong field types instead of degrading to dirty data', () => {
     const invalid = {
       ...JSON.parse(response),
