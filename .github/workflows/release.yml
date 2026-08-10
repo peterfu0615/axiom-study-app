@@ -109,6 +109,13 @@ jobs:
           # 都具备完整的 CodeResources；不能等 DMG 生成后再补签名。
           APPLE_SIGNING_IDENTITY=- npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
 
+      - name: Finalize sandboxed vision sidecar and DMG
+        run: |
+          base="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle"
+          app="$base/macos/Axiom.app"
+          dmg="$base/dmg/Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg"
+          bash scripts/finalize-macos-bundle.sh "$PWD/$app" "$PWD/$dmg"
+
       - name: Verify macOS app bundle signature
         run: |
           app="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/macos/Axiom.app"
@@ -134,6 +141,8 @@ jobs:
             x86_64) file "$helper" | grep -q 'x86_64' ;;
           esac
           codesign --verify --strict "$helper"
+          codesign -dvv "$helper" 2>&1 | grep -q 'Identifier=com.axiom.study.vision'
+          codesign -d --entitlements - "$helper" 2>&1 | grep -q 'com.apple.security.inherit'
 
       - name: Notarize (if signed)
         if: ${{ steps.signing.outputs.signing == 'enabled' }}

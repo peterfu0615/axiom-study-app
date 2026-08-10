@@ -54,6 +54,10 @@ cd src-tauri && cargo fmt -- --check && cargo clippy -- -D warnings && cargo tes
 cd /Users/Peter/Coding/Axiom/app
 # Beta 本地构建也必须在打包阶段写入完整 ad-hoc bundle 签名。
 APPLE_SIGNING_IDENTITY=- npm run tauri -- build
+# Tauri 会把主 App 权限误用于 externalBin；必须补签沙盒继承权限并重建 DMG。
+bash scripts/finalize-macos-bundle.sh \
+  "$PWD/src-tauri/target/release/bundle/macos/Axiom.app" \
+  "$PWD/src-tauri/target/release/bundle/dmg/Axiom_<version>_aarch64.dmg"
 
 # 4. 验证产物
 ls -la src-tauri/target/release/bundle/dmg/
@@ -128,6 +132,7 @@ xcrun stapler staple Axiom.dmg
 - [ ] `codesign -dv` 显示 `Signature=adhoc` → `Signature=valid`
 - [ ] `test -x Axiom.app/Contents/MacOS/axiom-vision` 通过，且 `file` 显示与发布架构一致
 - [ ] `codesign --verify --strict Axiom.app/Contents/MacOS/axiom-vision` 通过
+- [ ] helper 的签名标识为 `com.axiom.study.vision`，权限仅包含 App Sandbox 与 Inherit
 - [ ] `TeamIdentifier` 显示正确的 Team ID
 - [ ] `spctl -a -vv --assess Axiom.app` 通过（notarized）
 - [ ] 全新 Mac 双击 DMG 可直接安装，无 Gatekeeper 拦截
