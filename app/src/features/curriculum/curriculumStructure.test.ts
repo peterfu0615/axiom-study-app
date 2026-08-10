@@ -10,8 +10,8 @@ describe('curriculum chapter/knowledge structure', () => {
       chapters: [{
         title: '第一章 有理数', pageStart: 1, pageEnd: 20,
         knowledgePoints: [
-          { name: '相反数', pageNumbers: [4], evidence: '教材依据', confidence: .7 },
-          { name: '相反数', pageNumbers: [5], evidence: '', confidence: .9 },
+          { name: '相反数', pageNumbers: [4], evidence: '教材依据' },
+          { name: '相反数', pageNumbers: [5], evidence: '' },
         ],
       }],
     })
@@ -36,8 +36,8 @@ describe('curriculum chapter/knowledge structure', () => {
     const structure = normalizeTextbookStructure({
       outline: [{ title: '第一章 有理数', level: 1, pageNumber: 1, evidenceText: '', confidence: .9 }],
       tagCandidates: [
-        { tagType: 'knowledge', canonicalName: '无法归类一', knowledgeNames: [], pageNumbers: [300], confidence: .4 },
-        { tagType: 'knowledge', canonicalName: '无法归类二', knowledgeNames: [], pageNumbers: [500], confidence: .4 },
+        { tagType: 'knowledge', canonicalName: '无法归类一', knowledgeNames: [], pageNumbers: [300] },
+        { tagType: 'knowledge', canonicalName: '无法归类二', knowledgeNames: [], pageNumbers: [500] },
       ],
     })
     const unclassified = structure.filter((chapter) => chapter.isUnclassified)
@@ -55,7 +55,7 @@ describe('curriculum chapter/knowledge structure', () => {
       ],
       tagCandidates: [{
         tagType: 'knowledge', canonicalName: '相似三角形', chapterName: '第二章 几何',
-        knowledgeNames: [], pageNumbers: [4], confidence: .9,
+        knowledgeNames: [], pageNumbers: [4],
       }],
     })
     expect(structure[1].knowledgePoints.map((point) => point.name)).toEqual(['相似三角形'])

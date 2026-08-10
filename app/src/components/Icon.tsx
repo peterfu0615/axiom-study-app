@@ -10,6 +10,7 @@ type IconName =
   | 'refresh'
   | 'rotate'
   | 'check'
+  | 'plus'
   | 'chevron'
   | 'close'
   | 'plus'
@@ -83,6 +84,7 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   check: <path d="m5 12 4 4L19 6" />,
+  plus: <path d="M12 5v14M5 12h14" />,
   chevron: <path d="m9 6 6 6-6 6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,

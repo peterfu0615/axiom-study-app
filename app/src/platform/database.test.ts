@@ -608,7 +608,6 @@ describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
     knowledgeTags: [{
       name: '分式化简',
       role: 'primary',
-      confidence: 0.9,
       evidence: '题干要求化简分式',
       source: 'problem',
     }],
@@ -617,7 +616,6 @@ describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
     difficulty: null,
     errorCategories: [],
     textbookHint: null,
-    confidence: 0.9,
     warnings: [],
   }
 

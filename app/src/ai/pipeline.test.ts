@@ -104,7 +104,6 @@ const analysis: AIProblemAnalysis = {
   difficulty: null,
   errorCategories: [],
   textbookHint: null,
-  confidence: 0.8,
   warnings: [],
 }
 
@@ -427,6 +426,43 @@ describe('locked textbook context injection', () => {
     expect(analyzeProblem.mock.calls[0][0].resolvedTextbookContext).toEqual(
       expect.objectContaining({ textbookId: lockedTextbook.id, subject: '数学' }),
     )
+  })
+
+  it('uses the run provider for a constrained autonomous textbook decision', async () => {
+    const analyzeProblem = vi.fn().mockResolvedValue({
+      analysis, rawOutput: '{"title":"数学 · 选择题"}', repairStrategy: null,
+    })
+    const analyzeCurriculumStage = vi.fn().mockResolvedValue({
+      rawOutput: '{"selected_textbook_id":"book-2"}', providerTaskId: null,
+    })
+    setAIProviderForTests({
+      id: 'test', model: 'test-v1', supportsVision: true, supportsText: true,
+      analyzeProblem, analyzeProblemImage: vi.fn(), analyzeCurriculumStage,
+    })
+    resolveProblemTextbookContextBeforeAnalysis.mockImplementationOnce(
+      async (_problemId, resolver) => {
+        const decision = await resolver({
+          subject: '数学', problemText: '一次函数', candidates: [
+            { id: 'book-1', title: '数学上册', grade: '八年级', volume: '上册', publisher: null, edition: null, chapterFingerprints: [] },
+            { id: 'book-2', title: '数学下册', grade: '八年级', volume: '下册', publisher: null, edition: null, chapterFingerprints: ['一次函数'] },
+          ],
+        })
+        expect(decision).toEqual({
+          selectedTextbookId: 'book-2', providerId: 'test', model: 'test-v1',
+          runId: 'run-1',
+        })
+        return { match: { textbook: lockedTextbook, source: 'ai_resolver' }, context: null }
+      },
+    )
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyzeCurriculumStage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('只能返回 candidates 中已有的 id'),
+      jsonSchema: expect.objectContaining({ required: ['selected_textbook_id'] }),
+    }))
+    expect(analyzeProblem).toHaveBeenCalledTimes(1)
   })
 
   it('continues without injection when the textbook lookup fails', async () => {

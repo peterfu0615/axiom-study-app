@@ -23,12 +23,12 @@ const volumePattern = /(?:上册|下册|全一册|全一卷|上学期|下学期)
 const publisherPattern = /[\u4e00-\u9fff]{2,24}出版社/u
 const editionPattern = /(?:20\d{2}|19\d{2})年(?:版|新课标|课程标准修订)/u
 
-function field(value: string, evidence: string, confidence: number): TextbookMetadataField {
-  return { value: value.trim() || null, evidence: evidence.trim(), confidence }
+function field(value: string, evidence: string): TextbookMetadataField {
+  return { value: value.trim() || null, evidence: evidence.trim() }
 }
 
 function missing(current: TextbookMetadataField, value: string | null, evidence: string) {
-  return current.value ? current : value ? field(value, evidence, 0.62) : current
+  return current.value ? current : value ? field(value, evidence) : current
 }
 
 /**
@@ -81,7 +81,6 @@ export function inferMissingTextbookRecognition(
   const warning = 'AI 未返回完整教材信息，已根据文件名、目录和本地正文填充候选；请在确认页检查。'
   return {
     ...result,
-    overallConfidence: Math.min(result.overallConfidence, 0.72),
     warnings: result.warnings.includes(warning) ? result.warnings : [...result.warnings, warning],
   }
 }

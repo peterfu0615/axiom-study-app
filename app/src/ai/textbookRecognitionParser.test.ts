@@ -18,10 +18,10 @@ const response = JSON.stringify({
 })
 
 describe('textbook recognition parser', () => {
-  it('keeps field confidence and evidence for confirmation UI', () => {
+  it('keeps evidence while ignoring historical confidence fields', () => {
     const result = parseTextbookRecognition(response)
     expect(result.subject.value).toBe('数学')
-    expect(result.edition.confidence).toBe(0.61)
+    expect(result.edition).toEqual({ value: '2024 年版', evidence: '版权页 OCR 不完整' })
     expect(result.warnings).toEqual(['版本字段建议确认。'])
   })
 
@@ -64,8 +64,8 @@ describe('textbook recognition parser', () => {
       warnings: [],
     }))
     expect(result.subject.value).toBeNull()
-    expect(result.subject.confidence).toBe(0)
-    expect(result.overallConfidence).toBe(0.2)
+    expect(result.subject).not.toHaveProperty('confidence')
+    expect(result).not.toHaveProperty('overallConfidence')
     expect(result.warnings).toEqual([])
   })
 
@@ -82,7 +82,6 @@ describe('textbook recognition schema validation', () => {
   it('rejects a payload missing required fields with an explicit parse error', () => {
     const missing = JSON.parse(response)
     delete missing.chapters
-    delete missing.overall_confidence
     expect(() => parseTextbookRecognition(JSON.stringify(missing)))
       .toThrowError(/教材识别 JSON 不符合 Schema/u)
     expect(() => parseTextbookRecognition(JSON.stringify(missing)))
@@ -101,8 +100,7 @@ describe('textbook recognition schema validation', () => {
   it('rejects a payload with wrong field types instead of degrading to dirty data', () => {
     const invalid = {
       ...JSON.parse(response),
-      subject: { value: '数学', confidence: 'high', evidence: '数学' },
-      overall_confidence: 2,
+      subject: { value: 42, evidence: '数学' },
       warnings: 'bad',
     }
     expect(() => parseTextbookRecognition(JSON.stringify(invalid)))

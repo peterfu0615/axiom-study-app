@@ -297,7 +297,7 @@ describe('getTextbookDeletionImpact', () => {
       chapterCount: 3,
       knowledgeCount: 7,
       pageCount: 12,
-      matchedProblemCount: 4,
+        matchedProblemCount: 4,
     })
     const nodeQuery = recorded.calls.find((call) => call.sql.includes('FROM knowledge_nodes'))!
     // 已归档节点不计入删除影响
@@ -323,14 +323,14 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
       }] },
       { match: /SELECT \* FROM textbooks WHERE subject = \$1 ORDER BY/, rows: books },
       { match: /SELECT p\.id, trim/, rows: [{
-        id: 'problem-1', effective_subject: '数学', matched_textbook_id: books[0]?.id ?? null,
+        id: 'problem-1', effective_subject: '数学', matched_textbook_id: books.length === 1 ? books[0]?.id : null,
         textbook_match_confidence: books.length === 1 ? .95 : 0,
         textbook_match_reason: books.length === 1 ? '当前科目只有一本未归档教材' : '教材元数据不足以安全匹配',
         textbook_match_source: books.length === 1 ? 'single_subject_textbook' : 'unresolved',
         textbook_match_locked: Number(problem.textbook_match_locked ?? 0),
-        textbook_resolver_version: 'problem-textbook-resolver-v1',
+        textbook_resolver_version: 'problem-textbook-resolver-v2-autonomous',
         textbook_candidate_count: books.length, textbook_decision_json: '{}',
-        textbook_id: books[0]?.id ?? null, textbook_subject: books[0]?.subject,
+        textbook_id: books.length === 1 ? books[0]?.id : null, textbook_subject: books[0]?.subject,
         textbook_title: books[0]?.title, textbook_grade: books[0]?.grade,
         textbook_volume: books[0]?.volume, textbook_publisher: books[0]?.publisher,
         textbook_edition: books[0]?.edition, textbook_source_type: books[0]?.source_type,
@@ -351,8 +351,8 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     })
     const update = recorded.calls.find((call) => call.sql.includes('textbook_resolver_version = $6'))!
     expect(update.params).toEqual([
-      'book-1', .95, '当前科目只有一本未归档教材', 'single_subject_textbook',
-      expect.any(Number), 'problem-textbook-resolver-v1', 1, expect.any(String), 'problem-1',
+      'book-1', 0, '当前科目只有一本未归档教材', 'single_subject_textbook',
+      expect.any(Number), 'problem-textbook-resolver-v2-autonomous', 1, expect.any(String), 'problem-1',
     ])
   })
 
@@ -377,6 +377,89 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     expect(update.params[0]).toBeNull()
     expect(update.params[3]).toBe('unresolved')
     expect(update.params[6]).toBe(0)
+  })
+
+  it('accepts an AI resolver winner only when it belongs to the eligible candidate set', async () => {
+    const books = [
+      textbookRow({ id: 'book-1', title: '数学八年级下册 A', updated_at: 20 }),
+      textbookRow({ id: 'book-2', title: '数学八年级下册 B', updated_at: 10 }),
+    ]
+    seed({}, books)
+    recorded.selectOverrides.push(
+      { match: /AS problem_text/, rows: [{ problem_text: '一次函数求解析式' }] },
+      { match: /COALESCE\(NULLIF\(path/, rows: [{ fingerprint: '第十六章/一次函数' }] },
+      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+    )
+    const resolver = vi.fn().mockResolvedValue({
+      selectedTextbookId: 'book-2', providerId: 'provider-1', model: 'model-1', runId: 'run-1',
+    })
+
+    await resolveProblemTextbookContextBeforeAnalysis('problem-1', resolver)
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      subject: '数学',
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ id: 'book-1', chapterFingerprints: ['第十六章/一次函数'] }),
+        expect.objectContaining({ id: 'book-2' }),
+      ]),
+    }))
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_match_source = $3'))!
+    expect(update.params[0]).toBe('book-2')
+    expect(update.params[2]).toBe('ai_resolver')
+    expect(JSON.parse(String(update.params[6]))).toMatchObject({
+      selectedTextbookId: 'book-2', aiSelectedTextbookId: 'book-2',
+      aiSelectionAccepted: true, aiProviderId: 'provider-1', aiModel: 'model-1',
+      modelRunId: 'run-1',
+    })
+  })
+
+  it('rejects an illegal or cross-subject AI id and uses the stable same-subject fallback', async () => {
+    const books = [
+      textbookRow({ id: 'book-1', updated_at: 20 }),
+      textbookRow({ id: 'book-2', updated_at: 10 }),
+    ]
+    seed({}, books)
+    recorded.selectOverrides.push(
+      { match: /AS problem_text/, rows: [{ problem_text: '一次函数' }] },
+      { match: /COALESCE\(NULLIF\(path/, rows: [] },
+      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+    )
+
+    await resolveProblemTextbookContextBeforeAnalysis('problem-1', async () => ({
+      selectedTextbookId: 'english-book', providerId: 'provider-1', model: 'model-1',
+    }))
+
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_match_source = $3'))!
+    expect(update.params[0]).toBe('book-1')
+    expect(update.params[2]).toBe('stable_fallback')
+    expect(JSON.parse(String(update.params[6]))).toMatchObject({
+      aiSelectedTextbookId: 'english-book', aiSelectionAccepted: false,
+    })
+  })
+
+  it('continues with the stable fallback when the AI resolver fails', async () => {
+    const books = [
+      textbookRow({ id: 'book-1', updated_at: 20 }),
+      textbookRow({ id: 'book-2', updated_at: 10 }),
+    ]
+    seed({}, books)
+    recorded.selectOverrides.push(
+      { match: /AS problem_text/, rows: [{ problem_text: '一次函数' }] },
+      { match: /COALESCE\(NULLIF\(path/, rows: [] },
+      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+    )
+
+    await resolveProblemTextbookContextBeforeAnalysis('problem-1', async () => {
+      throw new Error('provider timeout')
+    })
+
+    const update = recorded.calls.find((call) => call.sql.includes('textbook_match_source = $3'))!
+    expect(update.params[0]).toBe('book-1')
+    expect(update.params[2]).toBe('stable_fallback')
+    expect(JSON.parse(String(update.params[6]))).toMatchObject({
+      aiSelectionAccepted: false,
+      resolverFailure: 'Error: provider timeout',
+    })
   })
 
   it('retrieves a bounded canonical context only from the selected textbook', async () => {
@@ -424,10 +507,10 @@ describe('writeControlledProblemAnalysis', () => {
   it('persists unknown knowledge as an unresolved ProblemTag without minting a fake definition', async () => {
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-1', subject: '数学', now: 100,
-      textbookMatch: { textbook: textbookRow() as never, confidence: .9, reason: '单本教材', source: 'single_subject_textbook' },
+      textbookMatch: { textbook: textbookRow() as never, reason: '单本教材', source: 'single_subject_textbook' },
       definitions: [],
       candidateGroups: [['knowledge', [{
-        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary', confidence: .7,
+        canonicalTagId: null, name: '候选中不存在的知识', role: 'primary',
         evidence: '题面证据', source: 'problem',
       }]]],
       difficulty: null,
@@ -443,7 +526,7 @@ describe('writeControlledProblemAnalysis', () => {
   it('supersedes only unlocked unconfirmed model tags during re-analysis', async () => {
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 200,
-      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [], difficulty: null,
     })
     const supersede = recorded.calls.find((call) =>
@@ -459,9 +542,9 @@ describe('writeControlledProblemAnalysis', () => {
     difficultyRows.rows = [{ id: 'difficulty-user' }]
     await writeControlledProblemAnalysis({
       problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 300,
-      textbookMatch: { textbook: null, confidence: 0, reason: '未匹配', source: 'unresolved' },
+      textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [],
-      difficulty: { level: 'advanced', score: .9, reason: '综合题', confidence: .95 },
+      difficulty: { level: 'advanced', score: .9, reason: '综合题' },
     })
     expect(recorded.calls.some((call) => call.sql.startsWith('INSERT INTO problem_difficulties')))
       .toBe(false)

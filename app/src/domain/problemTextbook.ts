@@ -5,21 +5,21 @@ import type { Textbook } from './horizon'
 export const TEXTBOOK_MATCH_MIN_SCORE = 0.52
 /** A close second result is ambiguous and must remain unresolved. */
 export const TEXTBOOK_MATCH_TIE_MARGIN = 0.08
-/** Low-confidence hints are retained for audit but cannot route a problem. */
-export const TEXTBOOK_HINT_MIN_CONFIDENCE = 0.35
-export const TEXTBOOK_RESOLVER_VERSION = 'problem-textbook-resolver-v1'
+export const TEXTBOOK_RESOLVER_VERSION = 'problem-textbook-resolver-v2-autonomous'
 
 export type ProblemTextbookMatchSource =
   | 'single_subject_textbook'
   | 'metadata_match'
   | 'ai_hint'
+  | 'ai_resolver'
+  | 'stable_fallback'
+  | 'persisted_resolution'
   | 'user'
   | 'legacy_current_fallback'
   | 'unresolved'
 
 export interface ProblemTextbookMatch {
   textbook: Textbook | null
-  confidence: number
   reason: string | null
   source: ProblemTextbookMatchSource
 }
@@ -27,6 +27,7 @@ export interface ProblemTextbookMatch {
 export interface ResolveProblemTextbookInput {
   subject: string
   lockedTextbookId: string | null
+  persistedTextbookId?: string | null
   hint: AITextbookHint | null
   textbooks: Textbook[]
   legacyCurrentTextbookId?: string | null
@@ -59,7 +60,6 @@ export function inferProblemTextbookHint(input: {
     volume,
     publisher,
     edition,
-    confidence: fields.length >= 2 ? 1 : 0.7,
     evidence: `题目元数据：${fields.join('、')}`,
   }
 }
@@ -146,9 +146,8 @@ export function scoreProblemTextbook(
   }
   return {
     textbook,
-    // Metadata strength is the routing score. The model confidence is shown to
-    // the user separately and must not turn an otherwise exact grade/volume
-    // match into an artificial miss.
+    // This deterministic metadata score is internal resolver input. It is not
+    // a model probability and is never presented as a user-facing concept.
     score: Math.min(1, score),
     reason: reasons.length ? reasons.join('、') : '没有足够的教材元数据依据',
   }
@@ -163,26 +162,35 @@ export function resolveProblemTextbook(
     ? input.textbooks.find((textbook) => textbook.id === input.lockedTextbookId && textbook.subject === subject)
     : null
   if (locked) {
-    return { textbook: locked, confidence: 1, reason: '用户已锁定教材', source: 'user' }
+    return { textbook: locked, reason: '用户已锁定教材', source: 'user' }
   }
 
   const available = candidates.filter((textbook) =>
     textbook.archivedAt === null &&
     (textbook.extractionStatus === 'completed' || textbook.extractionStatus === 'needs_review'))
   if (!available.length) {
-    return { textbook: null, confidence: 0, reason: '当前科目没有可用教材', source: 'unresolved' }
+    return { textbook: null, reason: '当前科目没有可用教材', source: 'unresolved' }
+  }
+  const persisted = input.persistedTextbookId
+    ? available.find((textbook) => textbook.id === input.persistedTextbookId)
+    : null
+  if (persisted) {
+    return {
+      textbook: persisted,
+      reason: '沿用已保存的教材判断',
+      source: 'persisted_resolution',
+    }
   }
   if (available.length === 1) {
     return {
       textbook: available[0],
-      confidence: 0.95,
       reason: '当前科目只有一本未归档教材',
       source: 'single_subject_textbook',
     }
   }
 
   const hint = input.hint
-  if (hint && hint.confidence >= TEXTBOOK_HINT_MIN_CONFIDENCE) {
+  if (hint) {
     const scored = available
       .map((textbook) => scoreProblemTextbook(textbook, hint))
       .sort((left, right) => right.score - left.score)
@@ -195,27 +203,21 @@ export function resolveProblemTextbook(
         : 'ai_hint'
       return {
         textbook: best.textbook,
-        confidence: best.score,
         reason: best.reason,
         source,
       }
     }
     if (best && second && best.score >= TEXTBOOK_MATCH_MIN_SCORE &&
       best.score - second.score < TEXTBOOK_MATCH_TIE_MARGIN) {
-      return { textbook: null, confidence: best.score, reason: '多个教材元数据得分接近，无法确定', source: 'unresolved' }
+      return { textbook: null, reason: '多个教材元数据得分接近，无法确定', source: 'unresolved' }
     }
   }
 
-  const legacy = input.legacyCurrentTextbookId
-    ? available.find((textbook) => textbook.id === input.legacyCurrentTextbookId)
-    : null
-  if (legacy) {
-    return {
-      textbook: legacy,
-      confidence: 0.35,
-      reason: '兼容旧版本教材选择，仅作为低优先级回退',
-      source: 'legacy_current_fallback',
-    }
+  return {
+    textbook: null,
+    reason: input.legacyCurrentTextbookId
+      ? '旧版本教材选择不再用于自动绑定，请确认本题教材'
+      : '教材元数据不足以安全匹配',
+    source: 'unresolved',
   }
-  return { textbook: null, confidence: 0, reason: '教材元数据不足以安全匹配', source: 'unresolved' }
 }

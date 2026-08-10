@@ -68,6 +68,7 @@
   --ax-control-lg: 44px;
   --ax-control-padding-inline: 12px;
   --ax-icon-md: 16px;
+  --ax-state-panel-max: 640px;
   --ax-shadow-card: var(--card-shadow);
   --ax-shadow-floating: var(--card-shadow);
   --ax-z-dialog: 20;

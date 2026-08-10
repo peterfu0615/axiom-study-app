@@ -188,7 +188,7 @@ function schemaMessage(errors: ErrorObject[] | null | undefined) {
     .join('；')
 }
 
-function parseJSON(rawOutput: string, validate: ValidateFunction) {
+function parseJSON(rawOutput: string, validate: ValidateFunction, normalize?: (value: unknown) => unknown) {
   const strategies: string[] = []
   let candidate = rawOutput.trim()
   const unfenced = stripFence(candidate)
@@ -213,6 +213,7 @@ function parseJSON(rawOutput: string, validate: ValidateFunction) {
       )
     }
   }
+  parsed = normalize ? normalize(parsed) : parsed
   if (!validate(parsed)) {
     throw new IntelligenceParseError(
       `模型 JSON 不符合 Schema：${schemaMessage(validate.errors)}`,
@@ -226,7 +227,6 @@ function normalizeSteps(value: StudentAttemptJSON) {
   const steps: StudentAttemptStep[] = value.steps.map((step) => ({
     index: step.index,
     contentMarkdown: step.content_markdown,
-    confidence: step.confidence,
   }))
   if (steps.some((step, index) => step.index !== index + 1)) {
     throw new IntelligenceParseError('学生解答 steps.index 必须从 1 连续递增')
@@ -238,7 +238,17 @@ export function parseStudentAttempt(rawOutput: string): {
   attempt: Pick<StudentAttempt, 'rawMarkdown' | 'steps'>
   repairStrategy: string | null
 } {
-  const parsed = parseJSON(rawOutput, validateStudentAttempt)
+  const parsed = parseJSON(rawOutput, validateStudentAttempt, (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+    const source = { ...(input as Record<string, unknown>) }
+    if (Array.isArray(source.steps)) source.steps = source.steps.map((step) => {
+      if (!step || typeof step !== 'object' || Array.isArray(step)) return step
+      const copy = { ...(step as Record<string, unknown>) }
+      delete copy.confidence
+      return copy
+    })
+    return source
+  })
   const value = parsed.value as StudentAttemptJSON
   return {
     attempt: {

@@ -10,7 +10,6 @@ export interface CurriculumStructureTagReference {
   chapterName?: string | null
   pageNumbers: number[]
   evidenceText?: string | null
-  confidence: number
 }
 
 export interface NormalizedKnowledgePoint {
@@ -278,7 +277,7 @@ export function normalizeTextbookStructure(input: {
         pageNumbers: candidate.pageNumbers,
         evidenceText: candidate.evidenceText,
         description: candidate.description,
-        confidence: candidate.confidence,
+        confidence: 0,
       })
     }
   }

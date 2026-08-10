@@ -240,7 +240,7 @@ export function ErrorState({
         <p>{error.userMessage}</p>
         {error.detailSafe && (
           <details>
-            <summary>技术信息</summary>
+            <summary>详情</summary>
             <code>{error.code} · {error.detailSafe}</code>
           </details>
         )}

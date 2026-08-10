@@ -29,7 +29,7 @@ describe('MockAIProvider', () => {
     })
     expect(result.recognition.title.value).toBe('七年级数学上册')
     expect(result.recognition.subject.value).toBeNull()
-    expect(result.recognition.subject.confidence).toBeLessThan(0.5)
+    expect(result.recognition.subject).not.toHaveProperty('confidence')
   })
   it('returns the problem-understanding schema from image input only', async () => {
     const result = await new MockAIProvider(0).analyzeProblemImage({
@@ -42,7 +42,7 @@ describe('MockAIProvider', () => {
     expect(result.analysis.subject).toBe('数学')
     expect(result.analysis.title).toContain('数学')
     expect(result.analysis.problemType).toContain('Mock')
-    expect(result.analysis.confidence).toBeGreaterThan(0)
+    expect(result.analysis).not.toHaveProperty('confidence')
     expect(result.analysis.warnings).toHaveLength(1)
     expect(result.rawOutput).toContain('stem_markdown')
   })

@@ -48,7 +48,6 @@ function normalizeTagCandidates(value: unknown): AITagCandidate[] {
       canonicalTagId: asString(candidate.canonicalTagId ?? candidate.canonical_tag_id) || null,
       name,
       role: candidate.role === 'primary' ? 'primary' : 'secondary',
-      confidence: clampUnit(candidate.confidence),
       evidence: asString(candidate.evidence),
       source: ['solution', 'student_attempt', 'textbook_hint'].includes(source)
         ? source as AITagCandidate['source']
@@ -68,7 +67,6 @@ function normalizeDifficulty(value: unknown): AIDifficulty | null {
     score: typeof rawScore === 'number' && Number.isFinite(rawScore)
       ? clampUnit(rawScore)
       : null,
-    confidence: clampUnit(candidate.confidence),
     reason: asString(candidate.reason),
   }
 }
@@ -86,7 +84,6 @@ function normalizeTextbookHint(value: unknown): AITextbookHint | null {
     volume: nullable(candidate.volume),
     publisher: nullable(candidate.publisher),
     edition: nullable(candidate.edition),
-    confidence: clampUnit(candidate.confidence),
     evidence: asString(candidate.evidence),
   }
   if (!fields.title && !fields.grade && !fields.volume && !fields.publisher && !fields.edition) {
@@ -288,7 +285,6 @@ export function normalizeAIProblemAnalysis(
     textbookHint: normalizeTextbookHint(
       candidate.textbookHint ?? candidate.textbook_hint,
     ),
-    confidence: clampUnit(candidate.confidence),
     warnings: Array.isArray(candidate.warnings)
       ? candidate.warnings.map(asString).filter(Boolean)
       : [],

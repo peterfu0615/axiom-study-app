@@ -12,7 +12,7 @@ const definition = (overrides: Partial<TagDefinitionSummary>): TagDefinitionSumm
 
 const review = (overrides: Partial<TagReviewItem>): TagReviewItem => ({
   id: overrides.id ?? 'problem-tag', problemId: 'problem', tagId: null, candidateName: '候选',
-  confidence: .8, evidence: '题干依据', mappingStatus: 'candidate', verificationStatus: 'needs_review',
+  evidence: '题干依据', mappingStatus: 'candidate', verificationStatus: 'needs_review',
   isLocked: false, ...overrides,
 })
 

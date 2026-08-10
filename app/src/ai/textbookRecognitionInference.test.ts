@@ -22,7 +22,7 @@ describe('textbook recognition inference fallback', () => {
     expect(result.publisher.value).toBe('华东师范大学出版社')
     expect(result.edition.value).toBe('2022年版')
     expect(result.warnings).toContain('AI 未返回完整教材信息，已根据文件名、目录和本地正文填充候选；请在确认页检查。')
-    expect(result.overallConfidence).toBeLessThanOrEqual(0.72)
+    expect(result).not.toHaveProperty('overallConfidence')
   })
 
   it('never overwrites a provider value with a local guess', () => {

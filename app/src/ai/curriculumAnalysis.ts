@@ -1,7 +1,7 @@
 import { normalizeTagName, type TextbookRecognition } from '../domain/horizon'
 
-export const CURRICULUM_TAG_PROMPT_VERSION = 'curriculum-tags-v3-chapter-link'
-export const CURRICULUM_TAG_SCHEMA_VERSION = 'curriculum-tags-v3-chapter-link'
+export const CURRICULUM_TAG_PROMPT_VERSION = 'curriculum-tags-v4-simplified'
+export const CURRICULUM_TAG_SCHEMA_VERSION = 'curriculum-tags-v4-simplified'
 export const CURRICULUM_AUDIT_PROMPT_VERSION = 'curriculum-audit-v2'
 export const CURRICULUM_AUDIT_SCHEMA_VERSION = 'curriculum-audit-v2'
 
@@ -20,7 +20,6 @@ export interface CurriculumTagCandidate {
   knowledgeNames: string[]
   pageNumbers: number[]
   evidenceText: string | null
-  confidence: number
   existingTagId: string | null
   chapterName?: string | null
 }
@@ -87,7 +86,7 @@ export const curriculumTagsJSONSchema = {
     subject: { type: 'string' },
     tags: { type: 'array', maxItems: 320, items: { type: 'object', required: [
       'tag_type', 'canonical_name', 'aliases', 'description', 'origin',
-      'knowledge_names', 'page_numbers', 'evidence_text', 'confidence',
+      'knowledge_names', 'page_numbers', 'evidence_text',
     ], properties: {
       tag_type: { type: 'string', enum: ['knowledge', 'method', 'model'] },
       canonical_name: { type: 'string' }, aliases: { type: 'array', items: { type: 'string' } },
@@ -96,7 +95,7 @@ export const curriculumTagsJSONSchema = {
       knowledge_names: { type: 'array', items: { type: 'string' } },
       chapter_name: { type: ['string', 'null'] },
       page_numbers: { type: 'array', items: { type: 'integer' } },
-      evidence_text: { type: ['string', 'null'] }, confidence: { type: 'number' },
+      evidence_text: { type: ['string', 'null'] },
     } } }, warnings: { type: 'array', items: { type: 'string' } },
   },
 } as const
@@ -126,7 +125,7 @@ export function buildCurriculumTagPrompt(input: {
 
 解题方法和题型模型既可从教材提取，也可根据已识别科目、年级、知识结构及学科常识合理扩展。不要求教材原文明确命名，不要求页码或原文证据；不得因教材未写出“倍长中线”“待定系数法”“一线三等角”等名称而拒绝建立相关标签。推断项使用 ai_inferred。方法和模型须关联适用知识点，关联可由你推断。
 
-严格科目隔离。先与 existing_tags 的规范名和别名比较，明显同义时返回已有名称、origin=existing_library，不新造近义标签。控制数量：知识点最多 180，方法最多 60，题型模型最多 80。不要生成难度标签；难度固定为基础、中档、压轴并由具体题目分析决定。所有新生成项只是候选。
+严格科目隔离。先与 existing_tags 的规范名和别名比较，语义等价时返回已有名称、origin=existing_library，不新造近义标签。不要输出概率或置信度字段。控制数量：知识点最多 180，方法最多 60，题型模型最多 80。不要生成难度标签；难度固定为基础、中档、压轴并由具体题目分析决定。所有新生成项只是候选。
 
 <recognition>${JSON.stringify(input.recognition)}</recognition>
 <outline>${JSON.stringify(input.outline)}</outline>
@@ -184,7 +183,6 @@ export function parseCurriculumTags(rawOutput: string, expectedSubject: string):
       pageNumbers: type === 'knowledge' && Array.isArray(tag.page_numbers)
         ? tag.page_numbers.filter((page): page is number => Number.isInteger(page) && Number(page) > 0) : [],
       evidenceText: type === 'knowledge' && typeof tag.evidence_text === 'string' ? tag.evidence_text.trim() || null : null,
-      confidence: typeof tag.confidence === 'number' ? Math.max(0, Math.min(1, tag.confidence)) : 0,
       existingTagId: null,
     })
   }
@@ -233,7 +231,6 @@ export function reconcileCurriculumTagCandidates(
       pageNumbers: [...new Set([...duplicate.pageNumbers, ...normalizedCandidate.pageNumbers])].sort((a, b) => a - b),
       evidenceText: duplicate.evidenceText ?? normalizedCandidate.evidenceText,
       chapterName: duplicate.chapterName ?? normalizedCandidate.chapterName,
-      confidence: Math.max(duplicate.confidence, normalizedCandidate.confidence),
       origin: duplicate.origin === 'existing_library' || normalizedCandidate.origin === 'existing_library'
         ? 'existing_library' : duplicate.origin,
       existingTagId: duplicate.existingTagId ?? normalizedCandidate.existingTagId,

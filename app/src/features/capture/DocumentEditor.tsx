@@ -682,8 +682,7 @@ export function DocumentEditor({
                 <span className="block-copy">
                   <strong>{block.title}</strong>
                   <small>
-                    {block.source === 'auto' ? '自动识别' : '手动调整'} ·{' '}
-                    {Math.round(block.confidence * 100)}%
+                    {block.source === 'auto' ? '自动识别' : '手动调整'}
                   </small>
                 </span>
                 <label

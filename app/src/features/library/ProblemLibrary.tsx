@@ -962,13 +962,15 @@ export function ProblemLibrary() {
                         </div>
 
                         {selected.aiStatus === 'failed' && (
-                          <ErrorState
-                            error={activeModelRun?.error ?? classifyAIError(
-                              activeModelRun?.errorMessage || 'Provider 未返回错误详情',
-                              { runId: activeModelRun?.id ?? null },
-                            )}
-                            onRetry={updating ? undefined : () => void retryAI()}
-                          />
+                          <div className="problem-ai-error-region">
+                            <ErrorState
+                              error={activeModelRun?.error ?? classifyAIError(
+                                activeModelRun?.errorMessage || 'Provider 未返回错误详情',
+                                { runId: activeModelRun?.id ?? null },
+                              )}
+                              onRetry={updating ? undefined : () => void retryAI()}
+                            />
+                          </div>
                         )}
                       </section>
 
@@ -1129,16 +1131,6 @@ export function ProblemLibrary() {
                             <dd>{selected.aiProblemType || '未识别'}</dd>
                           </div>
                           <div>
-                            <dt>置信度</dt>
-                            <dd>
-                              {selected.aiConfidence === null
-                                ? '—'
-                                : `${Math.round(
-                                    selected.aiConfidence * 100,
-                                  )}%`}
-                            </dd>
-                          </div>
-                          <div>
                             <dt>图形识别</dt>
                             <dd>
                               {selected.aiHasDiagram
@@ -1283,10 +1275,10 @@ export function ProblemLibrary() {
         title="确认更改题目科目"
       >
         <div className="problem-edit-form">
-          <p>当前教材属于原科目。更改科目将清除已确认教材，之后可以在新科目范围重新匹配。</p>
+          <p>更改科目后，Axiom 会按新科目重新整理本题标签。</p>
           <div className="curriculum-dialog-actions">
             <Button onClick={() => setSubjectChangeConfirming(false)} variant="ghost">取消</Button>
-            <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续并清除教材</Button>
+            <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续更改</Button>
           </div>
         </div>
       </Dialog>

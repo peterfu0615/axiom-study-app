@@ -501,7 +501,7 @@ describe('recoverIntelligenceTasks', () => {
     expect(attempt.status).toBe('completed')
     expect(attempt.raw_markdown).toBe('第一步')
     expect(JSON.parse(attempt.steps_json)).toEqual([
-      { index: 1, contentMarkdown: '第一步', confidence: 0.9 },
+      { index: 1, contentMarkdown: '第一步' },
     ])
     expect(attempt.error_message).toBeNull()
     expect(analysis.status).toBe('completed')

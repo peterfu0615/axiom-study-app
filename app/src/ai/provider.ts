@@ -70,6 +70,12 @@ import {
   parseTextbookRecognition,
   TextbookRecognitionParseError,
 } from './textbookRecognitionParser'
+import {
+  buildAutonomousTextbookResolutionPrompt,
+  parseAutonomousTextbookResolution,
+  textbookResolutionJSONSchema,
+  type AutonomousTextbookResolutionInput,
+} from './textbookResolutionContract'
 
 export interface CurriculumStageInput {
   prompt: string
@@ -239,7 +245,6 @@ export class MockAIProvider implements AIProvider {
       model_tags: [],
       difficulty: null,
       error_categories: [],
-      confidence: 0.5,
       warnings: ['当前结果由 Mock Provider 生成，不代表真实题目内容。'],
     })
     const parsed = parseProblemAnalysis(rawOutput)
@@ -254,12 +259,12 @@ export class MockAIProvider implements AIProvider {
       attempt: {
         rawMarkdown: 'Mock AI 已识别用户解答。',
         steps: [
-          { index: 1, contentMarkdown: 'Mock 步骤', confidence: 0.5 },
+          { index: 1, contentMarkdown: 'Mock 步骤' },
         ],
       },
       rawOutput: JSON.stringify({
         raw_markdown: 'Mock AI 已识别用户解答。',
-        steps: [{ index: 1, content_markdown: 'Mock 步骤', confidence: 0.5 }],
+        steps: [{ index: 1, content_markdown: 'Mock 步骤' }],
       }),
       repairStrategy: null,
     }
@@ -342,6 +347,13 @@ export class MockAIProvider implements AIProvider {
   }
 
   async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
+    if (input.prompt.includes('教材选择助手')) {
+      const selectedTextbookId = input.prompt.match(/"candidates":\[\{"id":"([^"]+)"/u)?.[1] ?? 'invalid-candidate'
+      return {
+        rawOutput: JSON.stringify({ selected_textbook_id: selectedTextbookId }),
+        providerTaskId: null,
+      }
+    }
     const isAudit = input.prompt.includes('质量审计助手')
     const subject = input.prompt.match(/"subject"\s*:\s*\{\s*"value"\s*:\s*"([^"]+)"/u)?.[1] ?? '数学'
     return { rawOutput: JSON.stringify(isAudit ? {
@@ -901,6 +913,24 @@ ${JSON.stringify(structuredProblem)}
     })
     if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     return { rawOutput: response.rawOutput, providerTaskId: null }
+  }
+}
+
+export async function resolveTextbookCandidateWithProvider(
+  provider: AIProvider,
+  input: AutonomousTextbookResolutionInput,
+) {
+  if (!provider.supportsText || typeof provider.analyzeCurriculumStage !== 'function') {
+    throw new Error(TEXT_MODEL_REQUIRED)
+  }
+  const result = await provider.analyzeCurriculumStage({
+    prompt: buildAutonomousTextbookResolutionPrompt(input),
+    jsonSchema: textbookResolutionJSONSchema,
+  })
+  return {
+    ...parseAutonomousTextbookResolution(result.rawOutput),
+    providerId: provider.id,
+    model: provider.model,
   }
 }
 

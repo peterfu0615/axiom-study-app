@@ -213,14 +213,14 @@
 .ax-async-state--error { align-items: flex-start; justify-content: flex-start; min-height: auto; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border)); border-radius: var(--panel-radius); color: var(--muted); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 .ax-async-state--error strong { color: var(--danger); }
 
-.ax-error-state { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--ax-space-6); padding: var(--ax-space-5) var(--ax-space-6); border: 1px solid color-mix(in srgb, var(--ax-danger-fg) 34%, var(--ax-border-default)); border-radius: var(--ax-radius-lg); color: var(--ax-text-secondary); background: var(--ax-danger-bg); }
-.ax-error-state__copy { min-width: 0; display: grid; gap: var(--ax-space-2); }
+.ax-error-state { width: min(100%, var(--ax-state-panel-max)); min-width: 0; max-width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--ax-space-6); margin-inline: auto; padding: var(--ax-space-5) var(--ax-space-6); border: 1px solid color-mix(in srgb, var(--ax-danger-fg) 34%, var(--ax-border-default)); border-radius: var(--ax-radius-lg); color: var(--ax-text-secondary); background: var(--ax-danger-bg); text-align: left; }
+.ax-error-state__copy { min-width: 0; flex: 1 1 auto; display: grid; gap: var(--ax-space-2); }
 .ax-error-state strong { color: var(--ax-danger-fg); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); font-weight: var(--ax-type-body-strong-weight); }
 .ax-error-state p { margin: 0; font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .ax-error-state details { margin-top: var(--ax-space-1); font-size: var(--ax-type-label-size); line-height: var(--ax-type-label-line); }
 .ax-error-state summary { width: max-content; cursor: pointer; }
-.ax-error-state code { display: block; max-width: 720px; margin-top: var(--ax-space-3); overflow-wrap: anywhere; color: var(--ax-text-secondary); white-space: pre-wrap; }
-.ax-error-state__actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--ax-space-4); }
+.ax-error-state code { display: block; max-width: 100%; margin-top: var(--ax-space-3); overflow-wrap: anywhere; color: var(--ax-text-secondary); white-space: pre-wrap; }
+.ax-error-state__actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--ax-space-4); }
 
 .ax-progress { display: grid; gap: 8px; }
 .ax-progress > div:first-child { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; }
