@@ -237,6 +237,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0033_today_engine_integrity.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 34,
+            description: "review_observability_indexes",
+            sql: include_str!("../migrations/0034_review_observability_indexes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

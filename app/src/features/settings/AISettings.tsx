@@ -13,8 +13,9 @@ import {
 } from '../../platform/database'
 import { ListboxSelect } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
+import { LearningStateMaintenance } from './LearningStateMaintenance'
 
-type SettingsTab = 'providers' | 'appearance' | 'about' | 'update'
+type SettingsTab = 'providers' | 'appearance' | 'maintenance' | 'about' | 'update'
 type SettingsMessage = { text: string; tone: 'success' | 'error' }
 
 function readableError(error: unknown): string {
@@ -187,6 +188,15 @@ export function AISettings() {
 
       <section className="settings-shell">
         <nav className="settings-tabs" role="tablist">
+          <button
+            aria-selected={tab === 'maintenance'}
+            className={tab === 'maintenance' ? 'active' : ''}
+            onClick={() => setTab('maintenance')}
+            role="tab"
+            type="button"
+          >
+            数据维护
+          </button>
           <button
             aria-selected={tab === 'providers'}
             className={tab === 'providers' ? 'active' : ''}
@@ -546,6 +556,8 @@ export function AISettings() {
                 <strong>{resolvedTheme === 'dark' ? '深色' : '浅色'}</strong>
               </p>
             </div>
+          ) : tab === 'maintenance' ? (
+            <LearningStateMaintenance />
           ) : tab === 'about' ? (
             <div className="settings-about-pane">
               <header>
