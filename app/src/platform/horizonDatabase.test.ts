@@ -267,7 +267,7 @@ describe('archiveTextbook soft delete', () => {
     await listHorizonSubjects()
     const textbookList = recorded.calls.find((call) => call.sql.includes('SELECT * FROM textbooks'))!
     expect(textbookList.sql).toContain('archived_at IS NULL')
-    const subjectList = recorded.calls.find((call) => call.sql.startsWith('SELECT subject FROM textbooks'))!
+    const subjectList = recorded.calls.find((call) => call.sql.startsWith('SELECT name AS subject FROM subjects'))!
     expect(subjectList.sql).toContain('archived_at IS NULL')
   })
 })

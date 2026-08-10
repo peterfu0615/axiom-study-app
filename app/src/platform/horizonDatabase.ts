@@ -466,15 +466,18 @@ function rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
 
 export async function listHorizonSubjects(): Promise<string[]> {
   const rows = await select<Array<{ subject: string }>>(
-    `SELECT subject FROM textbooks WHERE archived_at IS NULL
-     UNION
-     SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, '')))
-     FROM problems
-     WHERE status = 'saved' AND deleted_at IS NULL
-       AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) != ''
-     ORDER BY subject`,
+    `SELECT name AS subject FROM subjects WHERE archived_at IS NULL ORDER BY name`,
   )
   return rows.map((row) => String(row.subject)).filter(Boolean)
+}
+
+async function ensureSubjectRecord(subject: string, now = Date.now()) {
+  await execute(
+    `INSERT INTO subjects(name, archived_at, created_at, updated_at)
+     VALUES ($1, NULL, $2, $2)
+     ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
+    [subject.trim(), now],
+  )
 }
 
 export async function listTextbooks(subject?: string): Promise<Textbook[]> {
@@ -872,6 +875,7 @@ export async function createManualTextbook(subject: string, title: string) {
   const textbookId = id()
   await ensureTaxonomyVersion(subject)
   await transaction(async () => {
+    await ensureSubjectRecord(subject, now)
     await execute(
       `INSERT INTO textbooks (
         id, subject, title, source_type, extraction_status, extraction_method,
@@ -894,31 +898,32 @@ export async function importTextbook(
   await ensureTaxonomyVersion(subject)
   try {
     await transaction(async () => {
-    await execute(
-      `INSERT INTO textbooks (
-        id, subject, title, source_type, source_path, content_hash,
-        extraction_status, extraction_method, is_current, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'needs_review', $7, 0, $8, $8)`,
-      [
-        textbookId,
-        subject.trim(),
-        title.trim(),
-        imported.sourceType,
-        imported.sourcePath,
-        imported.contentHash,
-        imported.extraction.extractionMethod,
-        now,
-      ],
-    )
-    await insertTextbookPages({
-      textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
-      now, pages: imported.extraction.pages,
-    })
-    await persistNormalizedKnowledgeNodes({
-      textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
-      extractionMethod: imported.extraction.extractionMethod, now,
-      structure: normalizeTextbookStructure({ outline: imported.extraction.outline }),
-    })
+      await ensureSubjectRecord(subject, now)
+      await execute(
+        `INSERT INTO textbooks (
+          id, subject, title, source_type, source_path, content_hash,
+          extraction_status, extraction_method, is_current, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'needs_review', $7, 0, $8, $8)`,
+        [
+          textbookId,
+          subject.trim(),
+          title.trim(),
+          imported.sourceType,
+          imported.sourcePath,
+          imported.contentHash,
+          imported.extraction.extractionMethod,
+          now,
+        ],
+      )
+      await insertTextbookPages({
+        textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
+        now, pages: imported.extraction.pages,
+      })
+      await persistNormalizedKnowledgeNodes({
+        textbookId, subject: subject.trim(), sourcePath: imported.sourcePath,
+        extractionMethod: imported.extraction.extractionMethod, now,
+        structure: normalizeTextbookStructure({ outline: imported.extraction.outline }),
+      })
     })
   } catch (error) {
     await removeTextbookSource(imported.sourcePath).catch(() => {})
@@ -1376,6 +1381,7 @@ async function persistImportedTextbook(
   })
   await ensureTaxonomyVersion(subject)
   await transaction(async () => {
+    await ensureSubjectRecord(subject, now)
     await execute(
       `INSERT INTO textbooks (
         id, subject, title, grade, volume, publisher, edition, source_type, source_path,
@@ -1787,6 +1793,55 @@ export async function archiveTextbook(textbookId: string): Promise<boolean> {
        WHERE matched_textbook_id = $2 AND textbook_match_locked = 0`,
       [now, textbookId],
     )
+    return true
+  })
+}
+
+export interface SubjectDeletionImpact {
+  textbookCount: number
+  problemCount: number
+  skillStateCount: number
+  reviewAttemptCount: number
+}
+
+export async function getSubjectDeletionImpact(subject: string): Promise<SubjectDeletionImpact | null> {
+  const rows = await select<Array<Record<string, unknown>>>(
+    `SELECT
+      (SELECT COUNT(*) FROM textbooks WHERE subject = $1 AND archived_at IS NULL) AS textbook_count,
+      (SELECT COUNT(*) FROM problems WHERE trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1 AND deleted_at IS NULL AND archived_at IS NULL) AS problem_count,
+      (SELECT COUNT(*) FROM skill_states WHERE subject = $1) AS skill_state_count,
+      (SELECT COUNT(*) FROM review_attempts WHERE subject = $1) AS review_attempt_count
+     WHERE EXISTS (SELECT 1 FROM subjects WHERE name = $1 AND archived_at IS NULL)`,
+    [subject.trim()],
+  )
+  const row = rows[0]
+  return row ? {
+    textbookCount: Number(row.textbook_count ?? 0),
+    problemCount: Number(row.problem_count ?? 0),
+    skillStateCount: Number(row.skill_state_count ?? 0),
+    reviewAttemptCount: Number(row.review_attempt_count ?? 0),
+  } : null
+}
+
+export async function archiveSubject(subject: string): Promise<boolean> {
+  const name = subject.trim()
+  if (!name) return false
+  const now = Date.now()
+  return transaction(async () => {
+    const archived = await execute(
+      `UPDATE subjects SET archived_at = $1, updated_at = $1
+       WHERE name = $2 AND archived_at IS NULL`,
+      [now, name],
+    )
+    if (archived.rowsAffected === 0) return false
+    await execute(`UPDATE textbooks SET archived_at = $1, is_current = 0, updated_at = $1 WHERE subject = $2 AND archived_at IS NULL`, [now, name])
+    await execute(`UPDATE knowledge_nodes SET archived_at = $1, updated_at = $1 WHERE subject = $2 AND archived_at IS NULL`, [now, name])
+    await execute(`UPDATE tag_definitions SET lifecycle_status = 'archived', archived_at = $1, updated_at = $1 WHERE subject = $2 AND archived_at IS NULL`, [now, name])
+    await execute(`UPDATE problems SET archived_at = $1, updated_at = $1 WHERE trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $2 AND deleted_at IS NULL AND archived_at IS NULL`, [now, name])
+    await execute(`UPDATE problem_tags SET superseded_at = $1, updated_at = $1 WHERE subject = $2 AND superseded_at IS NULL`, [now, name])
+    await execute(`UPDATE review_modules SET status = 'deferred' WHERE subject = $1 AND status = 'pending'`, [name])
+    await execute(`DELETE FROM skill_states WHERE subject = $1`, [name])
+    await execute(`DELETE FROM skill_bundle_states WHERE subject = $1`, [name])
     return true
   })
 }

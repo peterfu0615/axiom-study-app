@@ -17,10 +17,12 @@ import type { KnowledgeNode, Textbook } from '../../domain/horizon'
 import {
   addKnowledgeEdge,
   archiveKnowledgeNode,
+  archiveSubject,
   archiveTextbook,
   confirmKnowledgeNode,
   createManualTextbook,
   getCurriculumReviewCount,
+  getSubjectDeletionImpact,
   getTextbookDeletionImpact,
   listHorizonSubjects,
   listKnowledgeEdges,
@@ -29,6 +31,7 @@ import {
   mergeKnowledgeNodes,
   saveKnowledgeNode,
   type TextbookDeletionImpact,
+  type SubjectDeletionImpact,
 } from '../../platform/horizonDatabase'
 import { CurriculumImportFlow } from './CurriculumImportFlow'
 import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
@@ -127,6 +130,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [busy, setBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Textbook | null>(null)
   const [deleteImpact, setDeleteImpact] = useState<TextbookDeletionImpact | null>(null)
+  const [deleteSubjectOpen, setDeleteSubjectOpen] = useState(false)
+  const [deleteSubjectImpact, setDeleteSubjectImpact] = useState<SubjectDeletionImpact | null>(null)
   const [pendingReviewCount, setPendingReviewCount] = useState(0)
 
   const selectedTextbook = textbooks.find((book) => book.id === textbookId) ?? null
@@ -317,6 +322,31 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     }
   }
 
+  const openDeleteSubjectDialog = async () => {
+    if (!subject) return
+    try {
+      const impact = await getSubjectDeletionImpact(subject)
+      if (!impact) throw new Error('该科目不存在或已删除')
+      setDeleteSubjectImpact(impact)
+      setDeleteSubjectOpen(true)
+    } catch (reason) { setError(String(reason)) }
+  }
+
+  const confirmDeleteSubject = async () => {
+    if (!subject || !deleteSubjectImpact) return
+    setBusy(true)
+    try {
+      const removed = await archiveSubject(subject)
+      if (!removed) throw new Error('该科目不存在或已删除')
+      setDeleteSubjectOpen(false)
+      setDeleteSubjectImpact(null)
+      const next = await listHorizonSubjects()
+      setSubjects(next)
+      setSubject(next[0] ?? '')
+      setTextbookId(null)
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
   const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
   const visibleNodeIds = useMemo(() => matchingKnowledgeNodeIds(nodes, query), [nodes, query])
   const chapterCount = nodes.filter((node) => node.nodeType === 'chapter' && !node.isUnclassified).length
@@ -378,6 +408,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       <div className="curriculum-filters">
         <ListboxSelect label="科目" onValueChange={selectSubject} options={subjects.length ? subjects.map((item) => ({ value: item, label: item })) : [{ value: '', label: '暂无课程' }]} value={subject} />
         <ListboxSelect disabled={!subject || !textbooks.length} label="教材" onValueChange={(value) => setTextbookId(value || null)} options={textbooks.length ? textbooks.map((book) => ({ value: book.id, label: book.title })) : [{ value: '', label: '暂无教材' }]} value={textbookId ?? ''} />
+        {subject && <Menu label="科目操作"><MenuItem className="is-danger" disabled={busy} onClick={() => void openDeleteSubjectDialog()}>删除科目</MenuItem></Menu>}
       </div>
 
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }, { value: 'review', label: '审核确认', count: pendingReviewCount }]} value={view} />
@@ -424,6 +455,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
         <div className="curriculum-dialog-form"><label>科目<input onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /></label><label>教材或课程名称<input onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => { if (!busy) setDeleteSubjectOpen(false) }} open={deleteSubjectOpen} title={`删除「${subject}」？`}>
+        <div className="curriculum-dialog-form">
+          <p>该科目的 {deleteSubjectImpact?.textbookCount ?? 0} 本教材、{deleteSubjectImpact?.problemCount ?? 0} 道当前错题和学习状态将归档或移除。已完成的 {deleteSubjectImpact?.reviewAttemptCount ?? 0} 次复习、题目快照和不可变日志会保留。</p>
+          <div className="curriculum-dialog-actions"><Button disabled={busy} onClick={() => setDeleteSubjectOpen(false)} variant="ghost">取消</Button><Button loading={busy} onClick={() => void confirmDeleteSubject()} variant="danger">删除科目</Button></div>
+        </div>
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
