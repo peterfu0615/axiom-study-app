@@ -10,6 +10,7 @@ import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
 import { TodayWorkspace } from './features/today/TodayWorkspace'
+import { InsightsWorkspace } from './features/insights/InsightsWorkspace'
 import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
@@ -65,6 +66,8 @@ function AppRuntimeShell({
         <CurriculumWorkspace />
       ) : section === 'settings' ? (
         <AISettings />
+      ) : section === 'insights' ? (
+        <InsightsWorkspace />
       ) : (
         <ModulePlaceholder section={section} />
       )}

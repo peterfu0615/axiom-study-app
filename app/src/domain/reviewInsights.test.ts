@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vitest'
+import { initialReviewSkillState, type ReviewTag } from './review'
+import { buildReviewInsights, type InsightRangeDays, type ReviewInsightRecord } from './reviewInsights'
+
+const now = new Date(2026, 8, 2, 10).getTime()
+const tag = (type: ReviewTag['type'], name: string): ReviewTag => ({ id: `${type}-${name}`, name, type, role: 'primary' })
+const record = (id: string, date: string, rating: ReviewInsightRecord['rating'] = 'good', overrides: Partial<ReviewInsightRecord> = {}): ReviewInsightRecord => ({
+  moduleId: id, sessionDate: date, status: 'completed', completedAt: now,
+  sourceProblemId: id, rating,
+  tags: [tag('knowledge', '函数'), tag('method', '数形结合'), tag('model', '图像交点')],
+  errorCategories: [tag('error', '漏条件')], ...overrides,
+})
+const build = (records: ReviewInsightRecord[], rangeDays: InsightRangeDays = 7) => buildReviewInsights({ records, rangeDays, now, changes: [], skills: [] })
+
+describe('review insights', () => {
+  it('renders a complete zero-data range', () => {
+    const result = build([])
+    expect(result.trend).toHaveLength(7)
+    expect(result.overview.completionRate).toBeNull()
+  })
+
+  it('aggregates one day, all four ratings, deferred and completion', () => {
+    const items = [record('a', '2026-09-02', 'again'), record('b', '2026-09-02', 'hard'), record('c', '2026-09-02', 'good'), record('d', '2026-09-02', 'easy'), record('e', '2026-09-02', null, { status: 'deferred' })]
+    const result = build(items)
+    expect(result.overview).toMatchObject({ completedUnits: 4, completedProblems: 4, deferredUnits: 1, completionRate: .8 })
+    expect(result.ratings).toEqual({ again: 1, hard: 1, good: 1, easy: 1 })
+  })
+
+  it('supports 7 and 30 local days across a month boundary', () => {
+    const items = [record('aug', '2026-08-31'), record('sep', '2026-09-02')]
+    expect(build(items, 7).overview.completedUnits).toBe(2)
+    expect(build(items, 30).trend).toHaveLength(30)
+  })
+
+  it('aggregates snapshot knowledge, method, model and errors with long names', () => {
+    const long = '这是一个很长但仍应完整保留并在界面换行的解题方法标签'
+    const result = build([record('a', '2026-09-02', 'again', { tags: [tag('knowledge', '函数'), tag('method', long), tag('model', '参数模型')] }), record('b', '2026-09-02', 'good')])
+    expect(result.themes.map((item) => item.type)).toEqual(expect.arrayContaining(['knowledge', 'method', 'model']))
+    expect(result.themes.some((item) => item.name === long)).toBe(true)
+    expect(result.recurringErrors[0]).toMatchObject({ name: '漏条件', count: 2, difficultCount: 1 })
+  })
+
+  it('uses historical snapshots even when a problem is soft deleted or current tags change', () => {
+    const historical = record('deleted-problem', '2026-09-01', 'good', { tags: [tag('knowledge', '历史名称')] })
+    expect(build([historical]).themes[0].name).toBe('历史名称')
+  })
+
+  it('groups current mastery without inventing historical trends', () => {
+    const base = initialReviewSkillState()
+    const result = buildReviewInsights({ records: [], rangeDays: 7, now, changes: [], skills: [
+      { subject: '数学', tagId: 'stable', name: '稳定', type: 'knowledge', state: { ...base, masteryEstimate: .8, retrievability: .8, uncertainty: .4 } },
+      { subject: '数学', tagId: 'working', name: '巩固', type: 'method', state: { ...base, masteryEstimate: .6, retrievability: .6 } },
+      { subject: '数学', tagId: 'attention', name: '关注', type: 'model', state: { ...base, masteryEstimate: .3 } },
+    ] })
+    expect(result.mastery.stable).toHaveLength(1)
+    expect(result.mastery.consolidating).toHaveLength(1)
+    expect(result.mastery.attention).toHaveLength(1)
+    expect(result.trend.every((day) => day.masteryDelta === null)).toBe(true)
+  })
+})
