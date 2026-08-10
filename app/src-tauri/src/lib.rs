@@ -243,6 +243,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0034_review_observability_indexes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 35,
+            description: "review_history_join_indexes",
+            sql: include_str!("../migrations/0035_review_history_join_indexes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
