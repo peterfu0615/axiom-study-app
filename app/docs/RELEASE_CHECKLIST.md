@@ -56,7 +56,8 @@ npm run tauri -- build
 
 # 4. 验证产物
 ls -la src-tauri/target/release/bundle/dmg/
-codesign -dv src-tauri/target/release/bundle/macos/Axiom.app  # 确认 adhoc
+codesign --verify --deep --strict src-tauri/target/release/bundle/macos/Axiom.app
+codesign -dv src-tauri/target/release/bundle/macos/Axiom.app  # 确认签名身份
 
 # 5. 同步版本号（如需更新）
 node scripts/bump-version.mjs <new-version>

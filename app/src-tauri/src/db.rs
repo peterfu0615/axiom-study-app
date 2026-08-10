@@ -9,6 +9,15 @@ use std::time::Duration;
 use tauri::{async_runtime::Mutex, AppHandle, Manager};
 use tauri_plugin_sql::Migration;
 
+/// 当前应用不认识、但数据库已经应用过的 migration 的稳定错误前缀。
+///
+/// 这意味着用户误装了旧版本应用；数据本身不应被修改或回退，只需升级应用。
+pub const DATABASE_SCHEMA_AHEAD_PREFIX: &str = "数据库由更新版本的 Axiom 创建：";
+
+pub fn is_database_schema_ahead_error(error: &str) -> bool {
+    error.starts_with(DATABASE_SCHEMA_AHEAD_PREFIX)
+}
+
 /// 单连接 SQLite 状态。
 ///
 /// tauri-plugin-sql 内部使用多连接池（默认 5），BEGIN/COMMIT 会被路由到不同连接，
@@ -135,6 +144,7 @@ pub(crate) async fn migrate_embedded_schema(
     .map_err(|error| format!("读取 migration 记录失败：{error}"))?;
 
     let mut applied = std::collections::HashSet::with_capacity(applied_rows.len());
+    let latest_supported = migrations.last().map_or(0, |migration| migration.version);
     for row in applied_rows {
         let version: i64 = row
             .try_get("version")
@@ -146,7 +156,9 @@ pub(crate) async fn migrate_embedded_schema(
             .try_get("checksum")
             .map_err(|error| format!("读取 migration 校验值失败：{error}"))?;
         let Some(migration) = known.get(&version) else {
-            return Err(format!("数据库包含未知 migration：{version}"));
+            return Err(format!(
+                "{DATABASE_SCHEMA_AHEAD_PREFIX}数据库已应用 migration {version}，当前应用最高支持 {latest_supported}。请升级 Axiom，切勿通过安装旧版本或手动修改数据库来回退。"
+            ));
         };
         if success != 1 {
             return Err(format!("数据库包含未完成 migration：{version}"));
@@ -526,9 +538,10 @@ pub async fn db_select(
 
 #[cfg(test)]
 mod tests {
-    use super::column_to_value;
+    use super::{column_to_value, is_database_schema_ahead_error, migrate_embedded_schema};
     use serde_json::json;
-    use sqlx::{Connection, Row};
+    use sqlx::{Connection, Executor, Row};
+    use tauri_plugin_sql::{Migration, MigrationKind};
 
     #[test]
     fn computed_integer_columns_are_serialized_as_numbers() {
@@ -543,6 +556,47 @@ mod tests {
             .unwrap();
             let column = row.columns().first().unwrap();
             assert_eq!(column_to_value(&row, column), json!(1));
+        });
+    }
+
+    #[test]
+    fn reports_a_newer_database_schema_as_an_upgrade_requirement() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = sqlx::SqliteConnection::connect(":memory:").await.unwrap();
+            conn.execute(
+                "CREATE TABLE _sqlx_migrations (
+                    version BIGINT PRIMARY KEY NOT NULL,
+                    description TEXT NOT NULL,
+                    installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    success BOOLEAN NOT NULL,
+                    checksum BLOB NOT NULL,
+                    execution_time BIGINT NOT NULL
+                )",
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations
+                 (version, description, success, checksum, execution_time)
+                 VALUES (2, 'future_schema', 1, X'00', 0)",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+            let migrations = vec![Migration {
+                version: 1,
+                description: "initial",
+                sql: "CREATE TABLE sample (id INTEGER);",
+                kind: MigrationKind::Up,
+            }];
+            let error = migrate_embedded_schema(&mut conn, &migrations)
+                .await
+                .unwrap_err();
+
+            assert!(is_database_schema_ahead_error(&error));
+            assert!(error.contains("migration 2"));
+            assert!(error.contains("最高支持 1"));
         });
     }
 }

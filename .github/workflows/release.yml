@@ -119,6 +119,19 @@ jobs:
           echo "::warning::Unsigned DMG cannot be notarized and will trigger Gatekeeper warnings."
           npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
 
+      - name: Verify macOS app bundle signature
+        run: |
+          app="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/macos/Axiom.app"
+          if ! codesign --verify --deep --strict "$app"; then
+            if [ "${{ steps.signing.outputs.signing }}" = "enabled" ]; then
+              echo "::error::Developer ID signed app bundle did not pass codesign verification."
+              exit 1
+            fi
+            echo "::warning::Repairing incomplete unsigned Beta bundle with ad-hoc signature."
+            codesign --force --deep --sign - "$app"
+            codesign --verify --deep --strict "$app"
+          fi
+
       - name: Notarize (if signed)
         if: ${{ steps.signing.outputs.signing == 'enabled' }}
         run: |

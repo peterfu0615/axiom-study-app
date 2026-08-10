@@ -379,9 +379,10 @@ fn current_app_bundle_path() -> Result<PathBuf, String> {
 /// 脚本逻辑：
 /// 1. 等待当前进程退出（PID 轮询，最长 30 秒）
 /// 2. 删除旧 .app，移动新 .app 到原位置
-/// 3. 移除 quarantine 属性（Beta 未签名构建需要）
-/// 4. 清理临时目录
-/// 5. 重新启动应用
+/// 3. 验证 bundle 签名；历史 Beta 包签名不完整时补充 ad-hoc 签名
+/// 4. 移除 quarantine 属性（Beta 未签名构建需要）
+/// 5. 清理临时目录
+/// 6. 重新启动应用
 fn write_install_script(
     pid: u32,
     app_bundle_path: &Path,
@@ -431,6 +432,21 @@ log "替换 $APP_PATH ← $NEW_APP_PATH ..."
 rm -rf "$APP_PATH"
 if ! mv "$NEW_APP_PATH" "$APP_PATH"; then
     log "错误：无法移动新应用到 $APP_PATH"
+    exit 1
+fi
+
+# Release 包必须是可验证的 bundle。Developer ID 签名会直接通过；旧 Beta
+# 资产若只签了可执行文件，则在本地补齐 ad-hoc bundle 签名，避免 Finder 因
+# "code has no resources" 拒绝启动。
+if ! codesign --verify --deep --strict "$APP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "应用 bundle 签名不完整，补充 ad-hoc 签名..."
+    if ! codesign --force --deep --sign - "$APP_PATH" >> "$LOG_FILE" 2>&1; then
+        log "错误：无法修复应用 bundle 签名。"
+        exit 1
+    fi
+fi
+if ! codesign --verify --deep --strict "$APP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "错误：应用 bundle 签名校验失败。"
     exit 1
 fi
 
@@ -536,6 +552,8 @@ mod tests {
         let contents = std::fs::read_to_string(&script).unwrap();
         assert!(contents.contains("APP_PATH=\"/Applications/Axiom.app\""));
         assert!(contents.contains("rm -rf \"$APP_PATH\""));
+        assert!(contents.contains("codesign --verify --deep --strict \"$APP_PATH\""));
+        assert!(contents.contains("codesign --force --deep --sign - \"$APP_PATH\""));
         assert!(!contents.contains("Application Support"));
         assert!(!contents.contains("axiom.db"));
         assert!(!contents.contains("media/"));

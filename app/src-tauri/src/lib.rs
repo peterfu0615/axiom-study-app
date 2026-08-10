@@ -354,6 +354,15 @@ pub fn run() {
                         log::info!("数据库连接初始化成功");
                     }
                     Err(e) => {
+                        if db::is_database_schema_ahead_error(&e) {
+                            log::error!(
+                                "{e} 当前应用版本：{}。学习数据没有被修改；现在打开最新版本下载页。",
+                                env!("CARGO_PKG_VERSION")
+                            );
+                            let _ = std::process::Command::new("open")
+                                .arg("https://github.com/peterfu0615/axiom-update-pusher/releases/latest")
+                                .spawn();
+                        }
                         // 数据库是全部命令的前置依赖，初始化失败属于启动期致命错误：
                         // 记录日志后直接退出，避免应用以半残状态继续运行产生大面积报错。
                         log::error!("初始化数据库连接失败：{e}");
