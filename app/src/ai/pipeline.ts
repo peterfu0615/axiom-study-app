@@ -10,6 +10,7 @@ import {
   recoverProblemAITasks,
   updateProcessingModelRunProvider,
 } from '../platform/database'
+import { preferredRegions } from '../domain/problemRegions'
 import { resolveProblemTextbookContextBeforeAnalysis } from '../platform/horizonDatabase'
 import { normalizeAIProblemAnalysis } from '../domain/ai'
 import type { ResolvedTextbookContext } from '../domain/models'
@@ -104,10 +105,11 @@ async function drainPendingProblemAI() {
               ? await (async () => {
                   const regions = await getProblemRegions(activeRun.problemId)
                   const questionRegion = regions.find((region) => region.type === 'question')
+                  const diagrams = preferredRegions(regions, 'diagram')
                   return provider.analyzeProblem!({
                     ...activeRun.input,
                     questionImagePath: questionRegion?.imagePath ?? activeRun.input.cropImagePath,
-                    diagramImagePaths: regions.filter((region) => region.type === 'diagram' && region.imagePath).map((region) => region.imagePath as string),
+                    diagramImagePaths: diagrams.filter((region) => region.imagePath).map((region) => region.imagePath as string),
                     answerImagePaths: regions.filter((region) => region.type === 'answer' && region.imagePath).map((region) => region.imagePath as string),
                     regionIds: regions.map((region) => region.id),
                     ...(resolvedTextbookContext ? { resolvedTextbookContext } : {}),
@@ -143,7 +145,9 @@ async function drainPendingProblemAI() {
 
       let result = normalizeAIProblemAnalysis(completedProviderResult.analysis)
       let diagramImagePath: string | null = null
-      if (result.hasDiagram && hasUsableDiagramBounds(result.diagramBBox)) {
+      const manualDiagram = preferredRegions(await getProblemRegions(activeRun.problemId), 'diagram')
+        .find((region) => region.source === 'manual')
+      if (!manualDiagram && result.hasDiagram && hasUsableDiagramBounds(result.diagramBBox)) {
         try {
           const diagram = await cropProblemDiagram(activeRun.problemId, activeRun.input.cropImagePath, result.diagramBBox)
           diagramImagePath = diagram.path

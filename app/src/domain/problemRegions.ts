@@ -1,5 +1,14 @@
 import type { ProblemRegion, ProblemRegionType } from './models'
 
+export function preferredRegions(
+  regions: ProblemRegion[],
+  type: ProblemRegionType,
+) {
+  const matching = regions.filter((region) => region.type === type)
+  const manual = matching.filter((region) => region.source === 'manual')
+  return manual.length ? manual : matching.filter((region) => region.source === 'auto')
+}
+
 export function changedRegionTypes(
   before: ProblemRegion[],
   after: ProblemRegion[],
@@ -10,6 +19,7 @@ export function changedRegionTypes(
       .map((region) => ({
         id: region.id,
         rect: region.rect,
+        source: region.source,
       }))
       .sort((left, right) => left.id.localeCompare(right.id))
   return (['question', 'answer', 'diagram', 'annotation'] as const).filter(
@@ -18,4 +28,3 @@ export function changedRegionTypes(
       JSON.stringify(snapshot(after, type)),
   )
 }
-

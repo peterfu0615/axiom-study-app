@@ -217,6 +217,26 @@ describe('problem AI worker', () => {
     )
   })
 
+  it('sends and preserves a manual diagram instead of recropping the AI box', async () => {
+    const analyzeProblem = vi.fn().mockResolvedValue({
+      analysis: { ...analysis, hasDiagram: true, diagramKind: 'geometry', diagramBBox: { x: .1, y: .1, width: .2, height: .2 } },
+      rawOutput: '{}',
+      repairStrategy: null,
+    })
+    getProblemRegions.mockResolvedValue([
+      { id: 'diagram-manual', problemId: run.problemId, type: 'diagram', rect: { x: .6, y: .5, width: .3, height: .3 }, imagePath: '/tmp/manual.jpg', source: 'manual', createdAt: 1, updatedAt: 1 },
+      { id: 'ai-diagram-problem-1', problemId: run.problemId, type: 'diagram', rect: { x: .1, y: .1, width: .2, height: .2 }, imagePath: '/tmp/auto.jpg', source: 'auto', createdAt: 2, updatedAt: 2 },
+    ])
+    setAIProviderForTests({ id: 'test', model: 'test-v1', supportsVision: true, supportsText: true, analyzeProblem, analyzeProblemImage: vi.fn() })
+    claimNextProblemAIModelRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null)
+
+    await runProblemAIWorker()
+
+    expect(analyzeProblem).toHaveBeenCalledWith(expect.objectContaining({ diagramImagePaths: ['/tmp/manual.jpg'] }))
+    expect(cropProblemDiagram).not.toHaveBeenCalled()
+    expect(completeProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({ hasDiagram: true }), null)
+  })
+
   it('records provider failures without throwing out of the worker', async () => {
     const error = new Error('provider unavailable')
     setAIProviderForTests({

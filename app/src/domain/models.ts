@@ -212,6 +212,7 @@ export interface ProblemRegion {
   type: ProblemRegionType
   rect: NormalizedRect
   imagePath: string | null
+  source: 'manual' | 'auto'
   createdAt: number
   updatedAt: number
 }

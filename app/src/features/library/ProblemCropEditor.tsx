@@ -67,6 +67,7 @@ export function ProblemCropEditor({
         type: 'question' as const,
         rect: problem.cropRect,
         imagePath: problem.cropImagePath,
+        source: 'manual' as const,
         createdAt: problem.createdAt,
         updatedAt: problem.updatedAt,
       }
@@ -101,6 +102,7 @@ export function ProblemCropEditor({
             problemId: problem.id,
             type: 'question' as const,
             imagePath: null,
+            source: 'manual' as const,
             createdAt: Date.now(),
             updatedAt: Date.now(),
           }),
@@ -143,6 +145,7 @@ export function ProblemCropEditor({
         type,
         rect: lowerHalf(rect),
         imagePath: null,
+        source: 'manual',
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },

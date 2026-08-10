@@ -986,6 +986,7 @@ export async function saveProblems(
     type: ProblemRegionType
     rect: Problem['cropRect']
     imagePath: string | null
+    source: 'manual' | 'auto'
     createdAt: number
   }> = []
   try {
@@ -1004,6 +1005,7 @@ export async function saveProblems(
         type: 'question',
         rect: block.rect,
         imagePath: questionImage.path,
+        source: block.source,
         createdAt: now,
       })
       const selectedRegions = regionSelections[block.id] ?? {
@@ -1030,6 +1032,7 @@ export async function saveProblems(
           type,
           rect: regionRect,
           imagePath: regionImage.path,
+          source: 'manual',
           createdAt: now,
         })
       }
@@ -1093,11 +1096,12 @@ export async function saveProblems(
         for (const region of regionRows) {
           await db.execute(
             `INSERT INTO problem_regions (
-              id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+              id, problem_id, region_type, x, y, width, height, image_path, source, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
             ON CONFLICT(id) DO UPDATE SET
               region_type = excluded.region_type, x = excluded.x, y = excluded.y,
               width = excluded.width, height = excluded.height, image_path = excluded.image_path,
+              source = excluded.source,
               updated_at = excluded.updated_at`,
             [
               region.id,
@@ -1108,6 +1112,7 @@ export async function saveProblems(
               region.rect.width,
               region.rect.height,
               region.imagePath,
+              region.source,
               region.createdAt,
             ],
           )
@@ -1189,6 +1194,7 @@ function rowToProblemRegion(row: Record<string, unknown>): ProblemRegion {
       height: Number(row.height),
     },
     imagePath: nullableString(row.image_path),
+    source: row.source === 'manual' ? 'manual' : 'auto',
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   }
@@ -1246,8 +1252,8 @@ export async function saveProblemRegions(
       for (const region of regions) {
         await db.execute(
           `INSERT INTO problem_regions (
-            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            id, problem_id, region_type, x, y, width, height, image_path, source, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           ON CONFLICT(id) DO UPDATE SET
             region_type = excluded.region_type,
             x = excluded.x,
@@ -1255,6 +1261,7 @@ export async function saveProblemRegions(
             width = excluded.width,
             height = excluded.height,
             image_path = excluded.image_path,
+            source = excluded.source,
             updated_at = excluded.updated_at`,
           [
             region.id,
@@ -1265,6 +1272,7 @@ export async function saveProblemRegions(
             region.rect.width,
             region.rect.height,
             region.imagePath,
+            region.source,
             region.createdAt || now,
             now,
           ],
@@ -1296,6 +1304,7 @@ export async function getPrimaryQuestionRegion(problem: SavedProblem) {
       type: 'question' as const,
       rect: problem.cropRect,
       imagePath: problem.cropImagePath,
+      source: 'manual' as const,
       createdAt: problem.createdAt,
       updatedAt: problem.updatedAt,
     }
@@ -2757,6 +2766,14 @@ export async function completeProblemAIModelRun(
       if (completedRun.rowsAffected !== 1) {
         throw new Error('AI Task 已不再处于处理中状态')
       }
+      if (analysis.subject.trim()) {
+        await db.execute(
+          `INSERT INTO subjects(name, archived_at, created_at, updated_at)
+           VALUES ($1, NULL, $2, $2)
+           ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
+          [analysis.subject.trim(), now],
+        )
+      }
       const completedProblem = await db.execute(
         `UPDATE problems
          SET ai_status = 'completed',
@@ -2812,8 +2829,8 @@ export async function completeProblemAIModelRun(
         }
         await db.execute(
           `INSERT INTO problem_regions (
-            id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-          ) VALUES ($1, $2, 'diagram', $3, $4, $5, $6, $7, $8, $8)
+            id, problem_id, region_type, x, y, width, height, image_path, source, created_at, updated_at
+          ) VALUES ($1, $2, 'diagram', $3, $4, $5, $6, $7, 'auto', $8, $8)
           ON CONFLICT(id) DO UPDATE SET
             x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height,
             image_path = excluded.image_path, updated_at = excluded.updated_at`,
@@ -3111,6 +3128,15 @@ export async function updateProblemUserFields(
       stemMarkdown !== previousStemMarkdown ||
       JSON.stringify(knowledgePoints) !== JSON.stringify(previousKnowledgePoints)
 
+    if (nextSubject) {
+      await db.execute(
+        `INSERT INTO subjects(name, archived_at, created_at, updated_at)
+         VALUES ($1, NULL, $2, $2)
+         ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
+        [nextSubject, now],
+      )
+    }
+
     const result = await db.execute(
       `UPDATE problems
        SET user_title = $1,
@@ -3294,8 +3320,8 @@ export async function replaceProblemRegions(
         for (const region of preparedRegions) {
           await db.execute(
             `INSERT INTO problem_regions (
-              id, problem_id, region_type, x, y, width, height, image_path, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+              id, problem_id, region_type, x, y, width, height, image_path, source, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
             [
               region.id,
               id,
@@ -3305,6 +3331,7 @@ export async function replaceProblemRegions(
               region.rect.width,
               region.rect.height,
               region.imagePath,
+              region.source,
               region.createdAt,
               region.updatedAt,
             ],

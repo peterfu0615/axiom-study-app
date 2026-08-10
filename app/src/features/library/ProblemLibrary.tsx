@@ -21,6 +21,7 @@ import {
   deleteProblem,
   cancelProblemAI,
   getProblemSolution,
+  getProblemRegions,
   getReasoningAnalysis,
   getStudentAttempt,
   listProblemModelRuns,
@@ -33,6 +34,8 @@ import {
   setProblemArchived,
   updateProblemUserFields,
 } from '../../platform/database'
+import { preferredRegions } from '../../domain/problemRegions'
+import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
@@ -133,11 +136,13 @@ function ProblemDiagramImage({
   croppedPath,
   path,
   rect,
+  source,
 }: {
   alt: string
   croppedPath: string | null
   path: string
   rect: NormalizedRect
+  source: 'manual' | 'auto'
 }) {
   const [aspectRatio, setAspectRatio] = useState<number | null>(null)
   const [failed, setFailed] = useState(false)
@@ -190,7 +195,7 @@ function ProblemDiagramImage({
         />
       </div>
       <figcaption>
-        {croppedPath ? 'AI 自动抠取图形' : 'AI 识别图形'}
+        {source === 'manual' ? '手动选择图形' : croppedPath ? 'AI 自动抠取图形' : 'AI 识别图形'}
       </figcaption>
     </figure>
   )
@@ -209,6 +214,7 @@ export function ProblemLibrary() {
   const [solution, setSolution] = useState<Solution | null>(null)
   const [studentAttempt, setStudentAttempt] = useState<StudentAttempt | null>(null)
   const [reasoning, setReasoning] = useState<ReasoningAnalysis | null>(null)
+  const [selectedRegions, setSelectedRegions] = useState<ProblemRegion[]>([])
   const [editTitle, setEditTitle] = useState('')
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
@@ -332,20 +338,27 @@ export function ProblemLibrary() {
     () => problems.find((problem) => problem.id === selectedId) ?? null,
     [problems, selectedId],
   )
-  const selectedDiagramRect =
-    selected?.aiHasDiagram &&
-    isUsableDiagramRect(selected.aiDiagramBBox)
+  const selectedDiagramRegion = preferredRegions(selectedRegions, 'diagram')[0] ?? null
+  const selectedDiagramRect = selectedDiagramRegion?.rect ?? (
+    selected?.aiHasDiagram && isUsableDiagramRect(selected.aiDiagramBBox)
       ? selected.aiDiagramBBox
       : null
+  )
+  const selectedDiagramPath = selectedDiagramRegion?.imagePath ?? selected?.aiDiagramImagePath ?? null
   const selectedHasDisplayDiagram =
     Boolean(selectedDiagramRect) &&
-    Boolean(selected?.cropImagePath || selected?.aiDiagramImagePath)
+    Boolean(selected?.cropImagePath || selectedDiagramPath)
   const selectedIsProcessing =
     selected?.aiStatus === 'pending' || selected?.aiStatus === 'processing'
   const activeModelRun =
     modelRuns.find((run) => run.id === selected?.aiActiveModelRunId) ??
     modelRuns[0] ??
     null
+
+  useEffect(() => {
+    if (!selectedId) { setSelectedRegions([]); return }
+    void getProblemRegions(selectedId).then(setSelectedRegions).catch(() => setSelectedRegions([]))
+  }, [selectedId, problems])
 
   useEffect(() => {
     let cancelled = false
@@ -940,9 +953,10 @@ export function ProblemLibrary() {
                           {selectedDiagramRect && selectedHasDisplayDiagram && (
                             <ProblemDiagramImage
                               alt={`${selected.title}中的题目图形`}
-                              croppedPath={selected.aiDiagramImagePath}
+                              croppedPath={selectedDiagramPath}
                               path={selected.cropImagePath}
                               rect={selectedDiagramRect}
+                              source={selectedDiagramRegion?.source ?? 'auto'}
                             />
                           )}
                           {selectedIsProcessing && (

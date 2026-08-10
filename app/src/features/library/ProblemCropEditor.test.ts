@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProblemRegion } from '../../domain/models'
-import { changedRegionTypes } from '../../domain/problemRegions'
+import { changedRegionTypes, preferredRegions } from '../../domain/problemRegions'
 
 function region(
   id: string,
@@ -13,6 +13,7 @@ function region(
     type,
     rect: { x: 0.1, y, width: 0.8, height: 0.2 },
     imagePath: `/old/${id}.jpg`,
+    source: 'manual',
     createdAt: 1,
     updatedAt: 1,
   }
@@ -45,5 +46,23 @@ describe('changedRegionTypes', () => {
     const before = [region('question-1', 'question')]
     const after = [...before, region('diagram-1', 'diagram', 0.5)]
     expect(changedRegionTypes(before, after)).toEqual(['diagram'])
+  })
+})
+
+describe('preferredRegions', () => {
+  it('keeps a manual diagram as the source of truth over AI detection', () => {
+    const manual = region('diagram-manual', 'diagram', .6)
+    const auto = { ...region('ai-diagram-problem-1', 'diagram', .2), source: 'auto' as const }
+    expect(preferredRegions([auto, manual], 'diagram')).toEqual([manual])
+  })
+
+  it('uses an auto diagram when no manual diagram exists', () => {
+    const auto = { ...region('ai-diagram-problem-1', 'diagram'), source: 'auto' as const }
+    expect(preferredRegions([region('answer-1', 'answer'), auto], 'diagram')).toEqual([auto])
+  })
+
+  it('does not let question and answer regions replace a diagram', () => {
+    const diagram = region('diagram-1', 'diagram')
+    expect(preferredRegions([region('question-1', 'question'), region('answer-1', 'answer'), diagram], 'diagram')).toEqual([diagram])
   })
 })

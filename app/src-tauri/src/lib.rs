@@ -249,6 +249,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0035_review_history_join_indexes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 36,
+            description: "subject_and_region_provenance",
+            sql: include_str!("../migrations/0036_subject_and_region_provenance.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
