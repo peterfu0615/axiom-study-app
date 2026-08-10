@@ -64,4 +64,13 @@ describe('seven-day review forecast', () => {
     expect(forecast.some((item, index) => index > 0 && item.estimatedProblemCount === 1)).toBe(true)
     expect(JSON.stringify(before)).toBe(snapshot)
   })
+
+  it('keeps a 1,000-problem forecast deterministic without changing planner limits', () => {
+    const items = Array.from({ length: 1_000 }, (_, index) => candidate(`large-${index}`, now, [
+      tag('knowledge', `知识${index}`), tag('method', `方法${index}`),
+    ]))
+    const first = buildSevenDayReviewForecast(items, now)
+    expect(first[0]).toMatchObject({ estimatedUnitCount: 1_000, estimatedProblemCount: 1_000, loadLevel: 'heavy' })
+    expect(buildSevenDayReviewForecast(items, now)).toEqual(first)
+  })
 })

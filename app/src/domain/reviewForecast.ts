@@ -1,6 +1,6 @@
 import {
   addLocalReviewDays,
-  buildTodayReviewUnits,
+  buildReviewUnitPool,
   endOfLocalReviewDay,
   localReviewDate,
   startOfLocalReviewDay,
@@ -65,10 +65,7 @@ export function buildSevenDayReviewForecast(
 
   return days.map((dayStart, index) => {
     const candidatesForDay = buckets[index]
-    const units = buildTodayReviewUnits(candidatesForDay, {
-      now: dayStart + 12 * 60 * 60 * 1000,
-      maxModules: Math.max(1, candidatesForDay.length),
-    })
+    const units = buildReviewUnitPool(candidatesForDay, dayStart + 12 * 60 * 60 * 1000)
     return {
       date: localReviewDate(dayStart),
       dayStart,

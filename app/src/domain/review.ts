@@ -238,20 +238,37 @@ function unitSimilarity(left: ReviewUnitDraft, right: ReviewUnitDraft) {
   return reviewSimilarity(left.representativeProblems[0], right.representativeProblems[0])
 }
 
-export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: ReviewPlanOptions) {
+export function buildReviewUnitPool(candidates: ReviewCandidate[], now: number) {
   const eligible = candidates.filter((candidate) =>
     candidate.subject.trim() && candidate.stemMarkdown.trim())
   const ordered = [...eligible].sort((left, right) =>
-    reviewCandidatePriority(right, options.now) - reviewCandidatePriority(left, options.now) ||
+    reviewCandidatePriority(right, now) - reviewCandidatePriority(left, now) ||
     left.createdAt - right.createdAt || left.problemId.localeCompare(right.problemId))
   const clusters: ReviewCandidate[][] = []
+  const clustersByKnowledge = new Map<string, number[]>()
   ordered.forEach((candidate) => {
-    const cluster = clusters.find((items) => canCluster(items[0], candidate))
-    if (cluster) cluster.push(candidate)
-    else clusters.push([candidate])
+    const knowledgeKeys = [...tagKeys(candidate, 'knowledge')]
+    const possibleIndexes = [...new Set(knowledgeKeys.flatMap((key) => clustersByKnowledge.get(key) ?? []))]
+      .sort((left, right) => left - right)
+    const clusterIndex = possibleIndexes.find((index) => canCluster(clusters[index][0], candidate))
+    if (clusterIndex !== undefined) {
+      clusters[clusterIndex].push(candidate)
+      return
+    }
+    const nextIndex = clusters.length
+    clusters.push([candidate])
+    knowledgeKeys.forEach((key) => {
+      const indexes = clustersByKnowledge.get(key) ?? []
+      indexes.push(nextIndex)
+      clustersByKnowledge.set(key, indexes)
+    })
   })
 
-  const available = clusters.map((cluster) => buildUnit(cluster, options.now))
+  return clusters.map((cluster) => buildUnit(cluster, now))
+}
+
+export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: ReviewPlanOptions) {
+  const available = buildReviewUnitPool(candidates, options.now)
   const selected: ReviewUnitDraft[] = []
   const maxModules = options.maxModules ?? 2
   while (available.length && selected.length < maxModules) {

@@ -57,4 +57,14 @@ describe('review insights', () => {
     expect(result.mastery.attention).toHaveLength(1)
     expect(result.trend.every((day) => day.masteryDelta === null)).toBe(true)
   })
+
+  it('aggregates thousands of historical snapshots without per-record queries', () => {
+    const records = Array.from({ length: 3_000 }, (_, index) => record(
+      `history-${index}`, index % 2 ? '2026-09-01' : '2026-09-02', index % 4 === 0 ? 'again' : 'good',
+    ))
+    const result = build(records, 30)
+    expect(result.overview.completedUnits).toBe(3_000)
+    expect(result.themes.find((item) => item.name === '函数')?.count).toBe(3_000)
+    expect(result.recurringErrors[0].count).toBe(3_000)
+  })
 })
