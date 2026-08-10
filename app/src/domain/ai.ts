@@ -177,17 +177,8 @@ function compactTitleText(value: string) {
     .replace(/^-|-$/gu, '')
 }
 
-function fitTitleParts(parts: string[], maximumLength = 16) {
-  let output = ''
-  for (const part of parts.map(compactTitleText).filter(Boolean)) {
-    const separator = output ? '-' : ''
-    const remaining = maximumLength - Array.from(output + separator).length
-    if (remaining <= 0) break
-    const next = Array.from(part).slice(0, remaining).join('')
-    output += separator + next
-    if (next.length < part.length) break
-  }
-  return output
+function joinTitleParts(parts: string[]) {
+  return parts.map(compactTitleText).filter(Boolean).join('-')
 }
 
 export function normalizeAIProblemTitle(
@@ -208,8 +199,8 @@ export function normalizeAIProblemTitle(
     problemType,
     knowledgePoints[1] ?? '',
   ]
-  if (!proposed || directlyCopied) return fitTitleParts(fallbackParts)
-  return fitTitleParts(proposed.split('-'))
+  if (!proposed || directlyCopied) return joinTitleParts(fallbackParts)
+  return joinTitleParts(proposed.split('-'))
 }
 
 export function normalizeAIProblemAnalysis(

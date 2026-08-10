@@ -22,6 +22,7 @@ import {
 // statement-aware stub faithfully reproduces the transaction contract.
 const fakeDb = vi.hoisted(() => {
   const statements: string[] = []
+  const calls: Array<{ sql: string; params: unknown[] }> = []
   const modelRuns = new Map<
     string,
     {
@@ -44,6 +45,7 @@ const fakeDb = vi.hoisted(() => {
   let failOn: ((sql: string) => boolean) | null = null
   return {
     statements,
+    calls,
     modelRuns,
     selectHandlers,
     affectedOverrides,
@@ -53,6 +55,7 @@ const fakeDb = vi.hoisted(() => {
     shouldFail: (sql: string) => (failOn ? failOn(sql) : false),
     reset() {
       statements.length = 0
+      calls.length = 0
       selectHandlers.length = 0
       affectedOverrides.length = 0
       failOn = null
@@ -74,6 +77,7 @@ vi.mock('@tauri-apps/api/core', () => ({
     const sql = (args?.sql ?? '').trim()
     const params = args?.params ?? []
     fakeDb.statements.push(sql)
+    fakeDb.calls.push({ sql, params })
     if (fakeDb.shouldFail(sql)) {
       throw new Error(`injected statement failure: ${sql.slice(0, 80)}`)
     }
@@ -683,6 +687,14 @@ describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
     const prepareRead = sequence.findIndex((sql) => sql.includes('effective_subject'))
     expect(prepareRead).toBeGreaterThan(-1)
     expect(prepareRead).toBeLessThan(beginIndex)
+  })
+
+  it('persists a long normalized AI title without storage truncation', async () => {
+    seedCompletion()
+    const longTitle = '相似三角形的判定与性质-综合证明与计算题-圆内接四边形中的角度关系'
+    await completeProblemAIModelRun(run, { ...analysis, title: longTitle })
+    const write = fakeDb.calls.find(({ sql }) => sql.startsWith('UPDATE problems') && sql.includes("ai_status = 'completed'"))
+    expect(write?.params[0]).toBe(longTitle)
   })
 
   it('rolls back the whole completion and surfaces the error when taxonomy apply fails', async () => {

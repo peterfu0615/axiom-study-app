@@ -106,15 +106,24 @@ describe('normalizeAIProblemAnalysis', () => {
 })
 
 describe('normalizeAIProblemTitle', () => {
-  it('uses hyphen-separated compact titles with a 16-character limit', () => {
+  it('keeps a long model title intact while normalizing its separators', () => {
     const title = normalizeAIProblemTitle(
-      '分式 · 选择题 · 分式方程化简与求值',
+      '分式 · 选择题 · 含参数分式方程化简与求值',
       '选择题',
       ['分式'],
       '题干',
     )
-    expect(title).toBe('分式-选择题-分式方程化简与求值')
-    expect(Array.from(title).length).toBeLessThanOrEqual(16)
+    expect(title).toBe('分式-选择题-含参数分式方程化简与求值')
+    expect(Array.from(title).length).toBeGreaterThan(16)
+  })
+
+  it('does not truncate a long structured fallback title', () => {
+    expect(normalizeAIProblemTitle(
+      null,
+      '综合证明与计算题',
+      ['相似三角形的判定与性质', '圆内接四边形中的角度关系'],
+      '完整题干',
+    )).toBe('相似三角形的判定与性质-综合证明与计算题-圆内接四边形中的角度关系')
   })
 
   it('rejects a direct stem excerpt and falls back to structured fields', () => {
