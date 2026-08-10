@@ -117,7 +117,9 @@ jobs:
         run: |
           echo "::warning::No signing secrets configured. Producing UNSIGNED Beta build."
           echo "::warning::Unsigned DMG cannot be notarized and will trigger Gatekeeper warnings."
-          npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
+          # 在 Tauri 打包阶段完成 ad-hoc 签名，使 .app.zip 与 DMG 内的 app
+          # 都具备完整的 CodeResources；不能等 DMG 生成后再补签名。
+          APPLE_SIGNING_IDENTITY=- npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
 
       - name: Verify macOS app bundle signature
         run: |

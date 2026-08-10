@@ -52,7 +52,8 @@ cd src-tauri && cargo fmt -- --check && cargo clippy -- -D warnings && cargo tes
 
 # 3. 构建 Release（arm64）
 cd /Users/Peter/Coding/Axiom/app
-npm run tauri -- build
+# Beta 本地构建也必须在打包阶段写入完整 ad-hoc bundle 签名。
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build
 
 # 4. 验证产物
 ls -la src-tauri/target/release/bundle/dmg/
