@@ -30,6 +30,16 @@ function parseJSON<T>(value: unknown, fallback: T): T {
   try { return JSON.parse(value) as T } catch { return fallback }
 }
 
+export function resolveReviewQuestionMedia(
+  snapshot: { questionImagePath?: string | null; diagramImagePaths?: string[] },
+  current: { questionImagePath: string | null; diagramImagePath: string | null },
+) {
+  return {
+    questionImagePath: snapshot.questionImagePath ?? current.questionImagePath,
+    diagramImagePaths: snapshot.diagramImagePaths ?? (current.diagramImagePath ? [current.diagramImagePath] : []),
+  }
+}
+
 interface ProblemRow {
   problem_id: string
   subject: string
@@ -40,6 +50,8 @@ interface ProblemRow {
   difficulty: DifficultyLevel | null
   solution_content: string | null
   solution_steps_json: string | null
+  question_image_path: string | null
+  diagram_image_path: string | null
 }
 
 interface TagRow {
@@ -98,7 +110,12 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
         p.created_at,
         difficulty.level AS difficulty,
         solution.content_markdown AS solution_content,
-        solution.steps_json AS solution_steps_json
+        solution.steps_json AS solution_steps_json,
+        p.crop_image_path AS question_image_path,
+        COALESCE((SELECT region.image_path FROM problem_regions region
+          WHERE region.problem_id = p.id AND region.region_type = 'diagram' AND region.image_path IS NOT NULL
+          ORDER BY CASE region.source WHEN 'manual' THEN 0 ELSE 1 END, region.updated_at DESC LIMIT 1
+        ), p.ai_diagram_image_path) AS diagram_image_path
       FROM problems p
       LEFT JOIN problem_difficulties difficulty
         ON difficulty.problem_id = p.id AND difficulty.superseded_at IS NULL
@@ -167,6 +184,8 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
         contentMarkdown: row.solution_content ?? '',
         steps: parseJSON(row.solution_steps_json, []),
       }),
+      questionImagePath: row.question_image_path,
+      diagramImagePaths: row.diagram_image_path ? [row.diagram_image_path] : [],
       createdAt: number(row.created_at),
       difficulty: row.difficulty,
       tags,
@@ -205,6 +224,8 @@ export interface TodayReviewUnit {
     stemMarkdown: string
     structuredContentJson: string
     solutionJson: string
+    questionImagePath: string | null
+    diagramImagePaths: string[]
   }
   rating: ReviewRating | null
 }
@@ -248,6 +269,8 @@ interface UnitRow {
   target_tags_json: string
   rating: ReviewRating | null
   association_count: number
+  current_question_image_path: string | null
+  current_diagram_image_path: string | null
 }
 
 async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewPlan> {
@@ -258,11 +281,18 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
       module.completed_at, instance.id AS question_id, instance.source_problem_id,
       instance.stem_markdown, instance.structured_content_json, instance.solution_json,
       instance.target_tags_json, attempt.rating,
+      problem.crop_image_path AS current_question_image_path,
+      COALESCE((SELECT region.image_path FROM problem_regions region
+        WHERE region.problem_id = instance.source_problem_id AND region.region_type = 'diagram' AND region.image_path IS NOT NULL
+        ORDER BY CASE region.source WHEN 'manual' THEN 0 ELSE 1 END, region.updated_at DESC LIMIT 1
+      ), problem.ai_diagram_image_path) AS current_diagram_image_path,
       (SELECT COUNT(*) FROM skill_bundle_problems link WHERE link.skill_bundle_id = bundle.id) AS association_count
     FROM review_modules module
+    JOIN subjects active_subject ON active_subject.name = module.subject AND active_subject.archived_at IS NULL
     JOIN skill_bundles bundle ON bundle.id = module.skill_bundle_id
     JOIN question_instances instance ON instance.review_module_id = module.id
     LEFT JOIN review_attempts attempt ON attempt.question_instance_id = instance.id
+    LEFT JOIN problems problem ON problem.id = instance.source_problem_id
     WHERE module.session_id = $1
     ORDER BY module.order_index, module.id
   `, [session.id])
@@ -278,7 +308,13 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
         title?: string
         tags?: ReviewTag[]
         errorCategories?: ReviewTag[]
+        questionImagePath?: string | null
+        diagramImagePaths?: string[]
       }>(row.target_tags_json, {})
+      const media = resolveReviewQuestionMedia(snapshot, {
+        questionImagePath: row.current_question_image_path,
+        diagramImagePath: row.current_diagram_image_path,
+      })
       return {
         id: row.id,
         sessionId: row.session_id,
@@ -302,6 +338,7 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
           stemMarkdown: row.stem_markdown,
           structuredContentJson: row.structured_content_json,
           solutionJson: row.solution_json,
+          ...media,
         },
         rating: row.rating,
       }
@@ -387,6 +424,8 @@ async function persistUnit(sessionId: string, unit: ReviewUnitDraft, orderIndex:
       title: unit.title,
       tags: planningTags(unit),
       errorCategories: unit.errorCategories,
+      questionImagePath: representative.questionImagePath ?? null,
+      diagramImagePaths: representative.diagramImagePaths ?? [],
     }), unit.difficulty, now,
   ])
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { AsyncState, Badge, Button, EmptyState, Progress, StatusBadge } from '../../components/ui'
+import { AsyncState, Badge, Button, EmptyState, Progress, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewRating } from '../../domain/review'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
@@ -17,6 +17,7 @@ import {
   type TodayReviewUnit,
 } from '../../platform/reviewDatabase'
 import './Today.css'
+import { mediaAssetUrl } from '../../platform/native'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '压轴' }
 const ratingOptions: Array<{ rating: ReviewRating; label: string; hint: string }> = [
@@ -26,6 +27,7 @@ const ratingOptions: Array<{ rating: ReviewRating; label: string; hint: string }
   { rating: 'easy', label: '轻松', hint: '熟练且有余力' },
 ]
 const loadLabels = { empty: '无负载', light: '轻', normal: '中', heavy: '重' }
+const unitStatusLabels = { pending: '待复习', completed: '已完成', deferred: '已延后' }
 
 function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
   const maxUnits = Math.max(1, ...days.map((day) => day.estimatedUnitCount))
@@ -98,9 +100,6 @@ function ReviewUnitRow({
           <span>{unit.subject}</span>
           <h2>{unit.title}</h2>
         </div>
-        <StatusBadge tone={unit.status === 'completed' ? 'success' : unit.status === 'deferred' ? 'neutral' : 'brand'}>
-          {unit.status === 'completed' ? '已完成' : unit.status === 'deferred' ? '已暂缓' : `${minutes(unit.estimatedDurationSeconds)} 分钟`}
-        </StatusBadge>
       </div>
       <div className="today-unit__tags">
         <Badge>{unit.associationCount} 道相关错题</Badge>
@@ -109,13 +108,18 @@ function ReviewUnitRow({
       </div>
       <p>{unit.status === 'completed' ? '本次复习已完成，后续时间已根据反馈更新' : unit.selectionReason}</p>
     </div>
-    <div className="today-unit__actions">
+    <div className="today-unit__aside">
+      <div className="today-unit__statuses">
+        <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>
+        {unit.status === 'completed' && unit.rating && <StatusTag kind={unit.rating}>{ratingOptions.find((item) => item.rating === unit.rating)?.label}</StatusTag>}
+      </div>
+      <div className="today-unit__actions">
       {unit.status === 'pending' && <>
         <Button disabled={busy} onClick={onStart} variant="primary">开始复习</Button>
         <Button disabled={busy} onClick={onReplace} variant="ghost">换一个</Button>
         <Button disabled={busy} onClick={onDefer} variant="ghost">稍后复习</Button>
       </>}
-      {unit.status === 'completed' && unit.rating && <span className="today-unit__result">本次：{ratingOptions.find((item) => item.rating === unit.rating)?.label}</span>}
+      </div>
     </div>
   </article>
 }
@@ -142,6 +146,8 @@ function ReviewRunner({
     <section className="today-question" aria-label="复习题目">
       <div className="today-question__index">今日复习 · {unit.orderIndex + 1}</div>
       <h1>{unit.question.title}</h1>
+      {unit.question.questionImagePath && <ReviewQuestionImage alt={`${unit.question.title}原题图片`} path={unit.question.questionImagePath} />}
+      {unit.question.diagramImagePaths.map((path) => <ReviewQuestionImage alt={`${unit.question.title}图形`} key={path} path={path} variant="diagram" />)}
       <MathMarkdown className="today-question__stem">{unit.question.stemMarkdown}</MathMarkdown>
     </section>
     {!revealed ? <section className="today-answer-gate">
@@ -164,6 +170,13 @@ function ReviewRunner({
       </div>
     </section>}
   </main>
+}
+
+function ReviewQuestionImage({ alt, path, variant = 'question' }: { alt: string; path: string; variant?: 'question' | 'diagram' }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [path])
+  if (failed) return null
+  return <img alt={alt} className={`today-question__image today-question__image--${variant}`} onError={() => setFailed(true)} src={mediaAssetUrl(path)} />
 }
 
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {

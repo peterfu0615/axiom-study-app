@@ -65,6 +65,13 @@ describe('seven-day review forecast', () => {
     expect(JSON.stringify(before)).toBe(snapshot)
   })
 
+  it('uses immutable review feedback to schedule legacy candidates without tag state', () => {
+    const legacy = { ...candidate('legacy', undefined, []), lastReviewedAt: now, reviewCount: 1, lastRating: 'good' as const }
+    const forecast = buildSevenDayReviewForecast([legacy], now)
+    expect(forecast[0].estimatedProblemCount).toBe(0)
+    expect(forecast.some((item, index) => index > 0 && item.estimatedProblemCount === 1)).toBe(true)
+  })
+
   it('keeps a 1,000-problem forecast deterministic without changing planner limits', () => {
     const items = Array.from({ length: 1_000 }, (_, index) => candidate(`large-${index}`, now, [
       tag('knowledge', `知识${index}`), tag('method', `方法${index}`),

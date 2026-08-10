@@ -1,5 +1,6 @@
 import {
   addLocalReviewDays,
+  applyReviewRating,
   buildReviewUnitPool,
   endOfLocalReviewDay,
   localReviewDate,
@@ -25,9 +26,19 @@ function earliestDueAt(candidate: ReviewCandidate, todayStart: number) {
     .map((state) => state.nextReviewAt)
     .filter((value): value is number => value !== null)
     .sort((left, right) => left - right)[0]
-  // New and legacy candidates without a schedule are due for their first
-  // review today. This is the same initial-state input used by Today Planner.
-  return scheduled ?? todayStart
+  if (scheduled !== undefined) return scheduled
+  // Legacy/untagged problems have no tag SkillState, but their immutable
+  // ReviewAttempt is still scheduling evidence. Replay the same scheduler
+  // transition so completing one cannot remain falsely due "today".
+  if (candidate.lastReviewedAt && candidate.lastRating) {
+    return applyReviewRating(
+      null,
+      candidate.lastRating,
+      candidate.difficulty ?? 'intermediate',
+      candidate.lastReviewedAt,
+    ).nextReviewAt ?? todayStart
+  }
+  return todayStart
 }
 
 export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {

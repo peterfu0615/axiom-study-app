@@ -145,6 +145,14 @@ export function StatusBadge({
   return <span className={`ax-status-badge ax-status-badge--${tone}`}>{children}</span>
 }
 
+export type StatusTagKind =
+  | 'completed' | 'in-progress' | 'pending' | 'deferred'
+  | 'again' | 'hard' | 'good' | 'easy'
+
+export function StatusTag({ children, kind }: { children: ReactNode; kind: StatusTagKind }) {
+  return <span className={`ax-status-tag ax-status-tag--${kind}`}>{children}</span>
+}
+
 export function Badge({ children }: { children: ReactNode }) {
   return <span className="ax-badge">{children}</span>
 }

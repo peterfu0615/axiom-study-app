@@ -33,6 +33,8 @@ export interface ReviewCandidate {
   stemMarkdown: string
   structuredContentJson: string
   solutionJson: string
+  questionImagePath?: string | null
+  diagramImagePaths?: string[]
   createdAt: number
   difficulty: DifficultyLevel | null
   tags: ReviewTag[]
