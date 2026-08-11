@@ -564,6 +564,15 @@ pub fn render_practice_pdf(
 
 #[tauri::command]
 pub fn open_practice_pdf(app: AppHandle, path: String) -> Result<(), String> {
+    let canonical_path = managed_practice_pdf(&app, &path)?;
+    std::process::Command::new("open")
+        .arg(&canonical_path)
+        .spawn()
+        .map_err(|error| format!("无法打开 PDF：{error}"))?;
+    Ok(())
+}
+
+fn managed_practice_pdf(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     let export_root = app
         .path()
         .app_data_dir()
@@ -579,12 +588,36 @@ pub fn open_practice_pdf(app: AppHandle, path: String) -> Result<(), String> {
     if !canonical_path.starts_with(&canonical_root)
         || canonical_path.extension().and_then(|value| value.to_str()) != Some("pdf")
     {
-        return Err("只能打开 Axiom 管理的练习 PDF".to_string());
+        return Err("只能操作 Axiom 管理的练习 PDF".to_string());
     }
+    Ok(canonical_path)
+}
+
+#[tauri::command]
+pub fn save_practice_pdf(app: AppHandle, path: String, destination: String) -> Result<(), String> {
+    let source = managed_practice_pdf(&app, &path)?;
+    let destination = PathBuf::from(destination);
+    if destination.extension().and_then(|value| value.to_str()) != Some("pdf") {
+        return Err("练习文件必须保存为 PDF".to_string());
+    }
+    if source == destination {
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建保存目录：{error}"))?;
+    }
+    fs::copy(source, destination).map_err(|error| format!("保存练习 PDF 失败：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn print_practice_pdf(app: AppHandle, path: String) -> Result<(), String> {
+    let source = managed_practice_pdf(&app, &path)?;
     std::process::Command::new("open")
-        .arg(&canonical_path)
+        .args(["-a", "Preview"])
+        .arg(source)
         .spawn()
-        .map_err(|error| format!("无法打开 PDF：{error}"))?;
+        .map_err(|error| format!("无法在系统预览中打开 PDF：{error}"))?;
     Ok(())
 }
 

@@ -199,6 +199,14 @@ export function openPracticePdf(path: string) {
   return invoke<void>('open_practice_pdf', { path })
 }
 
+export function savePracticePdf(path: string, destination: string) {
+  return invoke<void>('save_practice_pdf', { path, destination })
+}
+
+export function printPracticePdf(path: string) {
+  return invoke<void>('print_practice_pdf', { path })
+}
+
 export interface PracticeScanLayout {
   pageId: string
   pageIdentity: string
@@ -210,6 +218,10 @@ export interface PracticeScanLayout {
 
 export function processPracticeScan(sourcePath: string, practiceAttemptId: string, layouts: PracticeScanLayout[]) {
   return invoke<PracticeScanResult>('process_practice_scan', { sourcePath, practiceAttemptId, layouts })
+}
+
+export function preparePracticeSubmission(sourcePath: string) {
+  return invoke<string>('prepare_practice_submission', { sourcePath })
 }
 
 export interface MediaEntry {

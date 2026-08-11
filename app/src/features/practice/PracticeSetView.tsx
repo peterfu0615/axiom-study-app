@@ -1,59 +1,37 @@
-import { useEffect, useState } from 'react'
-import { open } from '@tauri-apps/plugin-dialog'
-import { DiagramView } from '../../components/DiagramView'
+import { useEffect, useMemo, useState } from 'react'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { Badge, Button, StatusTag } from '../../components/ui'
-import type { Diagram } from '../../domain/diagram'
+import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, StatusBadge, Tabs, type Feedback } from '../../components/ui'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
-import type { PracticeAttempt } from '../../domain/practiceAttempt'
-import type { PracticeCapturedResponse } from '../../domain/practiceAttempt'
+import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
-import { listDiagrams } from '../../platform/diagramDatabase'
-import { importImage, mediaAssetUrl } from '../../platform/native'
-import { exportPracticePdf, openExportedPracticePdf, type PracticeDocumentRecord } from '../../platform/practiceDocumentDatabase'
+import type { PracticeDocumentType } from '../../domain/practiceDocument'
+import { importImage, mediaAssetUrl, preparePracticeSubmission } from '../../platform/native'
+import {
+  exportPracticePdf,
+  openExportedPracticePdf,
+  printExportedPracticePdf,
+  saveExportedPracticePdf,
+  type PracticeDocumentRecord,
+} from '../../platform/practiceDocumentDatabase'
 import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, overridePracticeGrade } from '../../platform/practiceGradingDatabase'
-import { finalizePracticeAttempt, getPracticeLoopForSet, stopPracticeLoop } from '../../platform/practiceLoopDatabase'
+import { finalizePracticeAttempt, getPracticeLoopForSet } from '../../platform/practiceLoopDatabase'
 import { getPracticeSet } from '../../platform/practiceDatabase'
-import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import './PracticeSetView.css'
 
-const difficultyLabel = { basic: '基础', intermediate: '中档', advanced: '压轴' }
+const documentTabs: Array<{ value: PracticeDocumentType; label: string }> = [
+  { value: 'questions', label: '练习' },
+  { value: 'answer_sheet', label: '答题卡' },
+  { value: 'solutions', label: '解析' },
+]
 
-function PracticeQuestion({ item }: { item: PracticeItem }) {
-  const [diagrams, setDiagrams] = useState<Diagram[]>([])
-  const [revealed, setRevealed] = useState(false)
-  useEffect(() => {
-    let cancelled = false
-    void listDiagrams('practice_item', item.id).then((rows) => { if (!cancelled) setDiagrams(rows) })
-    return () => { cancelled = true }
-  }, [item.id])
-  return <article className="practice-question">
-    <header>
-      <span className="practice-question__number">{String(item.orderIndex + 1).padStart(2, '0')}</span>
-      <div><Badge>{difficultyLabel[item.difficulty]}</Badge><StatusTag kind="completed">已验证</StatusTag></div>
-    </header>
-    <MathMarkdown className="practice-question__statement">{item.statementMarkdown}</MathMarkdown>
-    {item.questionImagePath ? <img alt="练习题原图" className="practice-question__image" src={mediaAssetUrl(item.questionImagePath)} /> : null}
-    {item.diagramImagePaths.map((path) => <img alt="练习题图形" className="practice-question__image practice-question__image--diagram" key={path} src={mediaAssetUrl(path)} />)}
-    {diagrams.map((diagram) => <DiagramView diagram={diagram} key={diagram.id} />)}
-    {item.options?.length ? <ol className="practice-question__options">{item.options.map((option) => <li key={option}>{option}</li>)}</ol> : null}
-    {!revealed ? <Button onClick={() => setRevealed(true)} variant="ghost">查看答案与解法</Button> : <section className="practice-question__solution">
-      <strong>参考答案</strong>
-      <MathMarkdown>{item.canonicalAnswer}</MathMarkdown>
-      <MathMarkdown>{solutionMarkdown(item.solutionJson)}</MathMarkdown>
-    </section>}
-  </article>
-}
-
-function solutionMarkdown(value: string) {
-  try {
-    const solution = JSON.parse(value) as { contentMarkdown?: string; steps?: Array<{ content?: string; contentMarkdown?: string; content_markdown?: string }> }
-    return solution.contentMarkdown || solution.steps?.map((step) => step.content ?? step.contentMarkdown ?? step.content_markdown ?? '').filter(Boolean).join('\n\n') || ''
-  } catch { return '' }
-}
-
-function PracticeResponseReview({ response, item, onChange }: { response: PracticeCapturedResponse; item: PracticeItem; onChange: (response: PracticeCapturedResponse) => void }) {
+function ResultCorrection({ response, item, onChange }: {
+  response: PracticeCapturedResponse
+  item: PracticeItem
+  onChange: (response: PracticeCapturedResponse) => void
+}) {
   const [answer, setAnswer] = useState(response.extractedAnswer?.rawMarkdown ?? '')
   const [busy, setBusy] = useState(false)
   useEffect(() => { setAnswer(response.extractedAnswer?.rawMarkdown ?? '') }, [response.extractedAnswer?.rawMarkdown])
@@ -69,21 +47,39 @@ function PracticeResponseReview({ response, item, onChange }: { response: Practi
     try { onChange({ ...response, gradingResult: await overridePracticeGrade(response.regionId, correctness) }) }
     finally { setBusy(false) }
   }
-  return <article className="practice-response-review">
-    <img alt={`第 ${response.regionIndex + 1} 个答题区域`} src={mediaAssetUrl(response.answerAssetPath)} />
-    <div>
-      <label>识别到的学生答案<textarea aria-label={`题目 ${item.orderIndex + 1} 的学生答案`} onChange={(event) => setAnswer(event.target.value)} value={answer} /></label>
-      <div className="practice-response-review__actions">
-        <Button disabled={busy || !answer.trim()} onClick={() => void regrade()} variant="secondary">{busy ? '处理中…' : '按修正答案重批'}</Button>
-        <Button disabled={busy} onClick={() => void override('correct')} variant="ghost">确认正确</Button>
-        <Button disabled={busy} onClick={() => void override('incorrect')} variant="ghost">确认错误</Button>
+  return <details className="practice-result__correction">
+    <summary>修改识别或批改</summary>
+    <div className="practice-result__correction-body">
+      <img alt={`第 ${item.orderIndex + 1} 题作答区域`} src={mediaAssetUrl(response.answerAssetPath)} />
+      <label>识别到的作答<textarea aria-label={`第 ${item.orderIndex + 1} 题识别结果`} onChange={(event) => setAnswer(event.target.value)} value={answer} /></label>
+      <div>
+        <Button disabled={busy || !answer.trim()} onClick={() => void regrade()} variant="secondary">按修改内容重新批改</Button>
+        <Button disabled={busy} onClick={() => void override('correct')} variant="ghost">标为正确</Button>
+        <Button disabled={busy} onClick={() => void override('incorrect')} variant="ghost">标为错误</Button>
       </div>
-      {response.gradingResult ? <div className="practice-response-review__grade">
-        <StatusTag kind={response.gradingResult.correctness === 'correct' ? 'completed' : 'pending'}>{response.gradingResult.correctness === 'correct' ? '正确' : response.gradingResult.correctness === 'incorrect' ? '错误' : '需要检查'}</StatusTag>
-        <span>{response.gradingResult.explanation}{response.gradingResult.userConfirmed ? ' · 用户已确认' : ''}</span>
-      </div> : <span className="practice-response-review__pending">尚未识别答案</span>}
-      <details><summary>查看标准答案</summary><MathMarkdown>{item.canonicalAnswer}</MathMarkdown></details>
     </div>
+  </details>
+}
+
+function ResultItem({ item, response, onChange }: {
+  item: PracticeItem
+  response: PracticeCapturedResponse
+  onChange: (response: PracticeCapturedResponse) => void
+}) {
+  const result = response.gradingResult
+  const tone = result?.correctness === 'correct' ? 'success' : result?.correctness === 'needs_review' || !result ? 'warning' : 'danger'
+  const label = result?.correctness === 'correct' ? '正确' : result?.correctness === 'partial' ? '部分正确' : result?.correctness === 'incorrect' ? '错误' : '需要检查'
+  const tags = item.targetTags.filter((tag) => tag.type !== 'error').slice(0, 3)
+  return <article className="practice-result-item">
+    <header><strong>第 {item.orderIndex + 1} 题</strong><StatusBadge tone={tone}>{label}</StatusBadge></header>
+    <MathMarkdown className="practice-result-item__question">{item.statementMarkdown}</MathMarkdown>
+    <dl>
+      <div><dt>你的作答</dt><dd><MathMarkdown>{response.extractedAnswer?.rawMarkdown || '未识别到清晰作答'}</MathMarkdown></dd></div>
+      <div><dt>参考答案</dt><dd><MathMarkdown>{item.canonicalAnswer}</MathMarkdown></dd></div>
+    </dl>
+    {result?.explanation && <p className="practice-result-item__explanation">{result.explanation}</p>}
+    {tags.length > 0 && <div className="practice-result-item__tags"><span>相关知识</span>{tags.map((tag) => <Badge key={tag.id || tag.name}>{tag.name}</Badge>)}</div>}
+    <ResultCorrection item={item} onChange={onChange} response={response} />
   </article>
 }
 
@@ -92,47 +88,94 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   onBack: () => void
   onOpenPracticeSet?: (practiceSet: PracticeSet) => void
 }) {
-  const [exporting, setExporting] = useState<PracticeDocumentType | null>(null)
-  const [exported, setExported] = useState<PracticeDocumentRecord | null>(null)
-  const [capturing, setCapturing] = useState(false)
-  const [extracting, setExtracting] = useState(false)
+  const [selectedDocument, setSelectedDocument] = useState<PracticeDocumentType>('questions')
+  const [documents, setDocuments] = useState<Partial<Record<PracticeDocumentType, PracticeDocumentRecord>>>({})
+  const [exporting, setExporting] = useState<PracticeDocumentType | null>('questions')
+  const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>('ready')
+  const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
   const [loop, setLoop] = useState<PracticeLoop | null>(null)
   const [finalizing, setFinalizing] = useState(false)
-  const [exportError, setExportError] = useState<string | null>(null)
-  const warnings = Array.isArray(practiceSet.generationMetadata.warnings)
-    ? practiceSet.generationMetadata.warnings.filter((value): value is string => typeof value === 'string') : []
-  const namedTargets = practiceSet.targetSkills.filter((target) => !target.id.startsWith('bundle:'))
-  const visibleTargets = namedTargets.length ? namedTargets : practiceSet.targetSkills.slice(0, 1)
+  const [feedback, setFeedback] = useState<Feedback>(null)
+
   useEffect(() => {
     let cancelled = false
+    setDocuments({}); setSelectedDocument('questions'); setExporting('questions'); setMode('ready'); setFeedback(null)
+    void (async () => {
+      try {
+        const questions = await exportPracticePdf(practiceSet, 'questions')
+        if (cancelled) return
+        setDocuments((current) => ({ ...current, questions }))
+        setExporting('answer_sheet')
+        const answerSheet = await exportPracticePdf(practiceSet, 'answer_sheet')
+        if (!cancelled) setDocuments((current) => ({ ...current, answer_sheet: answerSheet }))
+      } catch (reason) {
+        if (!cancelled) setFeedback({ tone: 'danger', message: String(reason) })
+      } finally { if (!cancelled) setExporting(null) }
+    })()
     void Promise.all([getLatestPracticeAttempt(practiceSet.id), getPracticeLoopForSet(practiceSet.id)])
-      .then(([latest, recoveredLoop]) => { if (!cancelled) { setAttempt(latest); setLoop(recoveredLoop) } }).catch(() => null)
+      .then(([latest, recoveredLoop]) => {
+        if (cancelled) return
+        setAttempt(latest); setLoop(recoveredLoop)
+        if (latest?.responses.some((response) => response.gradingResult)) setMode('results')
+      }).catch(() => null)
     return () => { cancelled = true }
-  }, [practiceSet.id])
-  const exportDocument = async (documentType: PracticeDocumentType) => {
-    setExporting(documentType); setExportError(null)
-    try { setExported(await exportPracticePdf(practiceSet, documentType)) }
-    catch (reason) { setExportError(String(reason)) }
-    finally { setExporting(null) }
-  }
-  const importAnswerSheet = async () => {
-    setExportError(null)
-    const selected = await open({ multiple: false, filters: [{ name: '答题卡照片', extensions: ['jpg', 'jpeg', 'png', 'heic'] }] })
-    if (typeof selected !== 'string') return
-    setCapturing(true)
+  }, [practiceSet])
+
+  const ensureDocument = async (documentType: PracticeDocumentType) => {
+    if (documents[documentType]) return documents[documentType]!
+    setExporting(documentType); setFeedback(null)
     try {
-      const media = await importImage(selected)
-      setAttempt(await capturePracticeAnswerSheet(practiceSet.id, media.path))
-    } catch (reason) { setExportError(String(reason)) }
-    finally { setCapturing(false) }
+      const record = await exportPracticePdf(practiceSet, documentType)
+      setDocuments((current) => ({ ...current, [documentType]: record }))
+      return record
+    } finally { setExporting(null) }
   }
-  const extractAnswers = async () => {
-    if (!attempt) return
-    setExtracting(true); setExportError(null)
-    try { setAttempt(await extractAndGradePracticeAttempt(practiceSet, attempt)) }
-    catch (reason) { setExportError(String(reason)) }
-    finally { setExtracting(false) }
+  const chooseDocument = (documentType: PracticeDocumentType) => {
+    setSelectedDocument(documentType)
+    if (!documents[documentType]) void ensureDocument(documentType).catch((reason) => setFeedback({ tone: 'danger', message: String(reason) }))
+  }
+  const currentDocument = documents[selectedDocument]
+  const saveCurrent = async () => {
+    const record = currentDocument ?? await ensureDocument(selectedDocument)
+    const destination = await save({
+      defaultPath: `Axiom_${documentTabs.find((tab) => tab.value === selectedDocument)?.label ?? '练习'}.pdf`,
+      filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
+    })
+    if (!destination) return
+    await saveExportedPracticePdf(record, destination)
+    setFeedback({ tone: 'success', message: 'PDF 已保存。' })
+  }
+  const printCurrent = async () => {
+    const record = currentDocument ?? await ensureDocument(selectedDocument)
+    await printExportedPracticePdf(record)
+    setFeedback({ tone: 'success', message: '已在系统预览中打开，可使用“文件 → 打印”。' })
+  }
+  const submitAnswer = async () => {
+    setFeedback(null)
+    await ensureDocument('answer_sheet')
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: '作答文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'heic'] }],
+    })
+    if (typeof selected !== 'string') return
+    setMode('processing')
+    try {
+      setProcessingStep({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
+      const sourcePath = selected.toLowerCase().endsWith('.pdf')
+        ? await preparePracticeSubmission(selected)
+        : (await importImage(selected)).path
+      setProcessingStep({ title: '正在匹配练习', detail: '正在识别页面并校正拍摄角度…', progress: .38 })
+      const captured = await capturePracticeAnswerSheet(practiceSet.id, sourcePath)
+      setAttempt(captured)
+      setProcessingStep({ title: '正在读取答案', detail: `已找到 ${captured.responses.length} 个作答区域…`, progress: .64 })
+      setProcessingStep({ title: '正在批改', detail: '正在逐题核对答案与关键步骤…', progress: .82 })
+      const graded = await extractAndGradePracticeAttempt(practiceSet, captured)
+      if (!graded) throw new Error('批改完成后无法读取结果')
+      setAttempt(graded); setMode('results')
+    } catch (reason) {
+      setMode('submit'); setFeedback({ tone: 'danger', message: String(reason) })
+    }
   }
   const updateResponse = (updated: PracticeCapturedResponse) => setAttempt((current) => current ? {
     ...current, responses: current.responses.map((response) => response.regionId === updated.regionId ? updated : response),
@@ -141,11 +184,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     response.gradingResult && response.gradingResult.correctness !== 'needs_review'))
   const finalize = async () => {
     if (!attempt) return
-    setFinalizing(true); setExportError(null)
+    setFinalizing(true); setFeedback(null)
     try {
       const nextLoop = await finalizePracticeAttempt(practiceSet, attempt)
       setLoop(nextLoop); setAttempt({ ...attempt, status: 'completed', submittedAt: Date.now() })
-    } catch (reason) { setExportError(String(reason)) }
+    } catch (reason) { setFeedback({ tone: 'danger', message: String(reason) }) }
     finally { setFinalizing(false) }
   }
   const openNextRound = async () => {
@@ -153,58 +196,84 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     const next = await getPracticeSet(loop.nextPracticeSetId)
     if (next) onOpenPracticeSet(next)
   }
-  const stopLoop = async () => {
-    if (!loop) return
-    await stopPracticeLoop(loop.id)
-    setLoop(await getPracticeLoopForSet(practiceSet.id))
-  }
+
+  const results = useMemo(() => attempt?.responses.flatMap((response) => response.gradingResult ? [response.gradingResult] : []) ?? [], [attempt])
+  const correct = results.filter((result) => result.correctness === 'correct').length
+  const score = results.length ? Math.round(results.reduce((sum, result) => sum + (result.score ?? 0), 0) / results.length) : 0
+  const needsWork = results.filter((result) => result.correctness !== 'correct').length
+
+  if (mode === 'processing') return <main className="workspace practice-workspace practice-processing">
+    <FlowingTaskSurface detail={processingStep.detail} progress={processingStep.progress} progressLabel="自动处理作答" state="running" title={processingStep.title} widthMode="full">
+      <p className="practice-processing__note">请保持 Axiom 打开，处理完成后会自动显示逐题结果。</p>
+    </FlowingTaskSurface>
+  </main>
+
+  if (mode === 'results' && attempt) return <main className="workspace practice-workspace">
+    <header className="practice-header practice-header--result">
+      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
+      <div><p className="eyebrow">练习结果</p><h1>本次练习</h1><p>{practiceSet.subject} · {practiceSet.items.length} 题</p></div>
+    </header>
+    <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
+    <section className="practice-result-summary">
+      <div><span>得分</span><strong>{score}</strong><small>/ 100</small></div>
+      <div><span>答对</span><strong>{correct}</strong><small>/ {results.length}</small></div>
+      <div><span>需要巩固</span><strong>{needsWork}</strong><small>题</small></div>
+    </section>
+    <section className="practice-results" aria-label="逐题结果">
+      {attempt.responses.map((response) => {
+        const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
+        return item ? <ResultItem item={item} key={response.regionId} onChange={updateResponse} response={response} /> : null
+      })}
+    </section>
+    <section className="practice-result-next">
+      {attempt.status !== 'completed' ? <>
+        <div><h2>{canFinalize ? '确认本次结果' : '还有结果需要检查'}</h2><p>{canFinalize ? '确认后将自动更新学习进度并安排后续练习。' : '请先修改或确认标记为“需要检查”的题目。'}</p></div>
+        <Button disabled={!canFinalize || finalizing} loading={finalizing} onClick={() => void finalize()} variant="primary">确认结果</Button>
+      </> : loop?.status === 'active' && loop.nextPracticeSetId && loop.nextPracticeSetId !== practiceSet.id ? <>
+        <div><h2>这部分还需要巩固</h2><p>下一组会换一批题，继续练习刚才没有掌握的内容。</p></div>
+        <Button onClick={() => void openNextRound()} variant="primary">再练一组</Button>
+      </> : <>
+        <div><h2>本轮练习完成</h2><p>后续学习已经根据本次结果自动安排。</p></div>
+        <Button onClick={onBack} variant="primary">完成</Button>
+      </>}
+    </section>
+  </main>
+
   return <main className="workspace practice-workspace">
     <header className="practice-header">
-      <Button onClick={onBack} variant="ghost">返回 Review Unit</Button>
-      <div><p className="eyebrow">Practice Set</p><h1>针对性练习</h1><p>{practiceSet.subject} · {practiceSet.items.length} 题 · {practiceSet.strategy}</p></div>
-      <StatusTag kind="pending">已保存</StatusTag>
+      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
+      <div><p className="eyebrow">练习</p><h1>{practiceSet.subject}练习</h1><p>{practiceSet.items.length} 题 · 已保存</p></div>
     </header>
-    <section className="practice-export" aria-label="PDF 导出">
-      <div><strong>打印与回传</strong><span>A4 · 固定题号 · 机器可识别页面身份</span></div>
-      <div>
-        <Button disabled={exporting !== null} onClick={() => void exportDocument('questions')} variant="secondary">{exporting === 'questions' ? '生成中…' : '题目版 PDF'}</Button>
-        <Button disabled={exporting !== null} onClick={() => void exportDocument('answer_sheet')} variant="primary">{exporting === 'answer_sheet' ? '生成中…' : '机器答题卡'}</Button>
-        <Button disabled={exporting !== null} onClick={() => void exportDocument('solutions')} variant="ghost">{exporting === 'solutions' ? '生成中…' : '答案解析版'}</Button>
-        <Button disabled={exporting !== null || capturing} onClick={() => void importAnswerSheet()} variant="secondary">{capturing ? '识别与裁切中…' : '导入作答照片'}</Button>
-      </div>
-      {exported ? <p><span>{exported.pageCount} 页 · {Math.max(1, Math.round(exported.byteLength / 1024))} KB{exported.cacheHit ? ' · 已复用稳定产物' : ''}</span><Button onClick={() => void openExportedPracticePdf(exported)} variant="ghost">打开 PDF</Button></p> : null}
-      {exportError ? <p className="practice-export__error" role="alert">{exportError}</p> : null}
-      {attempt ? <section className="practice-capture-result" aria-label="作答回传结果">
-        <div><StatusTag kind="completed">页面已识别</StatusTag><span>方向矫正 {attempt.orientationDegrees}° · 已独立提取 {attempt.responses.length} 个答题区</span><Button disabled={extracting} onClick={() => void extractAnswers()} variant="primary">{extracting ? '正在识别答案…' : '自动识别并批改'}</Button></div>
-        <img alt="透视矫正后的答题卡" src={mediaAssetUrl(attempt.correctedAssetPath)} />
-        <div className="practice-capture-result__responses">{attempt.responses.map((response) => {
-          const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
-          return item ? <PracticeResponseReview item={item} key={response.regionId} onChange={updateResponse} response={response} /> : null
-        })}</div>
-        <section className="practice-loop-summary" aria-label="Practice Loop 状态">
-          <div><strong>Practice Loop</strong><span>{loop ? `第 ${loop.roundIndex} 轮 · 已使用 ${loop.consumedItems}/${loop.itemBudget} 题` : '批改确认后提交为学习证据'}</span></div>
-          {loop?.status === 'mastered' ? <StatusTag kind="completed">已掌握</StatusTag>
-            : loop?.status === 'stopped' ? <StatusTag kind="deferred">已结束</StatusTag>
-              : loop ? <StatusTag kind="pending">继续练习</StatusTag> : null}
-          <div className="practice-loop-summary__actions">
-            {attempt.status !== 'completed' ? <Button disabled={!canFinalize || finalizing} onClick={() => void finalize()} variant="primary">{finalizing ? '正在写入 SkillState…' : '最终提交并更新能力'}</Button> : null}
-            {loop?.status === 'active' && loop.nextPracticeSetId && loop.nextPracticeSetId !== practiceSet.id && onOpenPracticeSet
-              ? <Button onClick={() => void openNextRound()} variant="primary">进入下一轮</Button> : null}
-            {loop && (loop.status === 'active' || loop.status === 'needs_reinforcement')
-              ? <Button onClick={() => void stopLoop()} variant="ghost">停止循环</Button> : null}
-          </div>
-          {loop?.stopReason === 'no_distinct_items' ? <p>没有找到同 Skill 且表面结构不同的已验证题目，本轮已安全结束，不重复原题。</p> : null}
-          {loop?.stopReason === 'budget_reached' ? <p>已达到练习题量预算，本轮停止继续生成。</p> : null}
-        </section>
-      </section> : null}
-    </section>
-    {warnings.map((warning) => <p className="practice-warning" key={warning}>{warning}</p>)}
-    <section className="practice-targets" aria-label="练习目标">
-      <span>目标能力</span>
-      {visibleTargets.map((target) => <Badge key={target.id}>{target.name}</Badge>)}
-    </section>
-    <section className="practice-list" aria-label="练习题目">
-      {practiceSet.items.map((item) => <PracticeQuestion item={item} key={item.id} />)}
-    </section>
+    <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
+    {mode === 'submit' ? <section className="practice-submit">
+      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传答题卡或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>
+      <button className="practice-submit__dropzone" onClick={() => void submitAnswer()} type="button">
+        <Icon name="image" size={28} />
+        <strong>选择作答文件</strong>
+        <span>PDF 或照片</span>
+      </button>
+      <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
+    </section> : <>
+      <section className="practice-toolbar" aria-label="练习文档工具栏">
+        <Tabs ariaLabel="练习文档" onChange={chooseDocument} options={documentTabs} value={selectedDocument} variant="rail" />
+        <div className="practice-toolbar__actions">
+          <Button disabled={!currentDocument || exporting !== null} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
+          <Button disabled={!currentDocument || exporting !== null} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
+          <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
+        </div>
+      </section>
+      <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedDocument)?.label} PDF 预览`}>
+        {exporting === selectedDocument || !currentDocument ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备文档…</strong></div> : <>
+          <object data={mediaAssetUrl(currentDocument.filePath)} type="application/pdf">
+            <div className="practice-document-fallback"><p>当前窗口无法直接预览 PDF。</p><Button onClick={() => void openExportedPracticePdf(currentDocument)}>在系统预览中打开</Button></div>
+          </object>
+          <footer><span>{currentDocument.pageCount} 页 · {Math.max(1, Math.round(currentDocument.byteLength / 1024))} KB</span><span>A4 文档</span></footer>
+        </>}
+      </section>
+      <details className="practice-content-summary">
+        <summary>查看本组练习内容</summary>
+        <div>{practiceSet.items.map((item) => <article key={item.id}><strong>{item.orderIndex + 1}</strong><MathMarkdown>{item.statementMarkdown}</MathMarkdown></article>)}</div>
+      </details>
+    </>}
   </main>
 }

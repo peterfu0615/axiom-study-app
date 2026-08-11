@@ -520,6 +520,38 @@ pub fn process_practice_scan(
     )
 }
 
+#[tauri::command]
+pub fn prepare_practice_submission(app: AppHandle, source_path: String) -> Result<String, String> {
+    let source = PathBuf::from(&source_path)
+        .canonicalize()
+        .map_err(|error| format!("无法读取作答文件：{error}"))?;
+    if !source.is_file() {
+        return Err("作答文件不存在".to_string());
+    }
+    if source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_lowercase)
+        .as_deref()
+        != Some("pdf")
+    {
+        return Err("只有 PDF 需要转换后提交".to_string());
+    }
+    let destination =
+        practice_media_directory(&app)?.join(format!("submission-{}.png", Uuid::new_v4()));
+    let output = std::process::Command::new("/usr/bin/sips")
+        .args(["-s", "format", "png"])
+        .arg(&source)
+        .arg("--out")
+        .arg(&destination)
+        .output()
+        .map_err(|error| format!("无法转换 PDF 作答文件：{error}"))?;
+    if !output.status.success() || !destination.is_file() {
+        return Err("PDF 转换失败，请改为上传清晰的 JPG 或 PNG 图片".to_string());
+    }
+    Ok(destination.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

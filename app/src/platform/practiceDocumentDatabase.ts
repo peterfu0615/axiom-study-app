@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { PracticeSet } from '../domain/practice'
 import { buildPracticeDocument, type PracticeDocument, type PracticeDocumentType } from '../domain/practiceDocument'
-import { openPracticePdf, renderPracticePdf, type PdfRenderResult } from './native'
+import { openPracticePdf, printPracticePdf, renderPracticePdf, savePracticePdf, type PdfRenderResult } from './native'
 import { withTransactionLock } from './transactionLock'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
@@ -95,4 +95,12 @@ export async function exportPracticePdf(practiceSet: PracticeSet, documentType: 
 
 export async function openExportedPracticePdf(record: PracticeDocumentRecord) {
   await openPracticePdf(record.filePath)
+}
+
+export async function saveExportedPracticePdf(record: PracticeDocumentRecord, destination: string) {
+  await savePracticePdf(record.filePath, destination)
+}
+
+export async function printExportedPracticePdf(record: PracticeDocumentRecord) {
+  await printPracticePdf(record.filePath)
 }

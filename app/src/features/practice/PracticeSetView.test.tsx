@@ -19,12 +19,15 @@ const practiceSet: PracticeSet = {
 }
 
 describe('PracticeSetView', () => {
-  it('previews target, statement, difficulty and durable status without revealing the answer', () => {
+  it('presents one document workspace and keeps internal terms out of the interface', () => {
     const html = renderToStaticMarkup(<PracticeSetView onBack={() => {}} practiceSet={practiceSet} />)
-    expect(html).toContain('一次方程')
-    expect(html).toContain('基础')
-    expect(html).toContain('求 ')
+    expect(html).toContain('练习文档工具栏')
+    expect(html).toContain('答题卡')
+    expect(html).toContain('保存 PDF')
+    expect(html).toContain('打印')
+    expect(html).toContain('提交作答')
     expect(html).toContain('已保存')
     expect(html).not.toContain('x=2')
+    expect(html).not.toMatch(/Practice Set|deterministic-v1|Review Unit|SkillState|Practice Loop/)
   })
 })
