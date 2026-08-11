@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
+import { open } from '@tauri-apps/plugin-dialog'
 import { DiagramView } from '../../components/DiagramView'
 import { MathMarkdown } from '../../components/MathMarkdown'
 import { Badge, Button, StatusTag } from '../../components/ui'
 import type { Diagram } from '../../domain/diagram'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
+import type { PracticeAttempt } from '../../domain/practiceAttempt'
 import { listDiagrams } from '../../platform/diagramDatabase'
-import { mediaAssetUrl } from '../../platform/native'
+import { importImage, mediaAssetUrl } from '../../platform/native'
 import { exportPracticePdf, openExportedPracticePdf, type PracticeDocumentRecord } from '../../platform/practiceDocumentDatabase'
+import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import './PracticeSetView.css'
 
@@ -48,16 +51,34 @@ function solutionMarkdown(value: string) {
 export function PracticeSetView({ practiceSet, onBack }: { practiceSet: PracticeSet; onBack: () => void }) {
   const [exporting, setExporting] = useState<PracticeDocumentType | null>(null)
   const [exported, setExported] = useState<PracticeDocumentRecord | null>(null)
+  const [capturing, setCapturing] = useState(false)
+  const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   const warnings = Array.isArray(practiceSet.generationMetadata.warnings)
     ? practiceSet.generationMetadata.warnings.filter((value): value is string => typeof value === 'string') : []
   const namedTargets = practiceSet.targetSkills.filter((target) => !target.id.startsWith('bundle:'))
   const visibleTargets = namedTargets.length ? namedTargets : practiceSet.targetSkills.slice(0, 1)
+  useEffect(() => {
+    let cancelled = false
+    void getLatestPracticeAttempt(practiceSet.id).then((latest) => { if (!cancelled) setAttempt(latest) }).catch(() => null)
+    return () => { cancelled = true }
+  }, [practiceSet.id])
   const exportDocument = async (documentType: PracticeDocumentType) => {
     setExporting(documentType); setExportError(null)
     try { setExported(await exportPracticePdf(practiceSet, documentType)) }
     catch (reason) { setExportError(String(reason)) }
     finally { setExporting(null) }
+  }
+  const importAnswerSheet = async () => {
+    setExportError(null)
+    const selected = await open({ multiple: false, filters: [{ name: '答题卡照片', extensions: ['jpg', 'jpeg', 'png', 'heic'] }] })
+    if (typeof selected !== 'string') return
+    setCapturing(true)
+    try {
+      const media = await importImage(selected)
+      setAttempt(await capturePracticeAnswerSheet(practiceSet.id, media.path))
+    } catch (reason) { setExportError(String(reason)) }
+    finally { setCapturing(false) }
   }
   return <main className="workspace practice-workspace">
     <header className="practice-header">
@@ -71,9 +92,18 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
         <Button disabled={exporting !== null} onClick={() => void exportDocument('questions')} variant="secondary">{exporting === 'questions' ? '生成中…' : '题目版 PDF'}</Button>
         <Button disabled={exporting !== null} onClick={() => void exportDocument('answer_sheet')} variant="primary">{exporting === 'answer_sheet' ? '生成中…' : '机器答题卡'}</Button>
         <Button disabled={exporting !== null} onClick={() => void exportDocument('solutions')} variant="ghost">{exporting === 'solutions' ? '生成中…' : '答案解析版'}</Button>
+        <Button disabled={exporting !== null || capturing} onClick={() => void importAnswerSheet()} variant="secondary">{capturing ? '识别与裁切中…' : '导入作答照片'}</Button>
       </div>
       {exported ? <p><span>{exported.pageCount} 页 · {Math.max(1, Math.round(exported.byteLength / 1024))} KB{exported.cacheHit ? ' · 已复用稳定产物' : ''}</span><Button onClick={() => void openExportedPracticePdf(exported)} variant="ghost">打开 PDF</Button></p> : null}
       {exportError ? <p className="practice-export__error" role="alert">{exportError}</p> : null}
+      {attempt ? <section className="practice-capture-result" aria-label="作答回传结果">
+        <div><StatusTag kind="completed">页面已识别</StatusTag><span>方向矫正 {attempt.orientationDegrees}° · 已独立提取 {attempt.responses.length} 个答题区</span></div>
+        <img alt="透视矫正后的答题卡" src={mediaAssetUrl(attempt.correctedAssetPath)} />
+        <div className="practice-capture-result__responses">{attempt.responses.map((response) => <figure key={response.regionId}>
+          <img alt={`第 ${response.regionIndex + 1} 个答题区域`} src={mediaAssetUrl(response.answerAssetPath)} />
+          <figcaption>题目 {response.practiceItemId.slice(-8)}{response.pixelWidth ? ` · ${response.pixelWidth}×${response.pixelHeight}` : ''}</figcaption>
+        </figure>)}</div>
+      </section> : null}
     </section>
     {warnings.map((warning) => <p className="practice-warning" key={warning}>{warning}</p>)}
     <section className="practice-targets" aria-label="练习目标">

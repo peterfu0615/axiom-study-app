@@ -7,6 +7,7 @@ mod keystore;
 #[cfg(test)]
 mod migration_integrity;
 mod models;
+mod practice_capture;
 mod practice_pdf;
 mod updater;
 
@@ -287,6 +288,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0041_practice_document_identity.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 42,
+            description: "practice_attempts",
+            sql: include_str!("../migrations/0042_practice_attempts.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -352,6 +359,7 @@ pub fn run() {
             diagram::render_tikz,
             practice_pdf::render_practice_pdf,
             practice_pdf::open_practice_pdf,
+            practice_capture::process_practice_scan,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             ai::persist_ai_provider_profiles,

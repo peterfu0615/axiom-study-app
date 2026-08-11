@@ -3650,6 +3650,8 @@ export async function deleteProblem(problemId: string): Promise<void> {
  *   - source_documents.original_image_path / corrected_image_path
  *   - problems.crop_image_path / ai_diagram_image_path
  *   - problem_regions.image_path
+ *   - practice_attempt_pages.source_asset_path / corrected_asset_path
+ *   - practice_responses.answer_asset_path
  */
 export interface OrphanedMediaReport {
   /** media/original 目录下的孤立文件绝对路径 */
@@ -3660,11 +3662,13 @@ export interface OrphanedMediaReport {
   problems: string[]
   /** media/diagrams 目录下的孤立文件绝对路径 */
   diagrams: string[]
+  /** media/practice 目录下的回传页与独立答题区域 */
+  practice: string[]
 }
 
 /**
  * 用于全量查询数据库中所有「仍被引用」的媒体路径。
- * 此 SQL 覆盖 5 类引用源，缺一不可，否则 GC 会误删正在使用的文件。
+ * 此 SQL 覆盖 8 类引用源，缺一不可，否则 GC 会误删正在使用的文件。
  * 通过导出此常量便于测试断言完整性。
  */
 export const REFERENCED_MEDIA_PATHS_SQL = `SELECT path FROM (
@@ -3682,6 +3686,15 @@ export const REFERENCED_MEDIA_PATHS_SQL = `SELECT path FROM (
   UNION ALL
   SELECT image_path AS path FROM problem_regions
   WHERE image_path IS NOT NULL
+  UNION ALL
+  SELECT source_asset_path AS path FROM practice_attempt_pages
+  WHERE source_asset_path IS NOT NULL
+  UNION ALL
+  SELECT corrected_asset_path AS path FROM practice_attempt_pages
+  WHERE corrected_asset_path IS NOT NULL
+  UNION ALL
+  SELECT answer_asset_path AS path FROM practice_responses
+  WHERE answer_asset_path IS NOT NULL
 )`
 
 /**
@@ -3705,6 +3718,7 @@ export function extractReferencedMediaPaths(
  *   - 含 `/diagrams/` 的路径属于图形目录
  *   - 含 `/original/` 的路径属于原图目录
  *   - 含 `/corrected/` 的路径属于校正页目录
+ *   - 含 `/practice/` 的路径属于练习回传目录
  */
 export function classifyMediaPaths(
   diskPaths: string[],
@@ -3715,15 +3729,19 @@ export function classifyMediaPaths(
     corrected: [],
     problems: [],
     diagrams: [],
+    practice: [],
   }
   const retained: OrphanedMediaReport = {
     original: [],
     corrected: [],
     problems: [],
     diagrams: [],
+    practice: [],
   }
   for (const path of diskPaths) {
-    const bucket = path.includes('/diagrams/')
+    const bucket = path.includes('/practice/')
+      ? 'practice'
+      : path.includes('/diagrams/')
       ? 'diagrams'
       : path.includes('/problems/')
         ? 'problems'
@@ -3744,7 +3762,7 @@ export function classifyMediaPaths(
 
 export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
   if (!isDesktopRuntime()) {
-    return { original: [], corrected: [], problems: [], diagrams: [] }
+    return { original: [], corrected: [], problems: [], diagrams: [], practice: [] }
   }
   const db = await database()
   const rows = await db.select<Record<string, unknown>[]>(
@@ -3757,8 +3775,9 @@ export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
     corrected: [],
     problems: [],
     diagrams: [],
+    practice: [],
   }
-  const subdirs = ['original', 'corrected', 'problems', 'diagrams'] as const
+  const subdirs = ['original', 'corrected', 'problems', 'diagrams', 'practice'] as const
   for (const subdir of subdirs) {
     try {
       const entries = await listMediaDirectory(subdir)
@@ -3779,7 +3798,7 @@ export async function scanOrphanedMedia(): Promise<OrphanedMediaReport> {
  * 以避免误删（例如扫描与删除之间数据库又写入了引用）。
  *
  * 返回实际删除的路径列表；任何仍被引用或删除失败的文件不会被计入。
- * 覆盖全部四个媒体目录（original/corrected/problems/diagrams）。
+ * 覆盖全部五个媒体目录（original/corrected/problems/diagrams/practice）。
  */
 export async function deleteOrphanedMedia(
   paths: string[],

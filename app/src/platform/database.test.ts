@@ -318,9 +318,9 @@ describe('REFERENCED_MEDIA_PATHS_SQL', () => {
 
   it('excludes NULL paths from the union', () => {
     expect(REFERENCED_MEDIA_PATHS_SQL).toMatch(/IS NOT NULL/g)
-    // 5 个 SELECT 子句都应过滤 NULL
+    // 8 个 SELECT 子句都应过滤 NULL
     const matches = REFERENCED_MEDIA_PATHS_SQL.match(/IS NOT NULL/g)
-    expect(matches?.length).toBe(5)
+    expect(matches?.length).toBe(8)
   })
 })
 
@@ -371,6 +371,7 @@ describe('classifyMediaPaths', () => {
     '/data/media/diagrams/in-use.jpg',
     '/data/media/original/in-use.jpg',
     '/data/media/corrected/in-use.jpg',
+    '/data/media/practice/in-use.jpg',
   ])
 
   it('separates orphans from retained files by directory', () => {
@@ -383,16 +384,20 @@ describe('classifyMediaPaths', () => {
       '/data/media/original/orphan.jpg',
       '/data/media/corrected/in-use.jpg',
       '/data/media/corrected/orphan.jpg',
+      '/data/media/practice/in-use.jpg',
+      '/data/media/practice/orphan.jpg',
     ]
     const { orphaned, retained } = classifyMediaPaths(diskPaths, referenced)
     expect(orphaned.problems).toEqual(['/data/media/problems/orphan.jpg'])
     expect(orphaned.diagrams).toEqual(['/data/media/diagrams/orphan.jpg'])
     expect(orphaned.original).toEqual(['/data/media/original/orphan.jpg'])
     expect(orphaned.corrected).toEqual(['/data/media/corrected/orphan.jpg'])
+    expect(orphaned.practice).toEqual(['/data/media/practice/orphan.jpg'])
     expect(retained.problems).toEqual(['/data/media/problems/in-use.jpg'])
     expect(retained.diagrams).toEqual(['/data/media/diagrams/in-use.jpg'])
     expect(retained.original).toEqual(['/data/media/original/in-use.jpg'])
     expect(retained.corrected).toEqual(['/data/media/corrected/in-use.jpg'])
+    expect(retained.practice).toEqual(['/data/media/practice/in-use.jpg'])
   })
 
   it('skips paths that do not match any known media directory', () => {
@@ -407,11 +412,13 @@ describe('classifyMediaPaths', () => {
     expect(orphaned.original).toEqual([])
     expect(orphaned.corrected).toEqual([])
     expect(orphaned.diagrams).toEqual([])
+    expect(orphaned.practice).toEqual([])
     // /tmp 和 /data/somewhere 的路径不匹配任何已知 bucket，被丢弃
     expect(retained.problems).toEqual([])
     expect(retained.original).toEqual([])
     expect(retained.corrected).toEqual([])
     expect(retained.diagrams).toEqual([])
+    expect(retained.practice).toEqual([])
   })
 
   it('returns empty buckets for empty input', () => {
@@ -420,10 +427,12 @@ describe('classifyMediaPaths', () => {
     expect(orphaned.diagrams).toEqual([])
     expect(orphaned.original).toEqual([])
     expect(orphaned.corrected).toEqual([])
+    expect(orphaned.practice).toEqual([])
     expect(retained.problems).toEqual([])
     expect(retained.diagrams).toEqual([])
     expect(retained.original).toEqual([])
     expect(retained.corrected).toEqual([])
+    expect(retained.practice).toEqual([])
   })
 })
 

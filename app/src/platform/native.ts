@@ -11,6 +11,7 @@ import type {
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 import type { TikzRenderResult } from '../domain/diagram'
 import type { PracticeDocument } from '../domain/practiceDocument'
+import type { PracticeScanResult } from '../domain/practiceAttempt'
 
 export interface PersistedProblemImage {
   path: string
@@ -198,6 +199,19 @@ export function openPracticePdf(path: string) {
   return invoke<void>('open_practice_pdf', { path })
 }
 
+export interface PracticeScanLayout {
+  pageId: string
+  pageIdentity: string
+  qrPayload: string
+  widthPoints: number
+  heightPoints: number
+  regions: Array<{ id: string; practiceItemId: string; regionIndex: number; x: number; y: number; width: number; height: number }>
+}
+
+export function processPracticeScan(sourcePath: string, practiceAttemptId: string, layouts: PracticeScanLayout[]) {
+  return invoke<PracticeScanResult>('process_practice_scan', { sourcePath, practiceAttemptId, layouts })
+}
+
 export interface MediaEntry {
   /** 相对 media/ 的路径，如 "original/uuid.jpg" */
   relativePath: string
@@ -211,7 +225,7 @@ export interface MediaEntry {
 
 /**
  * 枚举指定媒体子目录下的所有文件。
- * subdir 必须是 original / corrected / problems / diagrams 之一。
+ * subdir 必须是 original / corrected / problems / diagrams / practice 之一。
  */
 export async function listMediaDirectory(subdir: string): Promise<MediaEntry[]> {
   return invoke<MediaEntry[]>('list_media_directory', { subdir })

@@ -1038,11 +1038,12 @@ fn media_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 允许的媒体子目录名，防止路径穿越。
-const ALLOWED_MEDIA_SUBDIRS: &[&str] = &["original", "corrected", "problems", "diagrams"];
+const ALLOWED_MEDIA_SUBDIRS: &[&str] =
+    &["original", "corrected", "problems", "diagrams", "practice"];
 
 /// 枚举指定媒体子目录下的所有文件，返回每个文件的元数据。
 ///
-/// `subdir` 必须是 `original` / `corrected` / `problems` / `diagrams` 之一，
+/// `subdir` 必须是 `original` / `corrected` / `problems` / `diagrams` / `practice` 之一，
 /// 任何其他值（含 `..`、绝对路径）都会被拒绝，防止目录穿越。
 ///
 /// 返回的 `absolute_path` 经过 canonicalize，与数据库中存储的路径格式一致，
@@ -1099,7 +1100,7 @@ pub fn list_media_directory(app: AppHandle, subdir: String) -> Result<Vec<MediaE
 /// 删除单个媒体文件。
 ///
 /// 安全约束：
-///   - 路径必须位于 `media/{original|corrected|problems|diagrams}/` 之一（canonicalize 后校验）；
+///   - 路径必须位于 `media/{original|corrected|problems|diagrams|practice}/` 之一（canonicalize 后校验）；
 ///   - 调用方应在删除前再次检查数据库引用（前端传入引用集合校验）；
 ///   - 文件不存在时返回 Ok（幂等删除）。
 #[tauri::command]
@@ -1194,10 +1195,10 @@ mod tests {
     }
 
     #[test]
-    fn allowed_media_subdirs_cover_all_four_categories() {
+    fn allowed_media_subdirs_cover_all_five_categories() {
         assert_eq!(
             ALLOWED_MEDIA_SUBDIRS,
-            &["original", "corrected", "problems", "diagrams"]
+            &["original", "corrected", "problems", "diagrams", "practice"]
         );
     }
 

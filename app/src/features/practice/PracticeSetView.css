@@ -7,6 +7,13 @@
 .practice-export > div > span { color: var(--ax-text-secondary); }
 .practice-export > p { align-items: center; color: var(--ax-text-secondary); display: flex; justify-content: space-between; margin: 0; }
 .practice-export__error { color: var(--ax-danger-fg) !important; }
+.practice-capture-result { border-top: 1px solid var(--ax-border-default); display: grid; gap: var(--ax-space-3); padding-top: var(--ax-space-4); }
+.practice-capture-result > div:first-child { justify-content: flex-start; }
+.practice-capture-result > img { background: var(--ax-document-paper); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-md); max-height: 240px; max-width: 180px; object-fit: contain; }
+.practice-capture-result__responses { display: grid !important; gap: var(--ax-space-3) !important; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.practice-capture-result figure { margin: 0; }
+.practice-capture-result figure img { background: var(--ax-document-paper); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-sm); max-height: 150px; object-fit: contain; width: 100%; }
+.practice-capture-result figcaption { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); margin-top: var(--ax-space-1); }
 .practice-warning { background: var(--ax-warning-bg); border: 1px solid var(--ax-accent-border); border-radius: var(--ax-radius-md); color: var(--ax-warning-fg); padding: var(--ax-space-3) var(--ax-space-4); }
 .practice-targets { align-items: center; display: flex; flex-wrap: wrap; gap: var(--ax-space-2); margin-bottom: var(--ax-space-5); }
 .practice-targets > span { color: var(--ax-text-secondary); margin-right: var(--ax-space-2); }
