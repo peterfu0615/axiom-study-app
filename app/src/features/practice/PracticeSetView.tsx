@@ -19,6 +19,7 @@ import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../plat
 import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, overridePracticeGrade } from '../../platform/practiceGradingDatabase'
 import { finalizePracticeAttempt, getPracticeLoopForSet } from '../../platform/practiceLoopDatabase'
 import { getPracticeSet } from '../../platform/practiceDatabase'
+import { practiceErrorMessage } from './productLanguage'
 import './PracticeSetView.css'
 
 const documentTabs: Array<{ value: PracticeDocumentType; label: string }> = [
@@ -110,7 +111,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
         const answerSheet = await exportPracticePdf(practiceSet, 'answer_sheet')
         if (!cancelled) setDocuments((current) => ({ ...current, answer_sheet: answerSheet }))
       } catch (reason) {
-        if (!cancelled) setFeedback({ tone: 'danger', message: String(reason) })
+        if (!cancelled) setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
       } finally { if (!cancelled) setExporting(null) }
     })()
     void Promise.all([getLatestPracticeAttempt(practiceSet.id), getPracticeLoopForSet(practiceSet.id)])
@@ -133,7 +134,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   }
   const chooseDocument = (documentType: PracticeDocumentType) => {
     setSelectedDocument(documentType)
-    if (!documents[documentType]) void ensureDocument(documentType).catch((reason) => setFeedback({ tone: 'danger', message: String(reason) }))
+    if (!documents[documentType]) void ensureDocument(documentType).catch((reason) => setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }))
   }
   const currentDocument = documents[selectedDocument]
   const saveCurrent = async () => {
@@ -174,7 +175,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
       if (!graded) throw new Error('批改完成后无法读取结果')
       setAttempt(graded); setMode('results')
     } catch (reason) {
-      setMode('submit'); setFeedback({ tone: 'danger', message: String(reason) })
+      setMode('submit'); setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
     }
   }
   const updateResponse = (updated: PracticeCapturedResponse) => setAttempt((current) => current ? {
@@ -188,7 +189,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     try {
       const nextLoop = await finalizePracticeAttempt(practiceSet, attempt)
       setLoop(nextLoop); setAttempt({ ...attempt, status: 'completed', submittedAt: Date.now() })
-    } catch (reason) { setFeedback({ tone: 'danger', message: String(reason) }) }
+    } catch (reason) { setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }) }
     finally { setFinalizing(false) }
   }
   const openNextRound = async () => {

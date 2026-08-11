@@ -143,6 +143,35 @@ async function applyPracticeEvidence(input: {
   return true
 }
 
+async function completeSourceLearningTopics(practiceSet: PracticeSet, completedAt: number) {
+  const sessionIds = new Set<string>()
+  if (practiceSet.sourceType === 'review_unit') {
+    const module = (await select<Array<{ session_id: string }>>(
+      'SELECT session_id FROM review_modules WHERE id=$1 LIMIT 1', [practiceSet.sourceRef],
+    ))[0]
+    if (module) {
+      await execute("UPDATE review_modules SET status='completed',completed_at=$1 WHERE id=$2", [completedAt, practiceSet.sourceRef])
+      sessionIds.add(module.session_id)
+    }
+  } else if (practiceSet.sourceType === 'today') {
+    const bundleIds = [...new Set(practiceSet.items.flatMap((item) => item.targetSkillBundleId ? [item.targetSkillBundleId] : []))]
+    if (bundleIds.length) {
+      await execute(`UPDATE review_modules SET status='completed',completed_at=$1
+        WHERE session_id=$2 AND skill_bundle_id IN (${bundleIds.map((_, index) => `$${index + 3}`).join(',')})`,
+      [completedAt, practiceSet.sourceRef, ...bundleIds])
+      sessionIds.add(practiceSet.sourceRef)
+    }
+  }
+  for (const sessionId of sessionIds) {
+    const pending = number((await select<Array<{ count: number }>>(
+      "SELECT COUNT(*) AS count FROM review_modules WHERE session_id=$1 AND status='pending'", [sessionId],
+    ))[0]?.count)
+    await execute('UPDATE review_sessions SET status=$1,completed_at=$2 WHERE id=$3', [
+      pending === 0 ? 'completed' : 'in_progress', pending === 0 ? completedAt : null, sessionId,
+    ])
+  }
+}
+
 export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt: PracticeAttempt, itemBudget = 6) {
   const finalized = await withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
@@ -201,6 +230,7 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
       await execute(`UPDATE practice_loops SET status=$1,consumed_items=$2,stop_reason=$3,updated_at=$4 WHERE id=$5`, [
         decision.status, consumedItems, decision.stopReason, now, loopId,
       ])
+      await completeSourceLearningTopics(practiceSet, now)
       await execute('COMMIT')
       const row = (await select<LoopRow[]>(`${loopSelect} WHERE loop.id=$1`, [loopId]))[0]
       return loopFromRow(row)

@@ -20,6 +20,7 @@ import {
   getOrCreatePracticeSetFromTodayPlan,
 } from '../../platform/practiceDatabase'
 import { PracticeSetView } from '../practice/PracticeSetView'
+import { practiceErrorMessage } from '../practice/productLanguage'
 import './Today.css'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
@@ -107,7 +108,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       const [nextPlan, nextForecast] = await Promise.all([getOrCreateTodayPlan(), getSevenDayReviewForecast()])
       setPlan(nextPlan); setForecast(nextForecast)
       setTodayPracticeSet(await findPracticeSetForSource('today', nextPlan.id))
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setLoading(false) }
   }, [])
   useEffect(() => { void load() }, [load])
@@ -118,7 +119,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       const next = await operation()
       setPlan(next ?? await refreshTodayPlan())
       setForecast(await getSevenDayReviewForecast())
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
   const openTodayPractice = async () => {
@@ -128,7 +129,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
       const next = todayPracticeSet ?? await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, Math.max(3, moduleIds.length * 2))
       setTodayPracticeSet(next); setActivePracticeSet(next)
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
 
@@ -174,7 +175,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
             onPractice={() => void (async () => {
               setBusy(true); setError(null)
               try { setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id)) }
-              catch (reason) { setError(String(reason)) }
+              catch (reason) { setError(practiceErrorMessage(reason)) }
               finally { setBusy(false) }
             })()}
             unit={unit}
