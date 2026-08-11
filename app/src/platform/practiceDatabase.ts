@@ -82,6 +82,10 @@ async function readPracticeSetById(id: string): Promise<PracticeSet | null> {
   }
 }
 
+export function getPracticeSet(id: string) {
+  return readPracticeSetById(id)
+}
+
 export async function findPracticeSetForSource(sourceType: PracticeSourceType, sourceRef: string) {
   const row = (await select<Array<{ id: string }>>(
     "SELECT id FROM practice_sets WHERE source_type=$1 AND source_ref=$2 AND status='ready' ORDER BY created_at DESC LIMIT 1",

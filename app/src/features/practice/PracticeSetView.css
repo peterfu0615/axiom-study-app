@@ -2,6 +2,11 @@
 .practice-header { display: grid; grid-template-columns: auto 1fr auto; gap: var(--ax-space-5); align-items: start; margin-bottom: var(--ax-space-6); }
 .practice-header h1 { margin: var(--ax-space-1) 0; }
 .practice-header p { color: var(--ax-text-secondary); margin: 0; }
+.practice-export { background: var(--ax-color-surface); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); display: grid; gap: var(--ax-space-4); margin-bottom: var(--ax-space-5); padding: var(--ax-space-5); }
+.practice-export > div { align-items: center; display: flex; flex-wrap: wrap; gap: var(--ax-space-3); justify-content: space-between; }
+.practice-export > div > span { color: var(--ax-text-secondary); }
+.practice-export > p { align-items: center; color: var(--ax-text-secondary); display: flex; justify-content: space-between; margin: 0; }
+.practice-export__error { color: var(--ax-danger-fg) !important; }
 .practice-warning { background: var(--ax-warning-bg); border: 1px solid var(--ax-accent-border); border-radius: var(--ax-radius-md); color: var(--ax-warning-fg); padding: var(--ax-space-3) var(--ax-space-4); }
 .practice-targets { align-items: center; display: flex; flex-wrap: wrap; gap: var(--ax-space-2); margin-bottom: var(--ax-space-5); }
 .practice-targets > span { color: var(--ax-text-secondary); margin-right: var(--ax-space-2); }

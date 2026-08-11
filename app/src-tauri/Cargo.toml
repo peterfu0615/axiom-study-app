@@ -33,6 +33,9 @@ wait-timeout = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 dirs = "5"
+printpdf = { version = "0.7", features = ["embedded_images", "font_subsetting", "svg"] }
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
 # Keep the legacy recovery path able to read macOS Keychain entries.  SQLite
 # remains the durable API-key source; this backend is only used once for
 # recovery from older releases.

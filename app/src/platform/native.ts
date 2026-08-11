@@ -10,6 +10,7 @@ import type {
 } from '../domain/models'
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 import type { TikzRenderResult } from '../domain/diagram'
+import type { PracticeDocument } from '../domain/practiceDocument'
 
 export interface PersistedProblemImage {
   path: string
@@ -177,6 +178,24 @@ export async function removeProblemDiagram(path: string) {
 
 export async function renderTikz(source: string) {
   return invoke<TikzRenderResult>('render_tikz', { source })
+}
+
+export interface PdfRenderResult {
+  documentId: string
+  filePath: string
+  contentHash: string
+  rendererVersion: string
+  pageCount: number
+  byteLength: number
+  cacheHit: boolean
+}
+
+export function renderPracticePdf(document: PracticeDocument) {
+  return invoke<PdfRenderResult>('render_practice_pdf', { document })
+}
+
+export function openPracticePdf(path: string) {
+  return invoke<void>('open_practice_pdf', { path })
 }
 
 export interface MediaEntry {

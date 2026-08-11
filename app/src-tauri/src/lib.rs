@@ -7,6 +7,7 @@ mod keystore;
 #[cfg(test)]
 mod migration_integrity;
 mod models;
+mod practice_pdf;
 mod updater;
 
 use tauri::Manager;
@@ -274,6 +275,18 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0039_practice_domain.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 40,
+            description: "practice_documents",
+            sql: include_str!("../migrations/0040_practice_documents.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 41,
+            description: "practice_document_identity",
+            sql: include_str!("../migrations/0041_practice_document_identity.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -337,6 +350,8 @@ pub fn run() {
             commands::list_media_directory,
             commands::delete_media_file,
             diagram::render_tikz,
+            practice_pdf::render_practice_pdf,
+            practice_pdf::open_practice_pdf,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             ai::persist_ai_provider_profiles,

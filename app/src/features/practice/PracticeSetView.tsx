@@ -6,6 +6,8 @@ import type { Diagram } from '../../domain/diagram'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import { listDiagrams } from '../../platform/diagramDatabase'
 import { mediaAssetUrl } from '../../platform/native'
+import { exportPracticePdf, openExportedPracticePdf, type PracticeDocumentRecord } from '../../platform/practiceDocumentDatabase'
+import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import './PracticeSetView.css'
 
 const difficultyLabel = { basic: '基础', intermediate: '中档', advanced: '压轴' }
@@ -44,16 +46,35 @@ function solutionMarkdown(value: string) {
 }
 
 export function PracticeSetView({ practiceSet, onBack }: { practiceSet: PracticeSet; onBack: () => void }) {
+  const [exporting, setExporting] = useState<PracticeDocumentType | null>(null)
+  const [exported, setExported] = useState<PracticeDocumentRecord | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
   const warnings = Array.isArray(practiceSet.generationMetadata.warnings)
     ? practiceSet.generationMetadata.warnings.filter((value): value is string => typeof value === 'string') : []
   const namedTargets = practiceSet.targetSkills.filter((target) => !target.id.startsWith('bundle:'))
   const visibleTargets = namedTargets.length ? namedTargets : practiceSet.targetSkills.slice(0, 1)
+  const exportDocument = async (documentType: PracticeDocumentType) => {
+    setExporting(documentType); setExportError(null)
+    try { setExported(await exportPracticePdf(practiceSet, documentType)) }
+    catch (reason) { setExportError(String(reason)) }
+    finally { setExporting(null) }
+  }
   return <main className="workspace practice-workspace">
     <header className="practice-header">
       <Button onClick={onBack} variant="ghost">返回 Review Unit</Button>
       <div><p className="eyebrow">Practice Set</p><h1>针对性练习</h1><p>{practiceSet.subject} · {practiceSet.items.length} 题 · {practiceSet.strategy}</p></div>
       <StatusTag kind="pending">已保存</StatusTag>
     </header>
+    <section className="practice-export" aria-label="PDF 导出">
+      <div><strong>打印与回传</strong><span>A4 · 固定题号 · 机器可识别页面身份</span></div>
+      <div>
+        <Button disabled={exporting !== null} onClick={() => void exportDocument('questions')} variant="secondary">{exporting === 'questions' ? '生成中…' : '题目版 PDF'}</Button>
+        <Button disabled={exporting !== null} onClick={() => void exportDocument('answer_sheet')} variant="primary">{exporting === 'answer_sheet' ? '生成中…' : '机器答题卡'}</Button>
+        <Button disabled={exporting !== null} onClick={() => void exportDocument('solutions')} variant="ghost">{exporting === 'solutions' ? '生成中…' : '答案解析版'}</Button>
+      </div>
+      {exported ? <p><span>{exported.pageCount} 页 · {Math.max(1, Math.round(exported.byteLength / 1024))} KB{exported.cacheHit ? ' · 已复用稳定产物' : ''}</span><Button onClick={() => void openExportedPracticePdf(exported)} variant="ghost">打开 PDF</Button></p> : null}
+      {exportError ? <p className="practice-export__error" role="alert">{exportError}</p> : null}
+    </section>
     {warnings.map((warning) => <p className="practice-warning" key={warning}>{warning}</p>)}
     <section className="practice-targets" aria-label="练习目标">
       <span>目标能力</span>
