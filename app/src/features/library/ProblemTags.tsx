@@ -9,12 +9,11 @@ import {
 } from '../../domain/horizon'
 import {
   addProblemTag,
+  getAvailableHorizonTags,
   getProblemDifficulty,
-  getProblemTextbookMatch,
   listProblemTags,
-  listTagDefinitions,
   removeProblemTag,
-  type ProblemTextbookMatchView,
+  type AvailableHorizonTagsStatus,
   type ProblemDifficultyView,
 } from '../../platform/horizonDatabase'
 
@@ -23,24 +22,28 @@ const labels: Record<HorizonTagType, string> = {
 }
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '压轴' }
 
-export function ProblemTags({ problemId, subject }: { problemId: string; subject: string | null }) {
+export function ProblemTags({ problemId, subjectId, subject }: { problemId: string; subjectId: string | null; subject: string | null }) {
   const [tags, setTags] = useState<ProblemTag[]>([])
   const [definitions, setDefinitions] = useState<TagDefinition[]>([])
   const [difficulty, setDifficulty] = useState<ProblemDifficultyView | null>(null)
-  const [textbookMatch, setTextbookMatch] = useState<ProblemTextbookMatchView | null>(null)
+  const [availability, setAvailability] = useState<AvailableHorizonTagsStatus | 'no_subject'>('no_subject')
   const [message, setMessage] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ type: HorizonTagType } | null>(null)
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
 
   const refresh = useCallback(async () => {
-    if (!subject) { setTags([]); setDefinitions([]); setDifficulty(null); setTextbookMatch(null); return }
-    const [nextTags, nextDefinitions, nextDifficulty, nextTextbookMatch] = await Promise.all([
-      listProblemTags(problemId), listTagDefinitions(subject), getProblemDifficulty(problemId), getProblemTextbookMatch(problemId),
+    if (!subjectId) { setTags([]); setDefinitions([]); setDifficulty(null); setAvailability('no_subject'); return }
+    const [nextTags, available, nextDifficulty] = await Promise.all([
+      listProblemTags(problemId), getAvailableHorizonTags(subjectId), getProblemDifficulty(problemId),
     ])
-    setTags(nextTags); setDefinitions(nextDefinitions); setDifficulty(nextDifficulty); setTextbookMatch(nextTextbookMatch)
-  }, [problemId, subject])
+    setTags(nextTags); setDefinitions(available.tags); setDifficulty(nextDifficulty); setAvailability(available.status)
+    setMessage(null)
+  }, [problemId, subjectId])
 
-  useEffect(() => { void refresh().catch((error) => setMessage(String(error))) }, [refresh])
+  useEffect(() => { void refresh().catch((error) => {
+    console.error('Horizon tag query failed', { problemId, subjectId, error })
+    setMessage('标签加载失败，请稍后重试。')
+  }) }, [problemId, refresh, subjectId])
   useEffect(() => {
     const listener = (event: Event) => {
       if ((event as CustomEvent<{ problemId?: string }>).detail?.problemId === problemId) void refresh()
@@ -59,18 +62,22 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
   }
 
   const applyPicker = async () => {
-    if (!picker || !subject) return
+    if (!picker || !subjectId) return
     const definition = definitions.find((item) => item.id === selectedDefinitionId)
     if (!definition) return
-    await addProblemTag(problemId, subject, definition)
+    await addProblemTag(problemId, subjectId, definition)
     setPicker(null)
     await refresh()
   }
 
   const pickerOptions = picker
-    ? definitions.filter((item) => item.tagType === picker.type && item.lifecycleStatus === 'active' &&
-      (picker.type !== 'knowledge' || item.textbookId === textbookMatch?.textbook?.id))
+    ? definitions.filter((item) => item.tagType === picker.type)
     : []
+  const emptyPickerMessage = availability === 'no_horizon_structure'
+    ? '这个科目还没有知识结构。'
+    : availability === 'subject_not_found' || availability === 'subject_archived'
+      ? '这道题的科目当前不可用。'
+      : '这个科目还没有可用的知识点。'
 
   return <section className="problem-tags">
     <header><div><p className="eyebrow">题目标签</p><h3>知识点、方法、题型与错误类型</h3></div><StatusBadge>{subject || '请先确认科目'}</StatusBadge></header>
@@ -95,7 +102,7 @@ export function ProblemTags({ problemId, subject }: { problemId: string; subject
       <div className="problem-tag-picker">
         <p>选择一个已有的{picker ? labels[picker.type] : '标签'}。</p>
         <ListboxSelect label="选择标签" onValueChange={setSelectedDefinitionId} options={[{ value: '', label: '请选择' }, ...pickerOptions.map((item) => ({ value: item.id, label: item.canonicalName }))]} value={selectedDefinitionId} />
-        {!pickerOptions.length && <p className="problem-tag-picker__empty">暂无可用标签。</p>}
+        {!pickerOptions.length && <p className="problem-tag-picker__empty">{emptyPickerMessage}</p>}
         <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button><Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button></div>
       </div>
     </Dialog>

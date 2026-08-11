@@ -5,6 +5,7 @@ import type { Textbook } from './horizon'
 function textbook(overrides: Partial<Textbook> = {}): Textbook {
   return {
     id: 'math-8b-2022',
+    subjectId: 'subject-math',
     subject: '数学',
     title: '义务教育教科书 数学 八年级下册',
     grade: '八年级',

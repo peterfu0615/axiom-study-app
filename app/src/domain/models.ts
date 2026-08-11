@@ -470,6 +470,7 @@ export interface ExplainModelRun {
 
 export interface Problem {
   id: string
+  subjectId: string | null
   sourceDocumentId: string
   cropRect: NormalizedRect
   cropImagePath: string | null

@@ -1031,6 +1031,7 @@ export function ProblemLibrary() {
 
                       <ProblemTags
                         problemId={selected.id}
+                        subjectId={selected.subjectId}
                         subject={selected.subject}
                       />
 

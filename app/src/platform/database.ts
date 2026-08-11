@@ -368,6 +368,7 @@ function rowToProblem(row: Record<string, unknown>): Problem {
   const baseTitle = String(row.title || row.stem_markdown || '未命名题目')
   return {
     id: String(row.id),
+    subjectId: nullableString(row.subject_id),
     sourceDocumentId: String(row.source_document_id),
     cropRect: {
       x: Number(row.crop_x),
@@ -2767,11 +2768,12 @@ export async function completeProblemAIModelRun(
         throw new Error('AI Task 已不再处于处理中状态')
       }
       if (analysis.subject.trim()) {
+        const subjectId = `subject-${crypto.randomUUID()}`
         await db.execute(
-          `INSERT INTO subjects(name, archived_at, created_at, updated_at)
-           VALUES ($1, NULL, $2, $2)
+          `INSERT INTO subjects(name, id, code, display_name, archived_at, created_at, updated_at)
+           VALUES ($1, $2, $3, $1, NULL, $4, $4)
            ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
-          [analysis.subject.trim(), now],
+          [analysis.subject.trim(), subjectId, `axiom-${subjectId.slice(8, 20)}`, now],
         )
       }
       const completedProblem = await db.execute(
@@ -3129,11 +3131,12 @@ export async function updateProblemUserFields(
       JSON.stringify(knowledgePoints) !== JSON.stringify(previousKnowledgePoints)
 
     if (nextSubject) {
+      const subjectId = `subject-${crypto.randomUUID()}`
       await db.execute(
-        `INSERT INTO subjects(name, archived_at, created_at, updated_at)
-         VALUES ($1, NULL, $2, $2)
+        `INSERT INTO subjects(name, id, code, display_name, archived_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $1, NULL, $4, $4)
          ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
-        [nextSubject, now],
+        [nextSubject, subjectId, `axiom-${subjectId.slice(8, 20)}`, now],
       )
     }
 

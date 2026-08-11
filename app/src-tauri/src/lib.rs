@@ -255,6 +255,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0036_subject_and_region_provenance.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 37,
+            description: "stable_subject_identity",
+            sql: include_str!("../migrations/0037_stable_subject_identity.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

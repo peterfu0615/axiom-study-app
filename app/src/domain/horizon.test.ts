@@ -10,6 +10,7 @@ import {
 function definition(overrides: Partial<TagDefinition> = {}): TagDefinition {
   return {
     id: 'math-factoring',
+    subjectId: 'subject-math',
     subject: '数学',
     tagType: 'knowledge',
     canonicalName: '因式分解',
@@ -18,6 +19,8 @@ function definition(overrides: Partial<TagDefinition> = {}): TagDefinition {
     parentId: null,
     knowledgeNodeId: 'node-1',
     textbookId: 'math-book',
+    knowledgePath: '因式分解/提公因式法',
+    knowledgeEvidence: null,
     source: 'textbook_extracted',
     taxonomyVersion: 1,
     verificationStatus: 'user_verified',
@@ -38,17 +41,16 @@ const candidate = {
   source: 'problem' as const,
 }
 
-describe('subject-scoped controlled tag mapping', () => {
-  it('maps aliases only inside the active subject and textbook', () => {
+describe('subject-id-scoped controlled tag mapping', () => {
+  it('maps aliases by stable subject id even when display name and code differ', () => {
     const result = mapCandidatesToControlledTags(
-      '数学',
+      'subject-math',
       'knowledge',
       [candidate],
       [
         definition(),
-        definition({ id: 'physics-factoring', subject: '物理' }),
+        definition({ id: 'physics-factoring', subjectId: 'subject-physics', subject: '物理' }),
       ],
-      'math-book',
     )
     expect(result[0].definition?.id).toBe('math-factoring')
     expect(result[0].mappingStatus).toBe('mapped')
@@ -56,41 +58,39 @@ describe('subject-scoped controlled tag mapping', () => {
 
   it('never reuses an equal name from another subject', () => {
     const result = mapCandidatesToControlledTags(
-      '数学',
+      'subject-math',
       'knowledge',
       [candidate],
-      [definition({ id: 'physics-factoring', subject: '物理' })],
-      'math-book',
+      [definition({ id: 'physics-factoring', subjectId: 'subject-physics', subject: '物理' })],
     )
     expect(result[0].definition).toBeNull()
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 
-  it('does not map knowledge from a different matched textbook', () => {
+  it('allows active knowledge from another textbook in the same subject', () => {
     const result = mapCandidatesToControlledTags(
-      '数学',
+      'subject-math',
       'knowledge',
       [candidate],
-      [definition()],
-      'other-book',
+      [definition({ textbookId: 'other-math-book' })],
     )
-    expect(result[0].mappingStatus).toBe('unmapped')
+    expect(result[0].mappingStatus).toBe('mapped')
   })
 
-  it('accepts a controlled id only when it belongs to the selected textbook', () => {
+  it('accepts a controlled id only when it belongs to the subject', () => {
     const result = mapCandidatesToControlledTags(
-      '数学', 'knowledge',
+      'subject-math', 'knowledge',
       [{ ...candidate, canonicalTagId: 'math-factoring', name: '模型返回的显示名' }],
-      [definition()], 'math-book',
+      [definition()],
     )
     expect(result[0].definition?.id).toBe('math-factoring')
   })
 
-  it('rejects a real controlled id from another textbook', () => {
+  it('rejects a real controlled id from another subject', () => {
     const result = mapCandidatesToControlledTags(
-      '数学', 'knowledge',
+      'subject-math', 'knowledge',
       [{ ...candidate, canonicalTagId: 'other-book-tag' }],
-      [definition({ id: 'other-book-tag', textbookId: 'other-book' })], 'math-book',
+      [definition({ id: 'other-book-tag', subjectId: 'subject-physics', subject: '物理' })],
     )
     expect(result[0].definition).toBeNull()
     expect(result[0].mappingStatus).toBe('unmapped')
@@ -98,33 +98,31 @@ describe('subject-scoped controlled tag mapping', () => {
 
   it('rejects hallucinated ids without silently falling back by name', () => {
     const result = mapCandidatesToControlledTags(
-      '数学', 'knowledge',
+      'subject-math', 'knowledge',
       [{ ...candidate, canonicalTagId: 'hallucinated-id' }],
-      [definition()], 'math-book',
+      [definition()],
     )
     expect(result[0].definition).toBeNull()
     expect(result[0].mappingStatus).toBe('unmapped')
   })
 
-  it('does not map knowledge when the problem has no matched textbook', () => {
+  it('maps knowledge without requiring a current or matched textbook', () => {
     const result = mapCandidatesToControlledTags(
-      '数学',
+      'subject-math',
       'knowledge',
       [candidate],
-      [definition({ textbookId: null })],
-      null,
+      [definition()],
     )
-    expect(result[0].definition).toBeNull()
-    expect(result[0].mappingStatus).toBe('unmapped')
+    expect(result[0].definition?.id).toBe('math-factoring')
+    expect(result[0].mappingStatus).toBe('mapped')
   })
 
   it('routes model matches to review without a probability threshold', () => {
     const result = mapCandidatesToControlledTags(
-      '数学',
+      'subject-math',
       'knowledge',
       [candidate],
       [definition()],
-      'math-book',
     )
     expect(result[0].definition?.id).toBe('math-factoring')
     expect(result[0].verificationStatus).toBe('needs_review')
@@ -133,7 +131,7 @@ describe('subject-scoped controlled tag mapping', () => {
 
 describe('problem tag outcome summary', () => {
   const tag = (overrides: Partial<ProblemTag> = {}): ProblemTag => ({
-    id: 'pt-1', problemId: 'problem-1', subject: '数学', tagType: 'knowledge',
+    id: 'pt-1', problemId: 'problem-1', subjectId: 'subject-math', subject: '数学', tagType: 'knowledge',
     tagId: 'math-factoring', canonicalName: '因式分解', role: 'primary',
     mappingStatus: 'mapped', confidence: .9, evidence: '题面', source: 'model',
     taxonomyVersion: 1, modelRunId: 'run-1', verificationStatus: 'ai_verified',

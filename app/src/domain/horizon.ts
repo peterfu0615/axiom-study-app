@@ -19,6 +19,7 @@ export type TagLifecycleStatus =
 
 export interface Textbook {
   id: string
+  subjectId: string
   subject: string
   title: string
   grade: string | null
@@ -133,6 +134,7 @@ export interface CurriculumImportJob {
 
 export interface KnowledgeNode {
   id: string
+  subjectId: string
   textbookId: string
   subject: string
   canonicalName: string
@@ -169,6 +171,7 @@ export interface KnowledgeEdge {
 
 export interface TagDefinition {
   id: string
+  subjectId: string
   subject: string
   tagType: HorizonTagType
   canonicalName: string
@@ -177,6 +180,8 @@ export interface TagDefinition {
   parentId: string | null
   knowledgeNodeId: string | null
   textbookId: string | null
+  knowledgePath: string | null
+  knowledgeEvidence: string | null
   source: 'textbook_extracted' | 'ai_inferred' | 'existing_library' | 'user_created'
   taxonomyVersion: number
   verificationStatus: VerificationStatus
@@ -191,6 +196,7 @@ export interface TagDefinition {
 export interface ProblemTag {
   id: string
   problemId: string
+  subjectId: string
   subject: string
   tagType: HorizonTagType
   tagId: string | null
@@ -295,24 +301,19 @@ export function normalizeTagName(value: string) {
 }
 
 export function mapCandidatesToControlledTags(
-  subject: string,
+  subjectId: string,
   tagType: HorizonTagType,
   candidates: AITagCandidate[],
   definitions: TagDefinition[],
-  matchedTextbookId: string | null,
 ): ControlledTagMapping[] {
   const scoped = definitions.filter((definition) =>
-    definition.subject === subject &&
+    definition.subjectId === subjectId &&
     definition.tagType === tagType &&
     definition.lifecycleStatus === 'active' &&
     definition.archivedAt === null &&
     definition.mergedIntoId === null &&
     Number.isInteger(definition.taxonomyVersion) && definition.taxonomyVersion > 0 &&
-    (tagType !== 'knowledge' || (
-      matchedTextbookId !== null &&
-      definition.knowledgeNodeId !== null &&
-      definition.textbookId === matchedTextbookId
-    ))
+    (tagType !== 'knowledge' || definition.knowledgeNodeId !== null)
   )
   return candidates.map((candidate) => {
     const normalized = normalizeTagName(candidate.name)

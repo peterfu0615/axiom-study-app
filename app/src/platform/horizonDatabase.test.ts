@@ -48,12 +48,16 @@ vi.mock('./native', () => ({
 }))
 
 import {
+  addProblemTag,
   archiveTextbook,
   cancelRelabelBatch,
+  getAvailableHorizonTags,
   getCurriculumImportJob,
   getTextbookDeletionImpact,
   listHorizonSubjects,
+  listProblemTags,
   listTextbooks,
+  removeProblemTag,
   resolveProblemTextbookBeforeAnalysis,
   resolveProblemTextbookContextBeforeAnalysis,
   runCurriculumImportJob,
@@ -62,11 +66,96 @@ import {
 import { verifyTextbookSource } from './native'
 
 const textbookRow = (overrides: Record<string, unknown> = {}) => ({
-  id: 'book-1', subject: '数学', title: '数学八年级下册', grade: '八年级',
+  id: 'book-1', subject_id: 'subject-math', subject: '数学', title: '数学八年级下册', grade: '八年级',
   volume: '下册', publisher: '人民教育出版社', edition: '2022年版',
   source_type: 'pdf', source_path: null, content_hash: null,
   extraction_status: 'completed', extraction_method: 'pdf_text', is_current: 0,
   archived_at: null, created_at: 1, updated_at: 1, ...overrides,
+})
+
+const availableTagRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'tag-function', subject_id: 'subject-math', subject: '数学',
+  tag_type: 'knowledge', canonical_name: '一次函数', aliases: '线性函数',
+  description: null, parent_id: null, knowledge_node_id: 'node-function',
+  textbook_id: 'book-1', knowledge_path: '第十九章 一次函数/一次函数',
+  knowledge_evidence: '形如 y=kx+b', origin_kind: 'textbook_extracted',
+  taxonomy_version: 1, verification_status: 'user_verified', lifecycle_status: 'active',
+  method_class: null, merged_into_id: null, archived_at: null, created_at: 1, updated_at: 1,
+  ...overrides,
+})
+
+describe('available Horizon tags', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  it('loads active aliases across multiple textbooks by stable subject id without current textbook', async () => {
+    recorded.selectOverrides.push(
+      { match: /SELECT id, code, display_name, archived_at FROM subjects/, rows: [{ id: 'subject-math', code: 'math-k12', display_name: '数学', archived_at: null }] },
+      { match: /SELECT COUNT\(\*\) AS count\s+FROM knowledge_nodes/, rows: [{ count: 42 }] },
+      { match: /SELECT td\.\*, kn\.textbook_id/, rows: [availableTagRow(), availableTagRow({ id: 'tag-geometry', canonical_name: '菱形的面积', textbook_id: 'book-2', aliases: '菱形面积' })] },
+    )
+    const result = await getAvailableHorizonTags('subject-math', 'knowledge')
+    expect(result.status).toBe('ready')
+    expect(result.subject).toMatchObject({ id: 'subject-math', code: 'math-k12', displayName: '数学' })
+    expect(result.tags.map((tag) => [tag.canonicalName, tag.aliases])).toEqual([
+      ['一次函数', ['线性函数']], ['菱形的面积', ['菱形面积']],
+    ])
+    const query = recorded.calls.find((call) => call.sql.includes('SELECT td.*'))!
+    expect(query.params).toEqual(['subject-math', 'knowledge'])
+    expect(query.sql).not.toContain('is_current')
+    expect(query.sql).not.toContain('matched_textbook_id')
+    expect(query.sql).toContain('kn.archived_at IS NULL')
+    expect(query.sql).toContain('textbook.archived_at IS NULL')
+  })
+
+  it('distinguishes a missing subject, empty structure, and structure without selectable tags', async () => {
+    recorded.selectOverrides.push({ match: /SELECT id, code, display_name, archived_at FROM subjects/, rows: [] })
+    await expect(getAvailableHorizonTags('missing')).resolves.toMatchObject({ status: 'subject_not_found', tags: [] })
+
+    recorded.selectOverrides[0].rows = [{ id: 'subject-math', code: 'math-k12', display_name: '数学', archived_at: null }]
+    recorded.selectOverrides.push(
+      { match: /SELECT COUNT\(\*\) AS count\s+FROM knowledge_nodes/, rows: [{ count: 0 }] },
+      { match: /SELECT td\.\*, kn\.textbook_id/, rows: [] },
+    )
+    await expect(getAvailableHorizonTags('subject-math', 'knowledge')).resolves.toMatchObject({ status: 'no_horizon_structure' })
+    recorded.selectOverrides[1].rows = [{ count: 3 }]
+    await expect(getAvailableHorizonTags('subject-math', 'knowledge')).resolves.toMatchObject({ status: 'no_selectable_tags' })
+  })
+
+  it('adds, reloads, and removes a manual tag using the same subject id', async () => {
+    recorded.selectOverrides.push(
+      { match: /SELECT subject_id FROM problems/, rows: [{ subject_id: 'subject-math' }] },
+      { match: /FROM problem_tags pt LEFT JOIN tag_definitions/, rows: [{
+        id: 'problem-tag-1', problem_id: 'problem-1', subject_id: 'subject-math', subject: '数学',
+        tag_type: 'knowledge', tag_id: 'tag-function', canonical_name: '一次函数', role: 'secondary',
+        mapping_status: 'mapped', confidence: 1, evidence: '用户在题目详情中添加', source: 'user',
+        taxonomy_version: 1, model_run_id: null, verification_status: 'user_verified', is_locked: 1, updated_at: 1,
+      }] },
+    )
+    const definition = {
+      ...({} as import('../domain/horizon').TagDefinition),
+      ...(() => {
+        const row = availableTagRow()
+        return {
+          id: row.id, subjectId: row.subject_id, subject: row.subject, tagType: row.tag_type as 'knowledge',
+          canonicalName: row.canonical_name, aliases: ['线性函数'], description: null, parentId: null,
+          knowledgeNodeId: row.knowledge_node_id, textbookId: row.textbook_id,
+          knowledgePath: row.knowledge_path, knowledgeEvidence: row.knowledge_evidence,
+          source: 'textbook_extracted' as const, taxonomyVersion: 1, verificationStatus: 'user_verified' as const,
+          lifecycleStatus: 'active' as const, methodClass: null, mergedIntoId: null, archivedAt: null, createdAt: 1, updatedAt: 1,
+        }
+      })(),
+    }
+    await addProblemTag('problem-1', 'subject-math', definition)
+    expect(recorded.calls.find((call) => call.sql.startsWith('INSERT INTO problem_tags'))?.params.slice(1, 6))
+      .toEqual(['problem-1', 'subject-math', '数学', 'knowledge', 'tag-function'])
+    await expect(listProblemTags('problem-1')).resolves.toMatchObject([{ subjectId: 'subject-math', canonicalName: '一次函数' }])
+    await removeProblemTag('problem-tag-1')
+    expect(recorded.calls.at(-1)?.sql).toContain('UPDATE problem_tags SET superseded_at')
+  })
 })
 
 const curriculumJobRow = (overrides: Record<string, unknown> = {}) => ({
@@ -267,7 +356,7 @@ describe('archiveTextbook soft delete', () => {
     await listHorizonSubjects()
     const textbookList = recorded.calls.find((call) => call.sql.includes('SELECT * FROM textbooks'))!
     expect(textbookList.sql).toContain('archived_at IS NULL')
-    const subjectList = recorded.calls.find((call) => call.sql.startsWith('SELECT name AS subject FROM subjects'))!
+    const subjectList = recorded.calls.find((call) => call.sql.startsWith('SELECT display_name AS subject FROM subjects'))!
     expect(subjectList.sql).toContain('archived_at IS NULL')
   })
 })
@@ -318,19 +407,19 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
   function seed(problem: Record<string, unknown>, books: Array<Record<string, unknown>>) {
     recorded.selectOverrides.push(
       { match: /COALESCE\(NULLIF\(user_title/, rows: [{
-        effective_subject: '数学', title: '八年级下册一次函数', stem_markdown: '求解析式',
+        subject_id: 'subject-math', effective_subject: '数学', title: '八年级下册一次函数', stem_markdown: '求解析式',
         matched_textbook_id: null, textbook_match_locked: 0, ...problem,
       }] },
-      { match: /SELECT \* FROM textbooks WHERE subject = \$1 ORDER BY/, rows: books },
-      { match: /SELECT p\.id, trim/, rows: [{
-        id: 'problem-1', effective_subject: '数学', matched_textbook_id: books.length === 1 ? books[0]?.id : null,
+      { match: /SELECT \* FROM textbooks WHERE subject_id = \$1 ORDER BY/, rows: books },
+      { match: /SELECT p\.id, p\.subject_id/, rows: [{
+        id: 'problem-1', subject_id: 'subject-math', effective_subject: '数学', matched_textbook_id: books.length === 1 ? books[0]?.id : null,
         textbook_match_confidence: books.length === 1 ? .95 : 0,
         textbook_match_reason: books.length === 1 ? '当前科目只有一本未归档教材' : '教材元数据不足以安全匹配',
         textbook_match_source: books.length === 1 ? 'single_subject_textbook' : 'unresolved',
         textbook_match_locked: Number(problem.textbook_match_locked ?? 0),
         textbook_resolver_version: 'problem-textbook-resolver-v2-autonomous',
         textbook_candidate_count: books.length, textbook_decision_json: '{}',
-        textbook_id: books.length === 1 ? books[0]?.id : null, textbook_subject: books[0]?.subject,
+        textbook_id: books.length === 1 ? books[0]?.id : null, textbook_subject_id: 'subject-math', textbook_subject: books[0]?.subject,
         textbook_title: books[0]?.title, textbook_grade: books[0]?.grade,
         textbook_volume: books[0]?.volume, textbook_publisher: books[0]?.publisher,
         textbook_edition: books[0]?.edition, textbook_source_type: books[0]?.source_type,
@@ -388,7 +477,7 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     recorded.selectOverrides.push(
       { match: /AS problem_text/, rows: [{ problem_text: '一次函数求解析式' }] },
       { match: /COALESCE\(NULLIF\(path/, rows: [{ fingerprint: '第十六章/一次函数' }] },
-      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+      { match: /SELECT p\.subject_id, subject\.display_name AS subject/, rows: [{ subject_id: 'subject-math', subject: '数学' }] },
     )
     const resolver = vi.fn().mockResolvedValue({
       selectedTextbookId: 'book-2', providerId: 'provider-1', model: 'model-1', runId: 'run-1',
@@ -422,7 +511,7 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     recorded.selectOverrides.push(
       { match: /AS problem_text/, rows: [{ problem_text: '一次函数' }] },
       { match: /COALESCE\(NULLIF\(path/, rows: [] },
-      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+      { match: /SELECT p\.subject_id, subject\.display_name AS subject/, rows: [{ subject_id: 'subject-math', subject: '数学' }] },
     )
 
     await resolveProblemTextbookContextBeforeAnalysis('problem-1', async () => ({
@@ -446,7 +535,7 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     recorded.selectOverrides.push(
       { match: /AS problem_text/, rows: [{ problem_text: '一次函数' }] },
       { match: /COALESCE\(NULLIF\(path/, rows: [] },
-      { match: /AS subject\s+FROM problems WHERE id = \$1 AND status/, rows: [{ subject: '数学' }] },
+      { match: /SELECT p\.subject_id, subject\.display_name AS subject/, rows: [{ subject_id: 'subject-math', subject: '数学' }] },
     )
 
     await resolveProblemTextbookContextBeforeAnalysis('problem-1', async () => {
@@ -462,15 +551,17 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
     })
   })
 
-  it('retrieves a bounded canonical context only from the selected textbook', async () => {
+  it('retrieves bounded canonical context from the shared subject tag source', async () => {
     seed({}, [textbookRow()])
     recorded.selectOverrides.push(
       { match: /AS problem_text/, rows: [{ problem_text: '利用全等判定证明三角形全等' }] },
-      { match: /td\.id AS canonical_tag_id/, rows: [{
-        canonical_tag_id: 'tag-1', canonical_name: '三角形全等的判定', taxonomy_version: 4,
-        knowledge_node_id: 'node-1', path: '第十二章/三角形全等的判定',
-        evidence_text: '教材第十二章', aliases: `全等判定${String.fromCharCode(31)}判定全等`,
-      }] },
+      { match: /SELECT id, code, display_name, archived_at FROM subjects/, rows: [{ id: 'subject-math', code: 'math-k12', display_name: '数学', archived_at: null }] },
+      { match: /SELECT COUNT\(\*\) AS count\s+FROM knowledge_nodes/, rows: [{ count: 1 }] },
+      { match: /SELECT td\.\*, kn\.textbook_id/, rows: [availableTagRow({
+        id: 'tag-1', canonical_name: '三角形全等的判定', taxonomy_version: 4,
+        knowledge_node_id: 'node-1', knowledge_path: '第十二章/三角形全等的判定',
+        knowledge_evidence: '教材第十二章', aliases: `全等判定${String.fromCharCode(31)}判定全等`,
+      })] },
     )
     const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
     expect(result.context).toMatchObject({
@@ -478,17 +569,17 @@ describe('resolveProblemTextbookBeforeAnalysis', () => {
       totalKnowledgeCount: 1, candidateLimit: 30,
       candidates: [{ canonicalTagId: 'tag-1', knowledgeNodeId: 'node-1' }],
     })
-    const query = recorded.calls.find((call) => call.sql.includes('td.id AS canonical_tag_id'))!
-    expect(query.params).toEqual(['数学', 'book-1'])
+    const query = recorded.calls.find((call) => call.sql.includes('SELECT td.*'))!
+    expect(query.params).toEqual(['subject-math', 'knowledge'])
     expect(query.sql).toContain("td.lifecycle_status = 'active'")
-    expect(query.sql).toContain('kn.textbook_id = $2')
+    expect(query.sql).not.toContain('is_current')
   })
 
   it('does not query or fabricate canonical knowledge when resolution is unresolved', async () => {
     seed({}, [])
     const result = await resolveProblemTextbookContextBeforeAnalysis('problem-1')
     expect(result.context).toBeNull()
-    expect(recorded.calls.some((call) => call.sql.includes('canonical_tag_id'))).toBe(false)
+    expect(recorded.calls.some((call) => call.sql.includes('SELECT td.*'))).toBe(false)
   })
 })
 
@@ -506,7 +597,7 @@ describe('writeControlledProblemAnalysis', () => {
 
   it('persists unknown knowledge as an unresolved ProblemTag without minting a fake definition', async () => {
     await writeControlledProblemAnalysis({
-      problemId: 'problem-1', modelRunId: 'run-1', subject: '数学', now: 100,
+      problemId: 'problem-1', modelRunId: 'run-1', subjectId: 'subject-math', subject: '数学', now: 100,
       textbookMatch: { textbook: textbookRow() as never, reason: '单本教材', source: 'single_subject_textbook' },
       definitions: [],
       candidateGroups: [['knowledge', [{
@@ -518,14 +609,14 @@ describe('writeControlledProblemAnalysis', () => {
     expect(recorded.calls.some((call) => call.sql.startsWith('INSERT OR IGNORE INTO tag_definitions')))
       .toBe(false)
     const insert = recorded.calls.find((call) => call.sql.startsWith('INSERT OR IGNORE INTO problem_tags'))!
-    expect(insert.params[4]).toBeNull()
-    expect(insert.params[5]).toBe('候选中不存在的知识')
-    expect(insert.params[7]).toBe('unmapped')
+    expect(insert.params[5]).toBeNull()
+    expect(insert.params[6]).toBe('候选中不存在的知识')
+    expect(insert.params[8]).toBe('unmapped')
   })
 
   it('supersedes only unlocked unconfirmed model tags during re-analysis', async () => {
     await writeControlledProblemAnalysis({
-      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 200,
+      problemId: 'problem-1', modelRunId: 'run-2', subjectId: 'subject-math', subject: '数学', now: 200,
       textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [], difficulty: null,
     })
@@ -541,7 +632,7 @@ describe('writeControlledProblemAnalysis', () => {
       entry.match.test('SELECT id FROM problem_difficulties'))!
     difficultyRows.rows = [{ id: 'difficulty-user' }]
     await writeControlledProblemAnalysis({
-      problemId: 'problem-1', modelRunId: 'run-2', subject: '数学', now: 300,
+      problemId: 'problem-1', modelRunId: 'run-2', subjectId: 'subject-math', subject: '数学', now: 300,
       textbookMatch: { textbook: null, reason: '未匹配', source: 'unresolved' },
       definitions: [], candidateGroups: [],
       difficulty: { level: 'advanced', score: .9, reason: '综合题' },

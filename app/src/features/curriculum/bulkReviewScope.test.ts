@@ -3,8 +3,9 @@ import type { TagDefinitionSummary, TagReviewItem } from '../../platform/horizon
 import { selectBulkReviewScope } from './bulkReviewScope'
 
 const definition = (overrides: Partial<TagDefinitionSummary>): TagDefinitionSummary => ({
-  id: overrides.id ?? 'definition', subject: '数学', tagType: 'method', canonicalName: '方法', aliases: [],
+  id: overrides.id ?? 'definition', subjectId: 'subject-math', subject: '数学', tagType: 'method', canonicalName: '方法', aliases: [],
   description: null, parentId: null, knowledgeNodeId: null, textbookId: null,
+  knowledgePath: null, knowledgeEvidence: null,
   source: 'ai_inferred', taxonomyVersion: 1, verificationStatus: 'needs_review',
   lifecycleStatus: 'candidate', methodClass: null, mergedIntoId: null, archivedAt: null,
   createdAt: 0, updatedAt: 0, problemCount: 0, ...overrides,

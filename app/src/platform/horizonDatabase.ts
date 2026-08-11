@@ -349,6 +349,7 @@ async function ensureTaxonomyVersion(subject: string): Promise<number> {
 function rowToTextbook(row: Record<string, unknown>): Textbook {
   return {
     id: String(row.id),
+    subjectId: String(row.subject_id || ''),
     subject: String(row.subject),
     title: String(row.title),
     grade: nullableString(row.grade),
@@ -417,6 +418,7 @@ function rowToCurriculumImportJob(row: Record<string, unknown>): CurriculumImpor
 function rowToKnowledgeNode(row: Record<string, unknown>): KnowledgeNode {
   return {
     id: String(row.id),
+    subjectId: String(row.subject_id || ''),
     textbookId: String(row.textbook_id),
     subject: String(row.subject),
     canonicalName: String(row.canonical_name),
@@ -444,6 +446,7 @@ function rowToKnowledgeNode(row: Record<string, unknown>): KnowledgeNode {
 function rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
   return {
     id: String(row.id),
+    subjectId: String(row.subject_id || ''),
     subject: String(row.subject),
     tagType: String(row.tag_type) as TagDefinition['tagType'],
     canonicalName: String(row.canonical_name),
@@ -452,6 +455,8 @@ function rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
     parentId: nullableString(row.parent_id),
     knowledgeNodeId: nullableString(row.knowledge_node_id),
     textbookId: nullableString(row.textbook_id),
+    knowledgePath: nullableString(row.knowledge_path ?? row.path),
+    knowledgeEvidence: nullableString(row.knowledge_evidence ?? row.evidence_text),
     source: String(row.origin_kind || 'user_created') as TagDefinition['source'],
     taxonomyVersion: Number(row.taxonomy_version),
     verificationStatus: String(row.verification_status) as TagDefinition['verificationStatus'],
@@ -466,18 +471,52 @@ function rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
 
 export async function listHorizonSubjects(): Promise<string[]> {
   const rows = await select<Array<{ subject: string }>>(
-    `SELECT name AS subject FROM subjects WHERE archived_at IS NULL ORDER BY name`,
+    `SELECT display_name AS subject FROM subjects WHERE archived_at IS NULL ORDER BY display_name`,
   )
   return rows.map((row) => String(row.subject)).filter(Boolean)
 }
 
-async function ensureSubjectRecord(subject: string, now = Date.now()) {
-  await execute(
-    `INSERT INTO subjects(name, archived_at, created_at, updated_at)
-     VALUES ($1, NULL, $2, $2)
-     ON CONFLICT(name) DO UPDATE SET archived_at = NULL, updated_at = excluded.updated_at`,
-    [subject.trim(), now],
+export interface HorizonSubjectIdentity {
+  id: string
+  code: string
+  displayName: string
+  archivedAt: number | null
+}
+
+export async function getHorizonSubject(subjectId: string): Promise<HorizonSubjectIdentity | null> {
+  const rows = await select<Array<Record<string, unknown>>>(
+    `SELECT id, code, display_name, archived_at FROM subjects WHERE id = $1 LIMIT 1`,
+    [subjectId],
   )
+  const row = rows[0]
+  return row ? {
+    id: String(row.id),
+    code: String(row.code),
+    displayName: String(row.display_name),
+    archivedAt: nullableNumber(row.archived_at),
+  } : null
+}
+
+async function ensureSubjectRecord(subject: string, now = Date.now()) {
+  const displayName = subject.trim()
+  const existing = await select<Array<{ id: string }>>(
+    `SELECT id FROM subjects WHERE display_name = $1 COLLATE NOCASE LIMIT 1`,
+    [displayName],
+  )
+  if (existing[0]?.id) {
+    await execute(
+      `UPDATE subjects SET archived_at = NULL, updated_at = $1 WHERE id = $2`,
+      [now, existing[0].id],
+    )
+    return existing[0].id
+  }
+  const subjectId = `subject-${id()}`
+  await execute(
+    `INSERT INTO subjects(name, id, code, display_name, archived_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $1, NULL, $4, $4)`,
+    [displayName, subjectId, `axiom-${subjectId.slice(8, 20)}`, now],
+  )
+  return subjectId
 }
 
 export async function listTextbooks(subject?: string): Promise<Textbook[]> {
@@ -492,6 +531,7 @@ export async function listTextbooks(subject?: string): Promise<Textbook[]> {
 
 export interface ProblemTextbookMatchView extends ProblemTextbookMatch {
   problemId: string
+  subjectId: string
   subject: string
   locked: boolean
   candidates: Textbook[]
@@ -513,11 +553,11 @@ export type AutonomousTextbookResolver = (
 
 export async function getProblemTextbookMatch(problemId: string): Promise<ProblemTextbookMatchView | null> {
   const rows = await select<Record<string, unknown>[]>(
-    `SELECT p.id, trim(COALESCE(NULLIF(p.user_subject, ''), NULLIF(p.ai_subject, ''), NULLIF(p.subject, ''))) AS effective_subject,
+    `SELECT p.id, p.subject_id, subject.display_name AS effective_subject,
        p.matched_textbook_id, p.textbook_match_confidence, p.textbook_match_reason,
        p.textbook_match_source, p.textbook_match_locked, p.textbook_match_updated_at,
        p.textbook_resolver_version, p.textbook_candidate_count, p.textbook_decision_json,
-       t.id AS textbook_id, t.subject AS textbook_subject, t.title AS textbook_title,
+       t.id AS textbook_id, t.subject_id AS textbook_subject_id, t.subject AS textbook_subject, t.title AS textbook_title,
        t.grade AS textbook_grade, t.volume AS textbook_volume, t.publisher AS textbook_publisher,
        t.edition AS textbook_edition, t.source_type AS textbook_source_type,
        t.source_path AS textbook_source_path, t.content_hash AS textbook_content_hash,
@@ -525,6 +565,7 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
        t.is_current AS textbook_is_current, t.archived_at AS textbook_archived_at,
        t.created_at AS textbook_created_at, t.updated_at AS textbook_updated_at
      FROM problems p
+     LEFT JOIN subjects subject ON subject.id = p.subject_id
      LEFT JOIN textbooks t ON t.id = p.matched_textbook_id
      WHERE p.id = $1 LIMIT 1`,
     [problemId],
@@ -534,13 +575,13 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
   const subject = String(row.effective_subject || '')
   const candidateRows = subject
     ? await select<Record<string, unknown>[]>(
-      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL
+      `SELECT * FROM textbooks WHERE subject_id = $1 AND archived_at IS NULL
        AND extraction_status IN ('completed', 'needs_review') ORDER BY updated_at DESC`,
-      [subject],
+      [row.subject_id],
     )
     : []
   const textbook = row.textbook_id ? rowToTextbook({
-    id: row.textbook_id, subject: row.textbook_subject, title: row.textbook_title,
+    id: row.textbook_id, subject_id: row.textbook_subject_id, subject: row.textbook_subject, title: row.textbook_title,
     grade: row.textbook_grade, volume: row.textbook_volume, publisher: row.textbook_publisher,
     edition: row.textbook_edition, source_type: row.textbook_source_type,
     source_path: row.textbook_source_path, content_hash: row.textbook_content_hash,
@@ -553,6 +594,7 @@ export async function getProblemTextbookMatch(problemId: string): Promise<Proble
     reason: nullableString(row.textbook_match_reason),
     source: String(row.textbook_match_source || 'unresolved') as ProblemTextbookMatch['source'],
     problemId,
+    subjectId: String(row.subject_id || ''),
     subject,
     locked: bool(row.textbook_match_locked),
     candidates: candidateRows.map(rowToTextbook),
@@ -568,26 +610,28 @@ export async function resolveProblemTextbookBeforeAnalysis(
   const now = Date.now()
   await transaction(async () => {
     const problems = await select<Array<{
+      subject_id: string | null
       effective_subject: string
       title: string | null
       stem_markdown: string | null
       matched_textbook_id: string | null
       textbook_match_locked: number
     }>>(
-      `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
+      `SELECT p.subject_id, subject.display_name AS effective_subject,
        COALESCE(NULLIF(user_title, ''), NULLIF(ai_title, ''), title) AS title,
        COALESCE(NULLIF(user_stem_markdown, ''), NULLIF(ai_stem_markdown, ''), stem_markdown) AS stem_markdown,
        matched_textbook_id, textbook_match_locked
-       FROM problems WHERE id = $1 AND status = 'saved' AND deleted_at IS NULL LIMIT 1`,
+       FROM problems p LEFT JOIN subjects subject ON subject.id = p.subject_id
+       WHERE p.id = $1 AND p.status = 'saved' AND p.deleted_at IS NULL LIMIT 1`,
       [problemId],
     )
     const problem = problems[0]
     if (!problem) throw new Error('错题不存在或状态已发生变化')
     const subject = String(problem.effective_subject || '')
-    const textbookRows = subject
+    const textbookRows = problem.subject_id
       ? await select<Record<string, unknown>[]>(
-        `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`,
-        [subject],
+        `SELECT * FROM textbooks WHERE subject_id = $1 ORDER BY updated_at DESC`,
+        [problem.subject_id],
       )
       : []
     const textbooks = textbookRows.map(rowToTextbook)
@@ -658,10 +702,10 @@ async function buildAutonomousResolutionInput(
     const rows = await select<Array<{ fingerprint: string }>>(
       `SELECT COALESCE(NULLIF(path, ''), name) AS fingerprint
        FROM knowledge_nodes
-       WHERE textbook_id = $1 AND subject = $2
+       WHERE textbook_id = $1 AND subject_id = $2
          AND archived_at IS NULL AND merged_into_id IS NULL
        ORDER BY sort_order, name COLLATE NOCASE LIMIT 8`,
-      [textbook.id, match.subject],
+      [textbook.id, match.subjectId],
     )
     candidates.push({
       id: textbook.id,
@@ -683,18 +727,20 @@ async function persistAutonomousTextbookSelection(
 ) {
   const now = Date.now()
   await transaction(async () => {
-    const problems = await select<Array<{ subject: string }>>(
-      `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS subject
-       FROM problems WHERE id = $1 AND status = 'saved' AND deleted_at IS NULL LIMIT 1`,
+    const problems = await select<Array<{ subject_id: string; subject: string }>>(
+      `SELECT p.subject_id, subject.display_name AS subject
+       FROM problems p JOIN subjects subject ON subject.id = p.subject_id
+       WHERE p.id = $1 AND p.status = 'saved' AND p.deleted_at IS NULL LIMIT 1`,
       [problemId],
     )
     const subject = String(problems[0]?.subject || '')
-    if (!subject) return
+    const subjectId = String(problems[0]?.subject_id || '')
+    if (!subjectId) return
     const rows = await select<Record<string, unknown>[]>(
-      `SELECT * FROM textbooks WHERE subject = $1 AND archived_at IS NULL
+      `SELECT * FROM textbooks WHERE subject_id = $1 AND archived_at IS NULL
        AND extraction_status IN ('completed', 'needs_review')
        ORDER BY updated_at DESC, id ASC`,
-      [subject],
+      [subjectId],
     )
     const candidates = rows.map(rowToTextbook)
     if (!candidates.length) return
@@ -763,33 +809,19 @@ export async function resolveProblemTextbookContextBeforeAnalysis(
     match = await persistAutonomousTextbookSelection(problemId, attempted, resolverFailure)
   }
   if (!match?.textbook) return { match, context: null }
-  const rows = await select<Record<string, unknown>[]>(
-    `SELECT td.id AS canonical_tag_id, td.canonical_name, td.taxonomy_version,
-       kn.id AS knowledge_node_id, kn.path, kn.evidence_text,
-       COALESCE(group_concat(ta.alias, char(31)), '') AS aliases
-     FROM tag_definitions td
-     JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
-     LEFT JOIN tag_aliases ta ON ta.tag_id = td.id AND ta.subject = td.subject
-     WHERE td.subject = $1 AND td.tag_type = 'knowledge'
-       AND td.lifecycle_status = 'active' AND td.archived_at IS NULL
-       AND kn.textbook_id = $2 AND kn.subject = $1
-       AND kn.archived_at IS NULL AND kn.merged_into_id IS NULL
-     GROUP BY td.id
-     ORDER BY kn.sort_order, td.canonical_name COLLATE NOCASE`,
-    [match.subject, match.textbook.id],
-  )
-  const allCandidates: CanonicalKnowledgeCandidate[] = rows.map((row) => {
-    const hierarchyPath = String(row.path || row.canonical_name || '')
+  const available = await getAvailableHorizonTags(match.subjectId, 'knowledge')
+  const allCandidates: CanonicalKnowledgeCandidate[] = available.tags.map((definition) => {
+    const hierarchyPath = definition.knowledgePath || definition.canonicalName
     const pathParts = hierarchyPath.split('/').map((part) => part.trim()).filter(Boolean)
     return {
-      canonicalTagId: String(row.canonical_tag_id),
-      canonicalName: String(row.canonical_name),
-      aliases: String(row.aliases || '').split(String.fromCharCode(31)).filter(Boolean),
-      knowledgeNodeId: String(row.knowledge_node_id),
+      canonicalTagId: definition.id,
+      canonicalName: definition.canonicalName,
+      aliases: definition.aliases,
+      knowledgeNodeId: definition.knowledgeNodeId as string,
       chapter: pathParts.length > 1 ? pathParts[0] : null,
       hierarchyPath,
-      taxonomyVersion: Number(row.taxonomy_version),
-      evidence: nullableString(row.evidence_text),
+      taxonomyVersion: definition.taxonomyVersion,
+      evidence: definition.knowledgeEvidence,
     }
   })
   const ranked = rankCanonicalKnowledgeCandidates(
@@ -1853,7 +1885,8 @@ export async function listTagDefinitions(
   tagType?: HorizonTagType,
 ): Promise<TagDefinition[]> {
   const rows = await select<Record<string, unknown>[]>(
-    `SELECT td.*, kn.textbook_id,
+    `SELECT td.*, kn.textbook_id, kn.path AS knowledge_path,
+       kn.evidence_text AS knowledge_evidence,
        COALESCE(group_concat(ta.alias, char(31)), '') AS aliases
      FROM tag_definitions td
      LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
@@ -1864,6 +1897,77 @@ export async function listTagDefinitions(
     [subject, tagType ?? ''],
   )
   return rows.map(rowToTagDefinition)
+}
+
+export type AvailableHorizonTagsStatus =
+  | 'ready'
+  | 'subject_not_found'
+  | 'subject_archived'
+  | 'no_horizon_structure'
+  | 'no_selectable_tags'
+
+export interface AvailableHorizonTags {
+  status: AvailableHorizonTagsStatus
+  subject: HorizonSubjectIdentity | null
+  tags: TagDefinition[]
+  activeKnowledgeNodeCount: number
+}
+
+/**
+ * Canonical subject-scoped tag source shared by the manual picker and AI
+ * mapping/context paths. It deliberately has no current-textbook input.
+ */
+export async function getAvailableHorizonTags(
+  subjectId: string,
+  tagType?: HorizonTagType,
+): Promise<AvailableHorizonTags> {
+  const subject = await getHorizonSubject(subjectId)
+  if (!subject) return {
+    status: 'subject_not_found', subject: null, tags: [], activeKnowledgeNodeCount: 0,
+  }
+  if (subject.archivedAt !== null) return {
+    status: 'subject_archived', subject, tags: [], activeKnowledgeNodeCount: 0,
+  }
+  const structureRows = await select<Array<{ count: number }>>(
+    `SELECT COUNT(*) AS count
+     FROM knowledge_nodes node
+     JOIN textbooks textbook ON textbook.id = node.textbook_id
+     WHERE node.subject_id = $1 AND node.node_type = 'knowledge'
+       AND node.archived_at IS NULL AND node.merged_into_id IS NULL
+       AND textbook.subject_id = $1 AND textbook.archived_at IS NULL`,
+    [subjectId],
+  )
+  const activeKnowledgeNodeCount = Number(structureRows[0]?.count ?? 0)
+  const rows = await select<Record<string, unknown>[]>(
+    `SELECT td.*, kn.textbook_id,
+       COALESCE(group_concat(ta.alias, char(31)), '') AS aliases
+     FROM tag_definitions td
+     LEFT JOIN knowledge_nodes kn ON kn.id = td.knowledge_node_id
+     LEFT JOIN textbooks textbook ON textbook.id = kn.textbook_id
+     LEFT JOIN tag_aliases ta ON ta.tag_id = td.id AND ta.subject_id = td.subject_id
+     WHERE td.subject_id = $1 AND ($2 = '' OR td.tag_type = $2)
+       AND td.lifecycle_status = 'active' AND td.archived_at IS NULL
+       AND td.merged_into_id IS NULL
+       AND (td.tag_type != 'knowledge' OR (
+         kn.id IS NOT NULL AND kn.subject_id = $1
+         AND kn.archived_at IS NULL AND kn.merged_into_id IS NULL
+         AND textbook.subject_id = $1 AND textbook.archived_at IS NULL
+       ))
+     GROUP BY td.id
+     ORDER BY td.tag_type, td.canonical_name COLLATE NOCASE`,
+    [subjectId, tagType ?? ''],
+  )
+  const tags = rows.map(rowToTagDefinition)
+  return {
+    status: tags.length > 0
+      ? 'ready'
+      : activeKnowledgeNodeCount > 0
+        ? 'no_selectable_tags'
+        : 'no_horizon_structure',
+    subject,
+    tags,
+    activeKnowledgeNodeCount,
+  }
 }
 
 export interface TagDefinitionSummary extends TagDefinition {
@@ -2138,6 +2242,7 @@ export async function listProblemTags(problemId: string): Promise<ProblemTag[]> 
   return rows.map((row) => ({
     id: String(row.id),
     problemId: String(row.problem_id),
+    subjectId: String(row.subject_id || ''),
     subject: String(row.subject),
     tagType: String(row.tag_type) as ProblemTag['tagType'],
     tagId: nullableString(row.tag_id),
@@ -2264,29 +2369,25 @@ export async function removeProblemTag(problemTagId: string) {
 
 export async function addProblemTag(
   problemId: string,
-  subject: string,
+  subjectId: string,
   tag: TagDefinition,
   role: 'primary' | 'secondary' = 'secondary',
 ) {
-  if (tag.subject !== subject) throw new Error('不能把其他科目的标签添加到本题')
-  if (tag.tagType === 'knowledge') {
-    const rows = await select<Array<{ matched_textbook_id: string | null }>>(
-      `SELECT matched_textbook_id FROM problems WHERE id = $1 AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $2`,
-      [problemId, subject],
-    )
-    if (!rows[0]?.matched_textbook_id || tag.textbookId !== rows[0].matched_textbook_id) {
-      throw new Error('题目尚未匹配教材，知识点不能跨教材添加')
-    }
-  }
+  if (tag.subjectId !== subjectId) throw new Error('不能把其他科目的标签添加到本题')
+  const problems = await select<Array<{ subject_id: string }>>(
+    `SELECT subject_id FROM problems WHERE id = $1 AND subject_id = $2`,
+    [problemId, subjectId],
+  )
+  if (!problems[0]) throw new Error('题目科目不存在或已发生变化')
   const now = Date.now()
   await execute(
     `INSERT INTO problem_tags (
-      id, problem_id, subject, tag_type, tag_id, candidate_name, role,
+      id, problem_id, subject_id, subject, tag_type, tag_id, candidate_name, role,
       mapping_status, confidence, evidence, source, taxonomy_version,
       verification_status, is_locked, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, NULL, $6, 'mapped', 1,
-      '用户在题目详情中添加', 'user', $7, 'user_verified', 1, $8, $8)`,
-    [id(), problemId, subject, tag.tagType, tag.id, role, tag.taxonomyVersion, now],
+    ) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 'mapped', 1,
+      '用户在题目详情中添加', 'user', $8, 'user_verified', 1, $9, $9)`,
+    [id(), problemId, subjectId, tag.subject, tag.tagType, tag.id, role, tag.taxonomyVersion, now],
   )
 }
 
@@ -2335,6 +2436,7 @@ export async function confirmProblemDifficulty(
 export interface ControlledProblemAnalysisPlan {
   problemId: string
   modelRunId: string
+  subjectId: string
   subject: string
   now: number
   textbookMatch: ProblemTextbookMatch
@@ -2349,26 +2451,40 @@ export async function prepareControlledProblemAnalysis(
   analysis: AIProblemAnalysis,
 ): Promise<ControlledProblemAnalysisPlan | null> {
   const problems = await select<Array<{
-    effective_subject: string
+    subject_id: string | null
+    display_name: string | null
     matched_textbook_id: string | null
     textbook_match_locked: number
     textbook_match_confidence: number
     textbook_match_reason: string
     textbook_match_source: ProblemTextbookMatch['source']
   }>>(
-    `SELECT trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) AS effective_subject,
+    `SELECT p.subject_id, subject.display_name,
        matched_textbook_id, textbook_match_locked, textbook_match_confidence,
        textbook_match_reason, textbook_match_source
-     FROM problems WHERE id = $1`,
+     FROM problems p LEFT JOIN subjects subject ON subject.id = p.subject_id
+     WHERE p.id = $1`,
     [problemId],
   )
-  const subject = String(problems[0]?.effective_subject || '')
-  if (!subject) return null
-  if (analysis.subject.trim() && analysis.subject.trim().toLocaleLowerCase('zh-CN') !== subject.toLocaleLowerCase('zh-CN')) {
-    throw new Error('受控知识标签映射失败：模型科目与题目有效科目不一致')
+  let subjectId = String(problems[0]?.subject_id || '')
+  let subject = String(problems[0]?.display_name || '')
+  // Subject detection is the only display-name boundary. Once resolved, the
+  // Problem stores the stable ID and every downstream lookup is ID-scoped.
+  if (!subjectId && analysis.subject.trim()) {
+    const detected = await select<Array<{ id: string; display_name: string }>>(
+      `SELECT id, display_name FROM subjects
+       WHERE display_name = $1 COLLATE NOCASE AND archived_at IS NULL LIMIT 2`,
+      [analysis.subject.trim()],
+    )
+    if (detected.length === 1) {
+      subjectId = detected[0].id
+      subject = detected[0].display_name
+      await execute(`UPDATE problems SET subject_id = $1 WHERE id = $2`, [subjectId, problemId])
+    }
   }
+  if (!subjectId || !subject) return null
   const textbooks = (await select<Record<string, unknown>[]>(
-    `SELECT * FROM textbooks WHERE subject = $1 ORDER BY updated_at DESC`, [subject],
+    `SELECT * FROM textbooks WHERE subject_id = $1 ORDER BY updated_at DESC`, [subjectId],
   )).map(rowToTextbook)
   const matchedTextbookId = nullableString(problems[0]?.matched_textbook_id)
   const selectedTextbook = matchedTextbookId
@@ -2384,7 +2500,7 @@ export async function prepareControlledProblemAnalysis(
     reason: String(problems[0]?.textbook_match_reason || '分析前未匹配教材'),
     source: problems[0]?.textbook_match_source ?? 'unresolved',
   }
-  const definitions = await listTagDefinitions(subject)
+  const definitions = (await getAvailableHorizonTags(subjectId)).tags
   const knowledgeCandidates = mergeKnowledgeCandidateOutputs(
     analysis.knowledgeTags ?? [],
     analysis.unresolvedKnowledgeCandidates ?? [],
@@ -2392,6 +2508,7 @@ export async function prepareControlledProblemAnalysis(
   return {
     problemId,
     modelRunId,
+    subjectId,
     subject,
     now: Date.now(),
     textbookMatch,
@@ -2410,7 +2527,7 @@ export async function prepareControlledProblemAnalysis(
 export async function writeControlledProblemAnalysis(
   plan: ControlledProblemAnalysisPlan,
 ) {
-  const { problemId, modelRunId, subject, now, textbookMatch, definitions } = plan
+  const { problemId, modelRunId, subjectId, subject, now, textbookMatch, definitions } = plan
   const locked = await select<Array<{ textbook_match_locked: number }>>(
     `SELECT textbook_match_locked FROM problems WHERE id = $1`,
     [problemId],
@@ -2432,9 +2549,7 @@ export async function writeControlledProblemAnalysis(
   )
   const taxonomyVersion = await ensureTaxonomyVersion(subject)
   for (const [tagType, candidates = []] of plan.candidateGroups) {
-    const mappings = mapCandidatesToControlledTags(
-      subject, tagType, candidates, definitions, textbookMatch.textbook?.id ?? null,
-    )
+    const mappings = mapCandidatesToControlledTags(subjectId, tagType, candidates, definitions)
     for (const mapping of mappings) {
       // Unknown textbook knowledge remains an unresolved ProblemTag. Creating
       // a tag_definition without a valid KnowledgeNode would mint a fake
@@ -2442,22 +2557,22 @@ export async function writeControlledProblemAnalysis(
       if (!mapping.definition && tagType !== 'knowledge') {
         await execute(
           `INSERT OR IGNORE INTO tag_definitions (
-            id, subject, tag_type, canonical_name, source, verification_status,
+            id, subject_id, subject, tag_type, canonical_name, source, verification_status,
             lifecycle_status, method_class, taxonomy_version, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, 'model', 'needs_review', 'candidate', $5, $6, $7, $7)`,
-          [id(), subject, tagType, mapping.candidate.name,
+          ) VALUES ($1, $2, $3, $4, $5, 'model', 'needs_review', 'candidate', $6, $7, $8, $8)`,
+          [id(), subjectId, subject, tagType, mapping.candidate.name,
             tagType === 'method' ? (mapping.candidate.role === 'primary' ? 'core' : 'optional') : null,
             taxonomyVersion, now],
         )
       }
       await execute(
         `INSERT OR IGNORE INTO problem_tags (
-          id, problem_id, subject, tag_type, tag_id, candidate_name, role,
+          id, problem_id, subject_id, subject, tag_type, tag_id, candidate_name, role,
           mapping_status, confidence, evidence, source, taxonomy_version,
           model_run_id, verification_status, is_locked, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'model', $11,
-          $12, $13, 0, $14, $14)`,
-        [id(), problemId, subject, tagType, mapping.definition?.id ?? null,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'model', $12,
+          $13, $14, 0, $15, $15)`,
+        [id(), problemId, subjectId, subject, tagType, mapping.definition?.id ?? null,
           mapping.definition ? null : mapping.candidate.name, mapping.candidate.role,
           mapping.mappingStatus, 0, mapping.candidate.evidence,
           mapping.definition?.taxonomyVersion ?? taxonomyVersion, modelRunId,

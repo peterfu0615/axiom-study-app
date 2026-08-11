@@ -634,9 +634,10 @@ describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
         rows: () => [{ ai_diagram_image_path: null }],
       },
       {
-        match: (sql) => sql.includes('effective_subject'),
+        match: (sql) => sql.includes('SELECT p.subject_id, subject.display_name'),
         rows: () => [{
-          effective_subject: effectiveSubject,
+          subject_id: effectiveSubject ? 'subject-math' : null,
+          display_name: effectiveSubject || null,
           matched_textbook_id: null,
           textbook_match_locked: 0,
         }],
@@ -684,7 +685,7 @@ describe('completeProblemAIModelRun taxonomy atomicity (B1)', () => {
     expect(tagInsert).toBeGreaterThan(taxonomyWrite)
     expect(commitIndex).toBeGreaterThan(tagInsert)
     // prepare 阶段的只读查询必须发生在 BEGIN 之前（事务不包网络式长读）
-    const prepareRead = sequence.findIndex((sql) => sql.includes('effective_subject'))
+    const prepareRead = sequence.findIndex((sql) => sql.includes('SELECT p.subject_id, subject.display_name'))
     expect(prepareRead).toBeGreaterThan(-1)
     expect(prepareRead).toBeLessThan(beginIndex)
   })

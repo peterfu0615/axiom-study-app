@@ -4,7 +4,7 @@ import { buildKnowledgeTree, matchingKnowledgeNodeIds } from './curriculumTree'
 
 function node(overrides: Partial<KnowledgeNode>): KnowledgeNode {
   return {
-    id: 'node', textbookId: 'book', subject: '数学', canonicalName: '节点', nodeType: 'knowledge',
+    id: 'node', subjectId: 'subject-math', textbookId: 'book', subject: '数学', canonicalName: '节点', nodeType: 'knowledge',
     parentId: null, path: '节点', sortOrder: 0, curriculumVersion: 1, description: null,
     sourcePageStart: null, sourcePageEnd: null, evidenceText: null, sourcePath: null,
     extractionMethod: 'manual', confidence: 1, verificationStatus: 'user_verified',

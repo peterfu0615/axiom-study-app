@@ -228,6 +228,7 @@ const asTagDefinition = (id: string): TagDefinition => {
   if (!definition) throw new Error(`missing ${id}`)
   return {
     id: definition.id,
+    subjectId: 'subject-math',
     subject: definition.subject,
     tagType: definition.tag_type as TagDefinition['tagType'],
     canonicalName: id,
@@ -236,6 +237,8 @@ const asTagDefinition = (id: string): TagDefinition => {
     parentId: null,
     knowledgeNodeId: definition.knowledge_node_id,
     textbookId: 'book-1',
+    knowledgePath: null,
+    knowledgeEvidence: null,
     source: 'ai_inferred',
     taxonomyVersion: 1,
     verificationStatus: definition.verification_status as TagDefinition['verificationStatus'],
