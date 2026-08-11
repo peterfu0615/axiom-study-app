@@ -6,28 +6,40 @@ import {
   useMemo,
   useState,
 } from 'react'
+import {
+  APPEARANCE_STORAGE_KEY,
+  VISUAL_THEME_STORAGE_KEY,
+  readAppearance,
+  readVisualTheme,
+  resolveAppearance,
+  type Appearance,
+  type ResolvedAppearance,
+  type VisualTheme,
+} from './themeModel'
 
-export type Theme = 'light' | 'dark' | 'system'
-export type ResolvedTheme = 'light' | 'dark'
+export type { Appearance, ResolvedAppearance, VisualTheme } from './themeModel'
 
 interface ThemeContextValue {
-  theme: Theme
-  resolvedTheme: ResolvedTheme
-  setTheme: (theme: Theme) => void
+  appearance: Appearance
+  resolvedAppearance: ResolvedAppearance
+  visualTheme: VisualTheme
+  setAppearance: (appearance: Appearance) => void
   toggle: () => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
-const STORAGE_KEY = 'axiom.theme'
 
-function getSystemTheme(): ResolvedTheme {
+function getSystemAppearance(): ResolvedAppearance {
   if (typeof window === 'undefined') return 'light'
   return window.matchMedia('(prefers-color-scheme: dark)').matches
     ? 'dark'
     : 'light'
 }
 
-function applyTheme(resolved: ResolvedTheme) {
+function applyTheme(visualTheme: VisualTheme, resolved: ResolvedAppearance) {
+  document.documentElement.setAttribute('data-visual-theme', visualTheme)
+  document.documentElement.setAttribute('data-appearance', resolved)
+  // Keep this compatibility attribute during the gradual CSS migration.
   document.documentElement.setAttribute('data-theme', resolved)
   // 同步 Tauri 原生窗口主题，避免 macOS 标题栏/红绿灯与页面违和
   void (async () => {
@@ -41,46 +53,49 @@ function applyTheme(resolved: ResolvedTheme) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
+  const [appearance, setAppearanceState] = useState<Appearance>(() => {
     const previewTheme = import.meta.env.DEV
       ? new URLSearchParams(window.location.search).get('theme')
       : null
     if (previewTheme === 'light' || previewTheme === 'dark') return previewTheme
     if (typeof localStorage === 'undefined') return 'system'
-    return (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? 'system'
+    return readAppearance(localStorage)
   })
-  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme)
+  const [visualTheme] = useState<VisualTheme>(() =>
+    typeof localStorage === 'undefined' ? 'axiom' : readVisualTheme(localStorage))
+  const [systemAppearance, setSystemAppearance] = useState<ResolvedAppearance>(getSystemAppearance)
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     const handler = (e: MediaQueryListEvent) =>
-      setSystemTheme(e.matches ? 'dark' : 'light')
+      setSystemAppearance(e.matches ? 'dark' : 'light')
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [])
 
-  const resolvedTheme: ResolvedTheme = theme === 'system' ? systemTheme : theme
+  const resolvedAppearance = resolveAppearance(appearance, systemAppearance)
 
   useEffect(() => {
-    applyTheme(resolvedTheme)
-  }, [resolvedTheme])
+    applyTheme(visualTheme, resolvedAppearance)
+  }, [resolvedAppearance, visualTheme])
 
-  const setTheme = useCallback((next: Theme) => {
-    setThemeState(next)
+  const setAppearance = useCallback((next: Appearance) => {
+    setAppearanceState(next)
     if (next === 'system') {
-      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(APPEARANCE_STORAGE_KEY)
     } else {
-      localStorage.setItem(STORAGE_KEY, next)
+      localStorage.setItem(APPEARANCE_STORAGE_KEY, next)
     }
-  }, [])
+    localStorage.setItem(VISUAL_THEME_STORAGE_KEY, visualTheme)
+  }, [visualTheme])
 
   const toggle = useCallback(() => {
-    setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
-  }, [resolvedTheme, setTheme])
+    setAppearance(resolvedAppearance === 'dark' ? 'light' : 'dark')
+  }, [resolvedAppearance, setAppearance])
 
   const value = useMemo(
-    () => ({ theme, resolvedTheme, setTheme, toggle }),
-    [theme, resolvedTheme, setTheme, toggle],
+    () => ({ appearance, resolvedAppearance, visualTheme, setAppearance, toggle }),
+    [appearance, resolvedAppearance, visualTheme, setAppearance, toggle],
   )
 
   return (

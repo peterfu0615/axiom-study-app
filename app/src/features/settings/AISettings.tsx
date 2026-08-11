@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { configureAIProviders } from '../../ai/provider'
-import { useTheme, type Theme } from '../../platform/theme'
+import { useTheme, type Appearance } from '../../platform/theme'
 import { getAppVersion } from '../../platform/native'
 import type {
   AIProviderKind,
@@ -56,14 +56,14 @@ function providerSubtitle(profile: AIProviderProfile): string {
   return profile.baseUrl || 'OpenAI Compatible'
 }
 
-const APPEARANCE_OPTIONS: Array<{ value: Theme; label: string; description: string }> = [
+const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description: string }> = [
   { value: 'light', label: '浅色', description: '始终使用浅色外观' },
   { value: 'dark', label: '深色', description: '始终使用深色外观' },
   { value: 'system', label: '跟随系统', description: '随系统设置自动切换' },
 ]
 
 export function AISettings() {
-  const { theme, resolvedTheme, setTheme } = useTheme()
+  const { appearance, resolvedAppearance, visualTheme, setAppearance } = useTheme()
   const [profiles, setProfiles] = useState<AIProviderProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -522,17 +522,17 @@ export function AISettings() {
             <div className="settings-appearance-pane">
               <header>
                 <p className="eyebrow">外观</p>
-                <h2>主题</h2>
-                <p className="subtitle">选择应用的整体外观。</p>
+                <h2>外观</h2>
+                <p className="subtitle">Axiom 主题会按系统或你的选择切换明暗外观。</p>
               </header>
               <div className="appearance-options">
                 {APPEARANCE_OPTIONS.map((option) => (
                   <button
                     className={`appearance-option ${
-                      theme === option.value ? 'active' : ''
+                      appearance === option.value ? 'active' : ''
                     }`}
                     key={option.value}
-                    onClick={() => setTheme(option.value)}
+                    onClick={() => setAppearance(option.value)}
                     type="button"
                   >
                     <div className="appearance-option-swatch">
@@ -544,7 +544,7 @@ export function AISettings() {
                     <div className="appearance-option-copy">
                       <strong>{option.label}</strong>
                       <small>{option.description}</small>
-                      {theme === option.value && (
+                      {appearance === option.value && (
                         <span className="appearance-current">当前</span>
                       )}
                     </div>
@@ -553,7 +553,8 @@ export function AISettings() {
               </div>
               <p className="appearance-resolved-hint">
                 当前实际显示：
-                <strong>{resolvedTheme === 'dark' ? '深色' : '浅色'}</strong>
+                <strong>{resolvedAppearance === 'dark' ? '深色' : '浅色'}</strong>
+                <span> · Axiom {visualTheme === 'axiom' ? '默认主题' : visualTheme}</span>
               </p>
             </div>
           ) : tab === 'maintenance' ? (

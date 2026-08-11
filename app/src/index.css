@@ -25,6 +25,9 @@
      while the established light/dark palette remains the single color source. */
   --ax-color-bg: var(--canvas);
   --ax-color-surface: var(--surface);
+  --ax-color-surface-raised: var(--canvas);
+  --ax-color-surface-muted: var(--surface-muted);
+  --ax-color-overlay: color-mix(in srgb, var(--ink) 34%, transparent);
   --ax-color-inset: var(--surface-muted);
   --ax-color-elevated: var(--canvas);
   --ax-color-hover: var(--brand-soft);
@@ -33,12 +36,17 @@
   --ax-text-secondary: var(--muted);
   --ax-text-tertiary: color-mix(in srgb, var(--muted) 82%, var(--surface));
   --ax-text-disabled: color-mix(in srgb, var(--muted) 62%, var(--surface));
+  --ax-text-inverse: #fffdf7;
   --ax-border-subtle: color-mix(in srgb, var(--border) 68%, var(--surface));
   --ax-border-default: var(--border);
+  --ax-divider: var(--ax-border-subtle);
   --ax-border-strong: color-mix(in srgb, var(--border) 72%, var(--ink));
   --ax-border-focus: var(--brand-pressed);
   --ax-accent: var(--brand);
   --ax-accent-hover: var(--brand-hover);
+  --ax-accent-active: var(--brand-pressed);
+  --ax-accent-foreground: var(--ax-primary-control-ink);
+  --ax-accent-border: color-mix(in srgb, var(--brand) 68%, var(--border));
   --ax-accent-ink: var(--brand-ink);
   /* Filled yellow controls require the same dark foreground in both themes.
      --ax-accent-ink still follows the theme for text and selected surfaces. */
@@ -49,6 +57,15 @@
   --ax-warning-bg: color-mix(in srgb, var(--brand) 22%, var(--surface));
   --ax-danger-fg: var(--danger);
   --ax-danger-bg: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  --ax-info-fg: color-mix(in srgb, #275fc2 78%, var(--ink));
+  --ax-info-bg: color-mix(in srgb, #4f8ee8 12%, var(--surface));
+  --ax-review-again: var(--ax-danger-fg);
+  --ax-review-hard: var(--ax-warning-fg);
+  --ax-review-good: var(--ax-success-fg);
+  --ax-review-easy: var(--ax-accent-ink);
+  /* Compatibility aliases used by Today and Insights during gradual migration. */
+  --ax-surface-muted: var(--ax-color-surface-muted);
+  --ax-surface-subtle: color-mix(in srgb, var(--surface-muted) 55%, var(--surface));
   --ax-space-1: 2px;
   --ax-space-2: 4px;
   --ax-space-3: 6px;
@@ -71,6 +88,9 @@
   --ax-state-panel-max: 640px;
   --ax-shadow-card: var(--card-shadow);
   --ax-shadow-floating: var(--card-shadow);
+  --ax-elevation-raised: var(--ax-shadow-card);
+  --ax-elevation-overlay: var(--ax-shadow-floating);
+  --ax-focus-ring: 0 0 0 3px color-mix(in srgb, var(--brand) 46%, transparent);
   --ax-z-dialog: 20;
   --ax-z-popover: 1000;
   --ax-motion-instant: 80ms;
