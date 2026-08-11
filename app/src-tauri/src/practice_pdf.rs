@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 
 const POINT_TO_MM: f32 = 25.4 / 72.0;
 const PAGE_HEIGHT_POINTS: f32 = 841.89;
-const PDF_RENDERER_VERSION: &str = "axiom-printpdf-v3";
+const PDF_RENDERER_VERSION: &str = "axiom-printpdf-v4";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -466,8 +466,8 @@ fn render(document: &PracticeDocument, destination: &Path) -> Result<(), String>
         layer.use_text(&document.title, 18.0, pt_mm(42.0), pdf_y(57.0), &font);
         layer.use_text(
             format!(
-                "{} · {} · {} 题",
-                document.metadata.subject, document.metadata.strategy, document.metadata.item_count
+                "{} · {} 题",
+                document.metadata.subject, document.metadata.item_count
             ),
             9.0,
             pt_mm(42.0),
@@ -491,39 +491,22 @@ fn render(document: &PracticeDocument, destination: &Path) -> Result<(), String>
                     height: region.height * PAGE_HEIGHT_POINTS,
                 },
             );
-            let item_suffix = region
-                .practice_item_id
-                .chars()
-                .rev()
-                .take(8)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>();
+            let display_number = page
+                .questions
+                .iter()
+                .find(|question| question.practice_item_id == region.practice_item_id)
+                .map(|question| question.display_number)
+                .unwrap_or(region.region_index + 1);
             layer.use_text(
-                format!("答题区 {} · item {}", region.region_index + 1, item_suffix),
+                format!("第 {display_number} 题作答区"),
                 6.5,
                 pt_mm(region.x * 595.28 + 4.0),
                 pdf_y(region.y * PAGE_HEIGHT_POINTS + 10.0),
                 &font,
             );
         }
-        let identity_suffix = page
-            .page_identity
-            .chars()
-            .rev()
-            .take(16)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
         layer.use_text(
-            format!(
-                "第 {} / {} 页 · 页面 {}",
-                page.page_index + 1,
-                document.pages.len(),
-                identity_suffix
-            ),
+            format!("第 {} / {} 页", page.page_index + 1, document.pages.len()),
             7.0,
             pt_mm(42.0),
             pdf_y(818.0),

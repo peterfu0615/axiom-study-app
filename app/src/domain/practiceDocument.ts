@@ -128,7 +128,7 @@ export function buildPracticeDocument(practiceSet: PracticeSet, input: {
   })
   return {
     id, practiceSetId: practiceSet.id, attemptId: input.attemptId, documentType: input.documentType,
-    title: input.documentType === 'questions' ? 'Axiom 针对性练习' : input.documentType === 'answer_sheet' ? 'Axiom 机器识别答题卡' : 'Axiom 练习答案与解析',
+    title: input.documentType === 'questions' ? 'Axiom 针对性练习' : input.documentType === 'answer_sheet' ? 'Axiom 答题卡' : 'Axiom 练习答案与解析',
     metadata: { subject: practiceSet.subject, createdAt: input.generatedAt ?? Date.now(), itemCount: practiceSet.items.length, strategy: practiceSet.strategy },
     layout: { version: PRACTICE_LAYOUT_VERSION, pageSize: 'A4', widthPoints: A4_POINTS.width, heightPoints: A4_POINTS.height, marginPoints: margin },
     sections: [{ kind: input.documentType, title: input.documentType === 'questions' ? '练习题' : input.documentType === 'answer_sheet' ? '答题区域' : '答案与解析' }],
