@@ -215,7 +215,11 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     finally { setBusy(false) }
   }
   const activeUnit = plan?.units.find((unit) => unit.id === activeUnitId) ?? null
-  if (activePracticeSet) return <PracticeSetView onBack={() => setActivePracticeSet(null)} practiceSet={activePracticeSet} />
+  if (activePracticeSet) return <PracticeSetView
+    onBack={() => setActivePracticeSet(null)}
+    onOpenPracticeSet={setActivePracticeSet}
+    practiceSet={activePracticeSet}
+  />
   if (activeUnit) return <ReviewRunner
     busy={busy}
     onBack={() => setActiveUnitId(null)}

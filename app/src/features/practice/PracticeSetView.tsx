@@ -7,11 +7,14 @@ import type { Diagram } from '../../domain/diagram'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
 import type { PracticeCapturedResponse } from '../../domain/practiceAttempt'
+import type { PracticeLoop } from '../../domain/practiceLoop'
 import { listDiagrams } from '../../platform/diagramDatabase'
 import { importImage, mediaAssetUrl } from '../../platform/native'
 import { exportPracticePdf, openExportedPracticePdf, type PracticeDocumentRecord } from '../../platform/practiceDocumentDatabase'
 import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, overridePracticeGrade } from '../../platform/practiceGradingDatabase'
+import { finalizePracticeAttempt, getPracticeLoopForSet, stopPracticeLoop } from '../../platform/practiceLoopDatabase'
+import { getPracticeSet } from '../../platform/practiceDatabase'
 import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import './PracticeSetView.css'
 
@@ -84,12 +87,18 @@ function PracticeResponseReview({ response, item, onChange }: { response: Practi
   </article>
 }
 
-export function PracticeSetView({ practiceSet, onBack }: { practiceSet: PracticeSet; onBack: () => void }) {
+export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
+  practiceSet: PracticeSet
+  onBack: () => void
+  onOpenPracticeSet?: (practiceSet: PracticeSet) => void
+}) {
   const [exporting, setExporting] = useState<PracticeDocumentType | null>(null)
   const [exported, setExported] = useState<PracticeDocumentRecord | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
+  const [loop, setLoop] = useState<PracticeLoop | null>(null)
+  const [finalizing, setFinalizing] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const warnings = Array.isArray(practiceSet.generationMetadata.warnings)
     ? practiceSet.generationMetadata.warnings.filter((value): value is string => typeof value === 'string') : []
@@ -97,7 +106,8 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
   const visibleTargets = namedTargets.length ? namedTargets : practiceSet.targetSkills.slice(0, 1)
   useEffect(() => {
     let cancelled = false
-    void getLatestPracticeAttempt(practiceSet.id).then((latest) => { if (!cancelled) setAttempt(latest) }).catch(() => null)
+    void Promise.all([getLatestPracticeAttempt(practiceSet.id), getPracticeLoopForSet(practiceSet.id)])
+      .then(([latest, recoveredLoop]) => { if (!cancelled) { setAttempt(latest); setLoop(recoveredLoop) } }).catch(() => null)
     return () => { cancelled = true }
   }, [practiceSet.id])
   const exportDocument = async (documentType: PracticeDocumentType) => {
@@ -127,6 +137,27 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
   const updateResponse = (updated: PracticeCapturedResponse) => setAttempt((current) => current ? {
     ...current, responses: current.responses.map((response) => response.regionId === updated.regionId ? updated : response),
   } : current)
+  const canFinalize = Boolean(attempt?.responses.length && attempt.responses.every((response) =>
+    response.gradingResult && response.gradingResult.correctness !== 'needs_review'))
+  const finalize = async () => {
+    if (!attempt) return
+    setFinalizing(true); setExportError(null)
+    try {
+      const nextLoop = await finalizePracticeAttempt(practiceSet, attempt)
+      setLoop(nextLoop); setAttempt({ ...attempt, status: 'completed', submittedAt: Date.now() })
+    } catch (reason) { setExportError(String(reason)) }
+    finally { setFinalizing(false) }
+  }
+  const openNextRound = async () => {
+    if (!loop?.nextPracticeSetId || !onOpenPracticeSet) return
+    const next = await getPracticeSet(loop.nextPracticeSetId)
+    if (next) onOpenPracticeSet(next)
+  }
+  const stopLoop = async () => {
+    if (!loop) return
+    await stopPracticeLoop(loop.id)
+    setLoop(await getPracticeLoopForSet(practiceSet.id))
+  }
   return <main className="workspace practice-workspace">
     <header className="practice-header">
       <Button onClick={onBack} variant="ghost">返回 Review Unit</Button>
@@ -150,6 +181,21 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
           const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
           return item ? <PracticeResponseReview item={item} key={response.regionId} onChange={updateResponse} response={response} /> : null
         })}</div>
+        <section className="practice-loop-summary" aria-label="Practice Loop 状态">
+          <div><strong>Practice Loop</strong><span>{loop ? `第 ${loop.roundIndex} 轮 · 已使用 ${loop.consumedItems}/${loop.itemBudget} 题` : '批改确认后提交为学习证据'}</span></div>
+          {loop?.status === 'mastered' ? <StatusTag kind="completed">已掌握</StatusTag>
+            : loop?.status === 'stopped' ? <StatusTag kind="deferred">已结束</StatusTag>
+              : loop ? <StatusTag kind="pending">继续练习</StatusTag> : null}
+          <div className="practice-loop-summary__actions">
+            {attempt.status !== 'completed' ? <Button disabled={!canFinalize || finalizing} onClick={() => void finalize()} variant="primary">{finalizing ? '正在写入 SkillState…' : '最终提交并更新能力'}</Button> : null}
+            {loop?.status === 'active' && loop.nextPracticeSetId && loop.nextPracticeSetId !== practiceSet.id && onOpenPracticeSet
+              ? <Button onClick={() => void openNextRound()} variant="primary">进入下一轮</Button> : null}
+            {loop && (loop.status === 'active' || loop.status === 'needs_reinforcement')
+              ? <Button onClick={() => void stopLoop()} variant="ghost">停止循环</Button> : null}
+          </div>
+          {loop?.stopReason === 'no_distinct_items' ? <p>没有找到同 Skill 且表面结构不同的已验证题目，本轮已安全结束，不重复原题。</p> : null}
+          {loop?.stopReason === 'budget_reached' ? <p>已达到练习题量预算，本轮停止继续生成。</p> : null}
+        </section>
       </section> : null}
     </section>
     {warnings.map((warning) => <p className="practice-warning" key={warning}>{warning}</p>)}

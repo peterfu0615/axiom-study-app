@@ -37,6 +37,8 @@ export interface PracticePlannerInput {
   relatedProblems: PracticeProblemCandidate[]
   recentFailureCount: number
   desiredBudget: number
+  excludedProblemIds?: string[]
+  preferredErrorCategories?: string[]
 }
 
 export interface PracticeBlueprintItem {
@@ -110,9 +112,15 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
   const band = masteryBand(input.targetSkills, input.recentFailureCount)
   const budget = Math.max(1, Math.min(12, Math.floor(input.desiredBudget)))
   const seen = new Set<string>()
+  const excluded = new Set(input.excludedProblemIds ?? [])
+  const preferredErrors = new Set(input.preferredErrorCategories ?? [])
   const candidates = [...input.relatedProblems]
-    .filter((candidate) => candidate.subject === input.subject && validatePracticeCandidate(candidate).length === 0)
-    .sort((left, right) => right.relevance - left.relevance || left.problemId.localeCompare(right.problemId))
+    .filter((candidate) => candidate.subject === input.subject && !excluded.has(candidate.problemId) && validatePracticeCandidate(candidate).length === 0)
+    .sort((left, right) => {
+      const leftErrorMatch = left.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
+      const rightErrorMatch = right.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
+      return rightErrorMatch - leftErrorMatch || right.relevance - left.relevance || left.problemId.localeCompare(right.problemId)
+    })
     .filter((candidate) => !seen.has(candidate.problemId) && Boolean(seen.add(candidate.problemId)))
   const warnings: string[] = []
   if (candidates.length < budget) warnings.push(`仅找到 ${candidates.length} 道已验证且不重复的关联题，未用无效占位题补足。`)

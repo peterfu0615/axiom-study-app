@@ -32,6 +32,19 @@ describe('practice planner', () => {
     expect(blueprint.warnings[0]).toContain('仅找到 2 道')
   })
 
+  it('excludes prior-round surfaces and prioritizes the failed error category', () => {
+    const candidate = (id: string, error: string, relevance: number): PracticeProblemCandidate => ({
+      ...problem(id, relevance),
+      targetTags: [{ id: error, name: error, type: 'error', role: 'secondary' }],
+    })
+    const blueprint = buildPracticeBlueprint({
+      sourceType: 'practice_attempt', sourceRef: 'attempt-1', subject: '数学', targetSkills: [target(.3)],
+      relatedProblems: [candidate('old', 'calculation', 1), candidate('generic', 'other', .9), candidate('targeted', 'calculation', .5)],
+      recentFailureCount: 2, desiredBudget: 2, excludedProblemIds: ['old'], preferredErrorCategories: ['calculation'],
+    })
+    expect(blueprint.items.map((item) => item.problem.problemId)).toEqual(['targeted', 'generic'])
+  })
+
   it('rejects generated schema success when semantics are invalid', () => {
     expect(validateGeneratedPracticeItem({
       statementMarkdown: '选择正确答案', canonicalAnswer: 'C', solutionJson: '{}', difficulty: 'hard',

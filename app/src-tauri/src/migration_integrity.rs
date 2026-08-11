@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 42，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 42；
+//!   1. 全新库一路跑到 43，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 43；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 42；
+//!      校验并推进到 43；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 42（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 43（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_42_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_43_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(42);
+            let migrations = migrations_up_to(43);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 42（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 42);
+                .expect("全新库必须能完整迁移到 43（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 43);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 42);
+            assert_eq!(max_applied_version(&mut conn).await, 43);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=42 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=43 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_42_exactly() {
+    fn migration_list_covers_versions_1_through_43_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=42).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=42");
+        let expected: Vec<i64> = (1..=43).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=43");
     }
 
     #[test]
@@ -178,7 +178,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("practice");
             let mut conn = connect(&temp).await;
-            migrate_embedded_schema(&mut conn, &migrations_up_to(42))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(43))
                 .await
                 .expect("Practice 测试库必须迁移成功");
             conn.execute("INSERT INTO source_documents(id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-practice', '/tmp/practice.png', 'practice-hash', 'import', 'captured', 1, 1)").await.expect("source fixture");
@@ -192,7 +192,7 @@ mod tests {
 
             drop(conn);
             let mut reopened = connect(&temp).await;
-            migrate_embedded_schema(&mut reopened, &migrations_up_to(42))
+            migrate_embedded_schema(&mut reopened, &migrations_up_to(43))
                 .await
                 .expect("Practice 数据库重启后迁移必须幂等");
             let snapshot: (String, String, String, String) = sqlx::query_as("SELECT set_row.source_type, set_row.strategy, item.statement_markdown, item.canonical_answer FROM practice_sets set_row JOIN practice_items item ON item.practice_set_id=set_row.id WHERE set_row.id='set-practice'")
@@ -219,6 +219,23 @@ mod tests {
             assert_eq!(
                 capture,
                 ("item-practice".into(), "/tmp/corrected.jpg".into(), 90)
+            );
+            reopened.execute("INSERT INTO review_sessions(id, session_date, status, mode, planned_problem_count, estimated_duration_seconds, created_at) VALUES ('session-practice', '2026-08-11', 'generated', 'legacy', 1, 60, 4)").await.expect("practice evidence session fixture");
+            reopened.execute("INSERT INTO review_modules(id, subject, session_id, skill_bundle_id, priority_score, selection_reason, target_difficulty, source_mode, estimated_duration_seconds, order_index, status) VALUES ('module-practice', '数学', 'session-practice', 'bundle-practice', 1, 'practice fixture', 'basic', 'original', 60, 0, 'pending')").await.expect("practice evidence module fixture");
+            reopened.execute("INSERT INTO question_instances(id, subject, review_module_id, source_problem_id, stem_markdown, solution_json, target_tags_json, difficulty, created_at) VALUES ('question-practice', '数学', 'module-practice', 'problem-practice', '求 x', '{}', '{}', 'basic', 4)").await.expect("practice evidence question fixture");
+            reopened.execute("INSERT INTO review_attempts(id, subject, question_instance_id, is_correct, created_at, rating, result_key, evidence_source) VALUES ('review-practice', '数学', 'question-practice', 0, 5, 'again', 'practice:response-practice', 'practice_attempt')").await.expect("practice review evidence fixture");
+            reopened.execute("INSERT INTO practice_loops(id, root_practice_set_id, current_practice_set_id, status, round_index, item_budget, consumed_items, created_at, updated_at) VALUES ('loop-practice', 'set-practice', 'set-practice', 'needs_reinforcement', 1, 3, 1, 5, 5)").await.expect("practice loop fixture");
+            reopened.execute("INSERT INTO practice_loop_rounds(id, practice_loop_id, practice_set_id, round_index, source_attempt_id, status, created_at, completed_at) VALUES ('round-practice', 'loop-practice', 'set-practice', 1, 'attempt-practice', 'completed', 5, 5)").await.expect("practice round fixture");
+            reopened.execute("INSERT INTO practice_evidences(id, practice_loop_id, practice_attempt_id, practice_response_id, review_attempt_id, grading_snapshot_json, created_at) VALUES ('evidence-practice', 'loop-practice', 'attempt-practice', 'response-practice', 'review-practice', '{\"correctness\":\"incorrect\"}', 5)").await.expect("immutable practice evidence fixture");
+            let repeated_evidence = reopened.execute("INSERT INTO practice_evidences(id, practice_loop_id, practice_attempt_id, practice_response_id, review_attempt_id, grading_snapshot_json, created_at) VALUES ('evidence-duplicate', 'loop-practice', 'attempt-practice', 'response-practice', 'review-practice', '{}', 6)").await;
+            assert!(
+                repeated_evidence.is_err(),
+                "同一 response 必须只写入一次 Skill evidence"
+            );
+            let rewritten_response = reopened.execute("UPDATE practice_responses SET grading_result_json='{}' WHERE id='response-practice'").await;
+            assert!(
+                rewritten_response.is_err(),
+                "已提交证据的 grading snapshot 不得被重写"
             );
             let invalid_region = reopened.execute("INSERT INTO practice_answer_regions(id, practice_document_page_id, practice_item_id, region_index, x, y, width, height, created_at) VALUES ('region-invalid', 'page-practice', 'item-practice', 1, .8, .2, .4, .2, 3)").await;
             assert!(invalid_region.is_err(), "答题区域不得越过标准化页面边界");

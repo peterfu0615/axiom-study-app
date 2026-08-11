@@ -240,3 +240,31 @@ export async function getOrCreatePracticeSetFromFailedAttempt(attemptId: string,
   const input = await plannerInputForReviewModule(module.module_id, 'review_unit', budget)
   return createPracticeSet({ ...input, sourceType: 'practice_attempt', sourceRef: attemptId, recentFailureCount: Math.max(2, input.recentFailureCount) })
 }
+
+export async function getOrCreatePracticeSetFromPracticeAttempt(attemptId: string, budget = 3) {
+  const existing = await findPracticeSetForSource('practice_attempt', attemptId)
+  if (existing) return existing
+  const context = (await select<Array<{ module_id: string }>>(`SELECT module.id AS module_id
+    FROM practice_attempts attempt
+    JOIN practice_responses response ON response.practice_attempt_id=attempt.id
+    JOIN practice_items item ON item.id=response.practice_item_id
+    JOIN review_modules module ON module.skill_bundle_id=item.target_skill_bundle_id
+    WHERE attempt.id=$1 ORDER BY module.rowid DESC LIMIT 1`, [attemptId]))[0]
+  if (!context) throw new Error('失败练习缺少可追溯的 SkillBundle，不能安全生成下一轮')
+  const input = await plannerInputForReviewModule(context.module_id, 'review_unit', budget)
+  const excluded = await select<Array<{ problem_id: string }>>(`SELECT DISTINCT item.source_problem_id AS problem_id
+    FROM practice_loop_rounds round
+    JOIN practice_loop_rounds current_round ON current_round.practice_loop_id=round.practice_loop_id
+    JOIN practice_attempts attempt ON attempt.practice_set_id=current_round.practice_set_id
+    JOIN practice_items item ON item.practice_set_id=round.practice_set_id
+    WHERE attempt.id=$1 AND item.source_problem_id IS NOT NULL`, [attemptId])
+  const failures = await select<Array<{ error_category: string | null }>>(`SELECT json_extract(response.grading_result_json,'$.errorCategory') AS error_category
+    FROM practice_responses response WHERE response.practice_attempt_id=$1
+      AND json_extract(response.grading_result_json,'$.correctness')!='correct'`, [attemptId])
+  return createPracticeSet({
+    ...input, sourceType: 'practice_attempt', sourceRef: attemptId,
+    recentFailureCount: Math.max(2, failures.length),
+    excludedProblemIds: excluded.map((row) => row.problem_id),
+    preferredErrorCategories: failures.flatMap((row) => row.error_category ? [row.error_category] : []),
+  })
+}
