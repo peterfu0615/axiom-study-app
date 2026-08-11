@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 38，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 38；
+//!   1. 全新库一路跑到 39，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 39；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 38；
+//!      校验并推进到 39；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 38（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 39（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_38_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_39_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(38);
+            let migrations = migrations_up_to(39);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 38（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 38);
+                .expect("全新库必须能完整迁移到 39（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 39);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 38);
+            assert_eq!(max_applied_version(&mut conn).await, 39);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=38 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=39 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_38_exactly() {
+    fn migration_list_covers_versions_1_through_39_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=38).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=38");
+        let expected: Vec<i64> = (1..=39).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=39");
     }
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("diagram");
             let mut conn = connect(&temp).await;
-            migrate_embedded_schema(&mut conn, &migrations_up_to(38))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(39))
                 .await
                 .expect("Diagram schema must migrate");
             conn.execute("INSERT INTO diagrams (id, owner_type, owner_id, source_type, source, render_status, rendered_asset_path, rendered_mime_type, render_hash, renderer_version, created_at, updated_at) VALUES ('diagram-1', 'practice_item', 'future-item-1', 'tikz', '\\draw (0,0)--(1,1);', 'rendered', '/tmp/cache.svg', 'image/svg+xml', 'hash-1', 'renderer-v1', 1, 1)")
@@ -166,10 +166,48 @@ mod tests {
 
             drop(conn);
             let mut reopened = connect(&temp).await;
-            migrate_embedded_schema(&mut reopened, &migrations_up_to(38))
+            migrate_embedded_schema(&mut reopened, &migrations_up_to(39))
                 .await
                 .expect("diagram migration must be restart-safe");
-            assert_eq!(max_applied_version(&mut reopened).await, 38);
+            assert_eq!(max_applied_version(&mut reopened).await, 39);
+        });
+    }
+
+    #[test]
+    fn practice_set_snapshot_survives_restart_and_rejects_invalid_items() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("practice");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(39))
+                .await
+                .expect("Practice 测试库必须迁移成功");
+            conn.execute("INSERT INTO source_documents(id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-practice', '/tmp/practice.png', 'practice-hash', 'import', 'captured', 1, 1)").await.expect("source fixture");
+            conn.execute("INSERT INTO problems(id, source_document_id, subject, stem_markdown, status, created_at, updated_at) VALUES ('problem-practice', 'doc-practice', '数学', '求 x', 'saved', 1, 1)").await.expect("problem fixture");
+            conn.execute("INSERT INTO skill_bundles(id, subject, canonical_key, primary_knowledge_tag_id, difficulty_context, created_at) VALUES ('bundle-practice', '数学', 'practice-key', 'legacy:problem-practice', 'basic', 1)").await.expect("bundle fixture");
+            conn.execute("INSERT INTO practice_sets(id, subject, source_type, source_ref, strategy, status, target_skills_json, generation_metadata_json, created_at, updated_at) VALUES ('set-practice', '数学', 'review_unit', 'module-practice', 'deterministic-v1', 'ready', '[{\"id\":\"bundle-practice\"}]', '{\"budget\":1}', 2, 2)").await.expect("practice set fixture");
+            conn.execute("INSERT INTO practice_items(id, practice_set_id, order_index, source_type, source_problem_id, subject, target_skill_bundle_id, difficulty, statement_markdown, canonical_answer, solution_json, grading_rubric_json, validation_status, created_at) VALUES ('item-practice', 'set-practice', 0, 'existing_problem', 'problem-practice', '数学', 'bundle-practice', 'basic', '求 x', 'x=2', '{\"steps\":[]}', '{\"criteria\":[\"答案正确\"]}', 'valid', 2)").await.expect("practice item fixture");
+
+            drop(conn);
+            let mut reopened = connect(&temp).await;
+            migrate_embedded_schema(&mut reopened, &migrations_up_to(39))
+                .await
+                .expect("Practice 数据库重启后迁移必须幂等");
+            let snapshot: (String, String, String, String) = sqlx::query_as("SELECT set_row.source_type, set_row.strategy, item.statement_markdown, item.canonical_answer FROM practice_sets set_row JOIN practice_items item ON item.practice_set_id=set_row.id WHERE set_row.id='set-practice'")
+                .fetch_one(&mut reopened).await.expect("读取 Practice 快照");
+            assert_eq!(
+                snapshot,
+                (
+                    "review_unit".into(),
+                    "deterministic-v1".into(),
+                    "求 x".into(),
+                    "x=2".into()
+                )
+            );
+            let invalid = reopened.execute("INSERT INTO practice_items(id, practice_set_id, order_index, source_type, source_problem_id, subject, difficulty, statement_markdown, canonical_answer, solution_json, grading_rubric_json, validation_status, created_at) VALUES ('bad-practice', 'set-practice', 1, 'existing_problem', NULL, '数学', 'impossible', '', '', '{}', '{}', 'valid', 2)").await;
+            assert!(
+                invalid.is_err(),
+                "非法难度、空题干和缺失来源不得进入正式练习集"
+            );
         });
     }
 
@@ -189,7 +227,7 @@ mod tests {
             conn.execute("INSERT INTO source_documents(id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-subject', '/tmp/subject.png', 'subject-hash', 'import', 'captured', 1, 1)").await.expect("legacy source");
             conn.execute("INSERT INTO problems(id, source_document_id, subject, status, created_at, updated_at) VALUES ('problem-subject', 'doc-subject', '数学', 'saved', 1, 1)").await.expect("legacy problem");
 
-            migrate_embedded_schema(&mut conn, &migrations_up_to(38))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(39))
                 .await
                 .expect("0037 必须为旧名称关系建立稳定 ID");
             let ids: (String, String, String, String) = sqlx::query_as(
@@ -462,17 +500,17 @@ mod tests {
     /// 升级路径模拟：库已在 codex 风格的 27 状态（含 0026 的触发器与
     /// sibling 索引），0028/0029 必须能在其上成功应用。
     #[test]
-    fn database_at_version_27_upgrades_to_38() {
+    fn database_at_version_27_upgrades_to_39() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("upgrade27");
             let mut conn = connect(&temp).await;
             migrate_embedded_schema(&mut conn, &migrations_up_to(27))
                 .await
                 .expect("先迁移到 0027 状态");
-            migrate_embedded_schema(&mut conn, &migrations_up_to(38))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(39))
                 .await
-                .expect("0028–0038 必须能在 0027 状态库上成功应用");
-            assert_eq!(max_applied_version(&mut conn).await, 38);
+                .expect("0028–0039 必须能在 0027 状态库上成功应用");
+            assert_eq!(max_applied_version(&mut conn).await, 39);
 
             let guard: Option<String> = sqlx::query_scalar(
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_knowledge_nodes_sibling_name_v2'",
@@ -502,7 +540,7 @@ mod tests {
     /// 24–27 的 checksum 必须与库中记录一致（不再报 VersionMismatch），
     /// 28/29 成功推进。副本由人工预置（cp 真实 axiom.db），测试绝不触碰原始库。
     #[test]
-    fn real_user_database_copy_upgrades_to_version_38() {
+    fn real_user_database_copy_upgrades_to_version_39() {
         let fixture = std::path::Path::new("/tmp/axiom-verify.db");
         if !fixture.exists() {
             eprintln!("跳过：/tmp/axiom-verify.db 不存在（需先 cp 用户真实库副本）");
@@ -526,10 +564,10 @@ mod tests {
             let mut conn = connect(&temp).await;
             // runner 内部会逐条比对已应用迁移的 SHA-384，任何不匹配都会
             // 返回错误；因此执行成功即证明 24–27 checksum 与库记录一致。
-            migrate_embedded_schema(&mut conn, &migrations_up_to(38))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(39))
                 .await
-                .expect("用户库副本必须通过 checksum 校验并成功升级到 38");
-            assert_eq!(max_applied_version(&mut conn).await, 38);
+                .expect("用户库副本必须通过 checksum 校验并成功升级到 39");
+            assert_eq!(max_applied_version(&mut conn).await, 39);
 
             // 显式实证：库中 24–27 记录的 checksum 与磁盘迁移原文 SHA-384 完全一致。
             for migration in axiom_migrations() {

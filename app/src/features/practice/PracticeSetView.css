@@ -1,0 +1,19 @@
+.practice-workspace { overflow: auto; }
+.practice-header { display: grid; grid-template-columns: auto 1fr auto; gap: var(--ax-space-5); align-items: start; margin-bottom: var(--ax-space-6); }
+.practice-header h1 { margin: var(--ax-space-1) 0; }
+.practice-header p { color: var(--ax-text-secondary); margin: 0; }
+.practice-warning { background: var(--ax-warning-bg); border: 1px solid var(--ax-accent-border); border-radius: var(--ax-radius-md); color: var(--ax-warning-fg); padding: var(--ax-space-3) var(--ax-space-4); }
+.practice-targets { align-items: center; display: flex; flex-wrap: wrap; gap: var(--ax-space-2); margin-bottom: var(--ax-space-5); }
+.practice-targets > span { color: var(--ax-text-secondary); margin-right: var(--ax-space-2); }
+.practice-list { display: grid; gap: var(--ax-space-4); padding-bottom: var(--ax-space-8); }
+.practice-question { background: var(--ax-color-surface-raised); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); box-shadow: var(--ax-shadow-card); padding: var(--ax-space-5); }
+.practice-question > header { align-items: center; display: flex; justify-content: space-between; }
+.practice-question > header > div { display: flex; gap: var(--ax-space-2); }
+.practice-question__number { color: var(--ax-accent-ink); font-size: var(--ax-type-page-size); font-weight: 700; }
+.practice-question__statement { color: var(--ax-text-primary); font-size: var(--ax-type-section-size); margin: var(--ax-space-5) 0; }
+.practice-question__image { display: block; max-height: 360px; max-width: min(100%, 720px); object-fit: contain; }
+.practice-question__image--diagram { background: var(--ax-document-paper); border-radius: var(--ax-radius-md); padding: var(--ax-space-4); }
+.practice-question__options { color: var(--ax-text-secondary); display: grid; gap: var(--ax-space-2); margin: 0 0 var(--ax-space-4); }
+.practice-question__solution { background: var(--ax-color-inset); border-radius: var(--ax-radius-md); margin-top: var(--ax-space-4); padding: var(--ax-space-4); }
+.practice-question__solution strong { color: var(--ax-accent-ink); }
+@media (max-width: 760px) { .practice-header { grid-template-columns: 1fr; } }

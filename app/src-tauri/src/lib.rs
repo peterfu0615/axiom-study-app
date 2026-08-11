@@ -268,6 +268,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0038_diagram_rendering_foundation.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 39,
+            description: "practice_domain",
+            sql: include_str!("../migrations/0039_practice_domain.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

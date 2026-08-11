@@ -5,6 +5,7 @@ import { AsyncState, Badge, Button, EmptyState, Progress, StatusTag } from '../.
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewRating } from '../../domain/review'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
+import type { PracticeSet } from '../../domain/practice'
 import {
   addTodayReviewUnit,
   deferTodayReviewUnit,
@@ -16,6 +17,8 @@ import {
   type TodayReviewPlan,
   type TodayReviewUnit,
 } from '../../platform/reviewDatabase'
+import { getOrCreatePracticeSetFromReviewUnit } from '../../platform/practiceDatabase'
+import { PracticeSetView } from '../practice/PracticeSetView'
 import './Today.css'
 import { mediaAssetUrl } from '../../platform/native'
 
@@ -84,12 +87,14 @@ function ReviewUnitRow({
   onStart,
   onReplace,
   onDefer,
+  onPractice,
 }: {
   unit: TodayReviewUnit
   busy: boolean
   onStart: () => void
   onReplace: () => void
   onDefer: () => void
+  onPractice: () => void
 }) {
   const supportTags = unitSupportTags(unit)
   return <article className={`today-unit today-unit--${unit.status}`}>
@@ -116,6 +121,7 @@ function ReviewUnitRow({
       <div className="today-unit__actions">
       {unit.status === 'pending' && <>
         <Button disabled={busy} onClick={onStart} variant="primary">开始复习</Button>
+        <Button disabled={busy} onClick={onPractice} variant="secondary">创建练习</Button>
         <Button disabled={busy} onClick={onReplace} variant="ghost">换一个</Button>
         <Button disabled={busy} onClick={onDefer} variant="ghost">稍后复习</Button>
       </>}
@@ -183,6 +189,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
   const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
   const [activeUnitId, setActiveUnitId] = useState<string | null>(null)
+  const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -208,6 +215,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     finally { setBusy(false) }
   }
   const activeUnit = plan?.units.find((unit) => unit.id === activeUnitId) ?? null
+  if (activePracticeSet) return <PracticeSetView onBack={() => setActivePracticeSet(null)} practiceSet={activePracticeSet} />
   if (activeUnit) return <ReviewRunner
     busy={busy}
     onBack={() => setActiveUnitId(null)}
@@ -247,6 +255,12 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
             key={unit.id}
             onDefer={() => void mutate(async () => { await deferTodayReviewUnit(unit.id) })}
             onReplace={() => void mutate(() => replaceTodayReviewUnit(unit.id))}
+            onPractice={() => void (async () => {
+              setBusy(true); setError(null)
+              try { setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id)) }
+              catch (reason) { setError(String(reason)) }
+              finally { setBusy(false) }
+            })()}
             onStart={() => setActiveUnitId(unit.id)}
             unit={unit}
           />)}
