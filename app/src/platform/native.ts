@@ -471,10 +471,12 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
 export async function downloadAndInstallUpdate(
   downloadUrl: string,
   sha256Url: string | null,
+  expectedVersion: string,
 ): Promise<void> {
   return invoke<void>('download_and_install_update', {
     downloadUrl,
     sha256Url,
+    expectedVersion,
   })
 }
 

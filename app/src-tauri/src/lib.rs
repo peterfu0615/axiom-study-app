@@ -406,17 +406,43 @@ pub fn run() {
             // 初始化单连接 SQLite 事务池，确保所有数据操作走同一连接，
             // 避免 tauri-plugin-sql 多连接池导致的事务嵌套与锁竞争。
             let handle = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
+            let ready_or_update_scheduled = tauri::async_runtime::block_on(async move {
                 match db::init_db(&handle, axiom_migrations()).await {
                     Ok(()) => {
                         log::info!("数据库连接初始化成功");
+                        true
                     }
                     Err(e) => {
                         if db::is_database_schema_ahead_error(&e) {
                             log::error!(
-                                "{e} 当前应用版本：{}。学习数据没有被修改；现在打开最新版本下载页。",
+                                "{e} 当前应用版本：{}。学习数据没有被修改；尝试自动恢复到最新版本。",
                                 env!("CARGO_PKG_VERSION")
                             );
+                            match updater::check_for_updates().await {
+                                Ok(Some(update)) => match updater::download_and_install_update(
+                                    handle.clone(),
+                                    update.download_url,
+                                    update.sha256_url,
+                                    update.version,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        log::info!("已安排数据库版本恢复所需的应用更新。");
+                                        return true;
+                                    }
+                                    Err(update_error) => {
+                                        log::error!("自动恢复更新失败：{update_error}");
+                                    }
+                                },
+                                Ok(None) => {
+                                    log::error!("更新源没有比当前应用更新的版本，无法自动恢复。");
+                                }
+                                Err(update_error) => {
+                                    log::error!("检查恢复更新失败：{update_error}");
+                                }
+                            }
+                            // 自动恢复失败时才引导用户到下载页，保留手动恢复通道。
                             let _ = std::process::Command::new("open")
                                 .arg("https://github.com/peterfu0615/axiom-update-pusher/releases/latest")
                                 .spawn();
@@ -428,10 +454,13 @@ pub fn run() {
                         eprintln!(
                             "详情见日志：~/Library/Application Support/com.axiom.study/logs/axiom.log"
                         );
-                        std::process::exit(1);
+                        false
                     }
                 }
             });
+            if !ready_or_update_scheduled {
+                std::process::exit(1);
+            }
             // 让原生窗口跟随系统主题，由前端 ThemeProvider 同步控制
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_theme(None);

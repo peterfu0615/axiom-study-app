@@ -86,6 +86,7 @@ export function UpdateSettings() {
       await downloadAndInstallUpdate(
         updateInfo.downloadUrl,
         updateInfo.sha256Url,
+        updateInfo.version,
       )
       // 成功后进程会退出，这里不会执行到
     } catch (e) {

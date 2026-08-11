@@ -14,9 +14,11 @@
 use futures_util::StreamExt;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+use uuid::Uuid;
 
 // ────────────────────────────────────────────────────────────
 // 更新源配置
@@ -171,6 +173,7 @@ pub async fn download_and_install_update(
     app: AppHandle,
     download_url: String,
     sha256_url: Option<String>,
+    expected_version: String,
 ) -> Result<(), String> {
     let current_version = env!("CARGO_PKG_VERSION");
     let client = reqwest::Client::builder()
@@ -178,11 +181,8 @@ pub async fn download_and_install_update(
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
 
-    // 准备临时目录
-    let update_dir = std::env::temp_dir().join("axiom-update");
-    if update_dir.exists() {
-        std::fs::remove_dir_all(&update_dir).ok();
-    }
+    // 每次更新使用独立目录，避免残留安装脚本或并发更新互相删除文件。
+    let update_dir = std::env::temp_dir().join(format!("axiom-update-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&update_dir).map_err(|e| format!("无法创建更新临时目录：{e}"))?;
 
     // 1. 下载 .app.zip（带进度）
@@ -211,13 +211,34 @@ pub async fn download_and_install_update(
             update_dir.display()
         ));
     }
+    validate_update_bundle(&new_app_path, &expected_version)?;
 
-    // 4. 定位当前 .app bundle 路径
+    // 4. 定位并预检当前 .app bundle。必须在退出前确认原位置可写，
+    // 否则不能让用户先失去正在运行的旧版本。
     let app_bundle_path = current_app_bundle_path()?;
+    ensure_update_target_is_writable(&app_bundle_path)?;
+
+    // 安装脚本会在当前进程退出后继续运行；日志不能放在会被清理的临时目录里。
+    let install_log_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位更新日志目录：{e}"))?
+        .join("logs")
+        .join("update-install.log");
+    if let Some(parent) = install_log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建更新日志目录：{e}"))?;
+    }
 
     // 5. 生成并启动 detached 安装脚本
     let pid = std::process::id();
-    let script_path = write_install_script(pid, &app_bundle_path, &new_app_path, &update_dir)?;
+    let script_path = write_install_script(
+        pid,
+        &app_bundle_path,
+        &new_app_path,
+        &update_dir,
+        &install_log_path,
+        &expected_version,
+    )?;
 
     log::info!("启动 detached 安装脚本：{}", script_path.display());
     std::process::Command::new("bash")
@@ -370,44 +391,157 @@ fn current_app_bundle_path() -> Result<PathBuf, String> {
         ));
     }
 
+    let app_bundle = std::fs::canonicalize(app_bundle)
+        .map_err(|e| format!("无法解析当前 .app bundle 路径：{e}"))?;
+
+    // macOS 的 App Translocation 副本是只读临时位置；即使替换成功也会在
+    // 下次启动时消失，所以必须要求用户先把应用安装到稳定目录。
+    if app_bundle.to_string_lossy().contains("/AppTranslocation/") {
+        return Err(
+            "Axiom 正在 macOS 的隔离临时位置运行。请先将 Axiom 拖入“应用程序”文件夹，再使用自动更新。"
+                .to_string(),
+        );
+    }
+
     log::info!("当前 .app bundle 路径：{}", app_bundle.display());
-    Ok(app_bundle.to_path_buf())
+    Ok(app_bundle)
+}
+
+/// 检查下载并解压后的 bundle 是否完整且符合用户选择的 Release 版本。
+/// 这一步必须在旧应用退出前完成，避免损坏或错版本资产覆盖可用版本。
+fn validate_update_bundle(app_path: &Path, expected_version: &str) -> Result<(), String> {
+    if !app_path.is_dir() {
+        return Err(format!(
+            "解压后的更新不是 .app 目录：{}",
+            app_path.display()
+        ));
+    }
+
+    let plist = app_path.join("Contents/Info.plist");
+    let executable = app_path.join("Contents/MacOS/axiom");
+    if !plist.is_file() || !executable.is_file() {
+        return Err("更新包缺少 Axiom.app 的必要文件，已停止安装。".to_string());
+    }
+
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleShortVersionString"])
+        .arg(&plist)
+        .output()
+        .map_err(|e| format!("读取更新包版本失败：{e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "读取更新包版本失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let expected = expected_version.trim_start_matches('v');
+    if actual != expected {
+        return Err(format!(
+            "更新包版本不匹配：期望 {expected}，实际 {actual}。已保留当前应用。"
+        ));
+    }
+
+    Ok(())
+}
+
+/// 在退出当前应用前确认其父目录可写。更新脚本只能替换 bundle 本身，
+/// 不会尝试提权或触及 Application Support 中的用户数据。
+fn ensure_update_target_is_writable(app_bundle_path: &Path) -> Result<(), String> {
+    let parent = app_bundle_path
+        .parent()
+        .ok_or_else(|| format!("无法获取应用安装目录：{}", app_bundle_path.display()))?;
+    let probe = parent.join(format!(".axiom-update-write-probe-{}", Uuid::new_v4()));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|e| {
+            format!(
+                "当前 Axiom 安装目录不可写（{}）：{e}。请将应用安装到“应用程序”文件夹或可写目录后重试。",
+                parent.display()
+            )
+        })?;
+    std::fs::remove_file(&probe).map_err(|e| format!("清理更新写入预检文件失败：{e}"))?;
+    Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// 生成 detached 安装脚本。
 ///
 /// 脚本逻辑：
 /// 1. 等待当前进程退出（PID 轮询，最长 30 秒）
-/// 2. 删除旧 .app，移动新 .app 到原位置
-/// 3. 验证 bundle 签名；历史 Beta 包签名不完整时补充 ad-hoc 签名
-/// 4. 移除 quarantine 属性（Beta 未签名构建需要）
-/// 5. 清理临时目录
-/// 6. 重新启动应用
+/// 2. 先在旧 bundle 所在目录暂存并校验新 bundle，旧 bundle 仅改名为备份
+/// 3. 在同一目录内原子切换 bundle；任一步失败均恢复旧 bundle
+/// 4. 移除 quarantine 属性（Beta 未签名构建需要）并启动新版
+/// 5. 仅在成功启动后清理备份和临时目录；安装日志永久保留
 fn write_install_script(
     pid: u32,
     app_bundle_path: &Path,
     new_app_path: &Path,
     update_dir: &Path,
+    install_log_path: &Path,
+    expected_version: &str,
 ) -> Result<PathBuf, String> {
-    let log_path = update_dir.join("install.log");
-    let app_path_str = app_bundle_path.to_string_lossy();
-    let new_path_str = new_app_path.to_string_lossy();
-    let update_dir_str = update_dir.to_string_lossy();
-    let log_path_str = log_path.to_string_lossy();
+    let app_path = shell_quote(&app_bundle_path.to_string_lossy());
+    let new_path = shell_quote(&new_app_path.to_string_lossy());
+    let update_dir_quoted = shell_quote(&update_dir.to_string_lossy());
+    let log_path = shell_quote(&install_log_path.to_string_lossy());
+    let expected_version = shell_quote(expected_version.trim_start_matches('v'));
 
     let script = format!(
         r#"#!/bin/bash
 # Axiom self-update installer (auto-generated)
-# 等待当前应用退出后替换 .app 并重新启动。
+# 等待当前应用退出后，以可回滚的方式替换 .app 并重新启动。
+
+set -u
 
 PID={pid}
-APP_PATH="{app_path_str}"
-NEW_APP_PATH="{new_path_str}"
-UPDATE_DIR="{update_dir_str}"
-LOG_FILE="{log_path_str}"
+APP_PATH={app_path}
+NEW_APP_PATH={new_path}
+UPDATE_DIR={update_dir_quoted}
+LOG_FILE={log_path}
+EXPECTED_VERSION={expected_version}
+APP_PARENT_DIR="$(dirname "$APP_PATH")"
+STAGED_APP_PATH="$APP_PARENT_DIR/.Axiom.app.axiom-staged-$PID"
+BACKUP_PATH="$APP_PARENT_DIR/.Axiom.app.axiom-backup-$PID"
+
+mkdir -p "$(dirname "$LOG_FILE")" || exit 1
 
 log() {{
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+}}
+
+restore_backup() {{
+    if [ -d "$BACKUP_PATH" ]; then
+        log "恢复更新前的 Axiom.app ..."
+        rm -rf "$APP_PATH"
+        mv "$BACKUP_PATH" "$APP_PATH" >> "$LOG_FILE" 2>&1 || log "错误：恢复旧应用失败，请从 $BACKUP_PATH 手动恢复。"
+    fi
+}}
+
+validate_bundle() {{
+    local bundle="$1"
+    local plist="$bundle/Contents/Info.plist"
+    if [ ! -f "$plist" ] || [ ! -f "$bundle/Contents/MacOS/axiom" ]; then
+        log "错误：新应用 bundle 文件不完整。"
+        return 1
+    fi
+    local bundle_version
+    bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>> "$LOG_FILE") || return 1
+    if [ "$bundle_version" != "$EXPECTED_VERSION" ]; then
+        log "错误：新应用版本不匹配（期望 $EXPECTED_VERSION，实际 $bundle_version）。"
+        return 1
+    fi
+    if ! codesign --verify --deep --strict "$bundle" >> "$LOG_FILE" 2>&1; then
+        log "新应用 bundle 签名不完整，补充 ad-hoc 签名..."
+        codesign --force --deep --sign - "$bundle" >> "$LOG_FILE" 2>&1 || return 1
+    fi
+    codesign --verify --deep --strict "$bundle" >> "$LOG_FILE" 2>&1
 }}
 
 log "安装脚本启动，等待 PID $PID 退出..."
@@ -427,26 +561,34 @@ if kill -0 "$PID" 2>/dev/null; then
     exit 1
 fi
 
-# 替换 .app bundle
-log "替换 $APP_PATH ← $NEW_APP_PATH ..."
-rm -rf "$APP_PATH"
-if ! mv "$NEW_APP_PATH" "$APP_PATH"; then
-    log "错误：无法移动新应用到 $APP_PATH"
+# 先在目标目录暂存并完整校验新版。跨卷移动的耗时发生在旧版仍完整存在时。
+log "暂存新应用到 $STAGED_APP_PATH ..."
+if ! mv "$NEW_APP_PATH" "$STAGED_APP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "错误：无法暂存新应用，旧应用未被修改。"
+    exit 1
+fi
+if ! validate_bundle "$STAGED_APP_PATH"; then
+    log "错误：新应用校验失败，旧应用未被修改。"
+    rm -rf "$STAGED_APP_PATH"
     exit 1
 fi
 
-# Release 包必须是可验证的 bundle。Developer ID 签名会直接通过；旧 Beta
-# 资产若只签了可执行文件，则在本地补齐 ad-hoc bundle 签名，避免 Finder 因
-# "code has no resources" 拒绝启动。
-if ! codesign --verify --deep --strict "$APP_PATH" >> "$LOG_FILE" 2>&1; then
-    log "应用 bundle 签名不完整，补充 ad-hoc 签名..."
-    if ! codesign --force --deep --sign - "$APP_PATH" >> "$LOG_FILE" 2>&1; then
-        log "错误：无法修复应用 bundle 签名。"
-        exit 1
-    fi
+# 同一目录内的 rename 可原子完成。先保留旧版备份；移动新版失败则立刻回滚。
+log "备份当前应用到 $BACKUP_PATH ..."
+if ! mv "$APP_PATH" "$BACKUP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "错误：无法备份当前应用，中止更新。"
+    exit 1
 fi
-if ! codesign --verify --deep --strict "$APP_PATH" >> "$LOG_FILE" 2>&1; then
-    log "错误：应用 bundle 签名校验失败。"
+log "切换至新应用..."
+if ! mv "$STAGED_APP_PATH" "$APP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "错误：无法切换至新应用，尝试恢复旧应用。"
+    restore_backup
+    exit 1
+fi
+
+if ! validate_bundle "$APP_PATH"; then
+    log "错误：切换后的新应用校验失败，尝试恢复旧应用。"
+    restore_backup
     exit 1
 fi
 
@@ -454,14 +596,16 @@ fi
 log "移除 quarantine 属性..."
 xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
 
-# 清理临时目录
-rm -rf "$UPDATE_DIR"
-
-# 重新启动应用
+# 重新启动应用。只有 open 成功后才删除旧版备份，失败时备份会保留供恢复。
 log "重新启动 $APP_PATH ..."
-open "$APP_PATH"
+if ! open -n "$APP_PATH" >> "$LOG_FILE" 2>&1; then
+    log "错误：无法重新启动新版；旧版备份保留在 $BACKUP_PATH。"
+    exit 1
+fi
 
-log "更新完成。"
+rm -rf "$BACKUP_PATH"
+rm -rf "$UPDATE_DIR"
+log "更新完成并已请求启动新版。"
 "#,
     );
 
@@ -511,6 +655,40 @@ fn is_newer(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn create_signed_test_app(path: &Path, version: &str) {
+        let contents = path.join("Contents");
+        let executable_dir = contents.join("MacOS");
+        std::fs::create_dir_all(&executable_dir).unwrap();
+        std::fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleExecutable</key><string>axiom</string>
+<key>CFBundleIdentifier</key><string>com.axiom.study.test</string>
+<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>{version}</string>
+<key>CFBundleVersion</key><string>{version}</string>
+</dict></plist>"#
+            ),
+        )
+        .unwrap();
+        let executable = executable_dir.join("axiom");
+        std::fs::write(&executable, "#!/bin/bash\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(std::process::Command::new("codesign")
+            .args(["--force", "--deep", "--sign", "-"])
+            .arg(path)
+            .status()
+            .unwrap()
+            .success());
+    }
 
     #[test]
     fn detects_higher_version() {
@@ -542,21 +720,109 @@ mod tests {
     }
 
     #[test]
-    fn installer_replaces_only_the_app_bundle_not_application_support_data() {
+    fn installer_stages_validates_and_rolls_back_without_touching_user_data() {
         let update_dir =
             std::env::temp_dir().join(format!("axiom-updater-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&update_dir).unwrap();
         let app_path = std::path::Path::new("/Applications/Axiom.app");
         let new_app_path = update_dir.join("Axiom.app");
-        let script = write_install_script(42, app_path, &new_app_path, &update_dir).unwrap();
+        let install_log = update_dir.join("persistent-update.log");
+        let script = write_install_script(
+            42,
+            app_path,
+            &new_app_path,
+            &update_dir,
+            &install_log,
+            "0.6.1",
+        )
+        .unwrap();
         let contents = std::fs::read_to_string(&script).unwrap();
-        assert!(contents.contains("APP_PATH=\"/Applications/Axiom.app\""));
-        assert!(contents.contains("rm -rf \"$APP_PATH\""));
-        assert!(contents.contains("codesign --verify --deep --strict \"$APP_PATH\""));
-        assert!(contents.contains("codesign --force --deep --sign - \"$APP_PATH\""));
+        assert!(contents.contains("APP_PATH='/Applications/Axiom.app'"));
+        assert!(contents.contains("EXPECTED_VERSION='0.6.1'"));
+        assert!(
+            contents.contains("STAGED_APP_PATH=\"$APP_PARENT_DIR/.Axiom.app.axiom-staged-$PID\"")
+        );
+        assert!(contents.contains("BACKUP_PATH=\"$APP_PARENT_DIR/.Axiom.app.axiom-backup-$PID\""));
+        assert!(contents.contains("mv \"$APP_PATH\" \"$BACKUP_PATH\""));
+        assert!(contents.contains("restore_backup"));
+        assert!(contents.contains("open -n \"$APP_PATH\""));
+        assert!(contents.contains("validate_bundle \"$APP_PATH\""));
+        assert!(contents.contains("codesign --verify --deep --strict \"$bundle\""));
+        assert!(contents.contains("codesign --force --deep --sign - \"$bundle\""));
+        assert!(contents.contains("persistent-update.log"));
         assert!(!contents.contains("Application Support"));
         assert!(!contents.contains("axiom.db"));
         assert!(!contents.contains("media/"));
         let _ = std::fs::remove_dir_all(update_dir);
+    }
+
+    #[test]
+    fn shell_quote_preserves_paths_with_single_quotes() {
+        assert_eq!(
+            shell_quote("/Applications/Peter's Axiom.app"),
+            "'/Applications/Peter'\"'\"'s Axiom.app'"
+        );
+    }
+
+    #[test]
+    fn installer_replaces_signed_bundle_and_requests_restart() {
+        let root = std::env::temp_dir().join(format!("axiom-updater-install-{}", Uuid::new_v4()));
+        let applications = root.join("Applications");
+        let update_dir = root.join("update");
+        let old_app = applications.join("Axiom.app");
+        let new_app = update_dir.join("Axiom.app");
+        let install_log = root.join("logs/update-install.log");
+        let marker = root.join("restarted-path.txt");
+        let bin_dir = root.join("bin");
+
+        create_signed_test_app(&old_app, "0.6.0");
+        create_signed_test_app(&new_app, "0.6.1");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let open_stub = bin_dir.join("open");
+        std::fs::write(
+            &open_stub,
+            "#!/bin/bash\nprintf '%s' \"$2\" > \"$AXIOM_TEST_RESTART_MARKER\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&open_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let script = write_install_script(
+            u32::MAX,
+            &old_app,
+            &new_app,
+            &update_dir,
+            &install_log,
+            "0.6.1",
+        )
+        .unwrap();
+        let path = format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        assert!(std::process::Command::new("bash")
+            .arg(&script)
+            .env("PATH", path)
+            .env("AXIOM_TEST_RESTART_MARKER", &marker)
+            .status()
+            .unwrap()
+            .success());
+
+        assert!(std::fs::read_to_string(old_app.join("Contents/Info.plist"))
+            .unwrap()
+            .contains("<string>0.6.1</string>"));
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            old_app.to_string_lossy()
+        );
+        assert!(std::fs::read_to_string(&install_log)
+            .unwrap()
+            .contains("更新完成并已请求启动新版。"));
+        assert!(!applications
+            .join(".Axiom.app.axiom-backup-4294967295")
+            .exists());
+        assert!(!update_dir.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
