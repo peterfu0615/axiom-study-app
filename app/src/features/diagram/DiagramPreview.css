@@ -1,0 +1,13 @@
+.diagram-preview { min-height: 100vh; padding: var(--ax-space-9); color: var(--ax-text-primary); background: var(--ax-color-bg); }
+.diagram-preview > header { display: grid; gap: var(--ax-space-2); max-width: 1120px; margin: 0 auto var(--ax-space-8); }
+.diagram-preview h1, .diagram-preview h2, .diagram-preview p { margin: 0; }
+.diagram-preview > header h1 { font-size: var(--ax-type-page-size); line-height: var(--ax-type-page-line); }
+.diagram-preview > header > p:last-child { color: var(--ax-text-secondary); font-size: var(--ax-type-body-size); }
+.diagram-preview__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--ax-space-6); max-width: 1120px; margin: auto; }
+.diagram-preview__grid article { min-width: 0; display: grid; align-content: start; gap: var(--ax-space-5); padding: var(--ax-space-6); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); background: var(--ax-color-surface); box-shadow: var(--ax-elevation-raised); }
+.diagram-preview__grid article > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-4); }
+.diagram-preview__grid h2 { font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); }
+.diagram-preview__grid article > div:first-child span { color: var(--ax-text-tertiary); font-family: ui-monospace, monospace; font-size: var(--ax-type-caption-size); }
+.diagram-preview__grid .diagram-view, .diagram-preview__grid .diagram-view img { width: 100%; }
+.diagram-preview__grid .diagram-view img { height: 220px; }
+.diagram-preview__error { max-width: 1120px; margin: auto; padding: var(--ax-space-5); color: var(--ax-danger-fg); background: var(--ax-danger-bg); }

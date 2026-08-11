@@ -15,6 +15,7 @@ import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnal
 import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
+import { DiagramPreview } from './features/diagram/DiagramPreview'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
 import { checkForUpdates } from './platform/native'
 import { useToast, type ToastState } from './platform/useToast'
@@ -132,7 +133,7 @@ function App() {
   const previewParams = import.meta.env.DEV
     ? new URLSearchParams(window.location.search)
     : null
-  const preview = previewParams?.get('ui-preview') ?? null
+  const preview = previewParams?.get('ui-preview') ?? import.meta.env.VITE_UI_PREVIEW ?? null
   if (preview === 'curriculum') {
     const previewTheme = previewParams?.get('theme')
     if (previewTheme === 'light' || previewTheme === 'dark') {
@@ -140,6 +141,7 @@ function App() {
     }
     return <CurriculumPreview state={previewParams?.get('state') ?? 'populated'} />
   }
+  if (preview === 'diagrams') return <DiagramPreview />
   return <AppRuntime />
 }
 

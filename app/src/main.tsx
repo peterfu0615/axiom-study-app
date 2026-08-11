@@ -9,7 +9,7 @@ import App from './App.tsx'
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
 const previewTheme = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get('theme')
-  : null
+  : import.meta.env.VITE_UI_APPEARANCE ?? null
 const initialTheme: 'light' | 'dark' =
   previewTheme === 'light' || previewTheme === 'dark'
     ? previewTheme

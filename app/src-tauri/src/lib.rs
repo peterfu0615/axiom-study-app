@@ -1,6 +1,7 @@
 mod ai;
 mod commands;
 mod db;
+mod diagram;
 mod horizon;
 mod keystore;
 #[cfg(test)]
@@ -261,6 +262,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0037_stable_subject_identity.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 38,
+            description: "diagram_rendering_foundation",
+            sql: include_str!("../migrations/0038_diagram_rendering_foundation.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -323,6 +330,7 @@ pub fn run() {
             commands::remove_problem_diagram,
             commands::list_media_directory,
             commands::delete_media_file,
+            diagram::render_tikz,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             ai::persist_ai_provider_profiles,

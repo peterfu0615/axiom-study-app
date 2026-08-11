@@ -9,6 +9,7 @@ import type {
   AIProviderProfile,
 } from '../domain/models'
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
+import type { TikzRenderResult } from '../domain/diagram'
 
 export interface PersistedProblemImage {
   path: string
@@ -172,6 +173,10 @@ export async function removeProblemImage(path: string) {
 
 export async function removeProblemDiagram(path: string) {
   return invoke<void>('remove_problem_diagram', { path })
+}
+
+export async function renderTikz(source: string) {
+  return invoke<TikzRenderResult>('render_tikz', { source })
 }
 
 export interface MediaEntry {

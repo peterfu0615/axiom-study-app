@@ -56,7 +56,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [appearance, setAppearanceState] = useState<Appearance>(() => {
     const previewTheme = import.meta.env.DEV
       ? new URLSearchParams(window.location.search).get('theme')
-      : null
+      : import.meta.env.VITE_UI_APPEARANCE ?? null
     if (previewTheme === 'light' || previewTheme === 'dark') return previewTheme
     if (typeof localStorage === 'undefined') return 'system'
     return readAppearance(localStorage)

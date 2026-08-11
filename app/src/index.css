@@ -28,6 +28,8 @@
   --ax-color-surface-raised: var(--canvas);
   --ax-color-surface-muted: var(--surface-muted);
   --ax-color-overlay: color-mix(in srgb, var(--ink) 34%, transparent);
+  --ax-document-paper: #fffdf7;
+  --ax-document-ink: #25231c;
   --ax-color-inset: var(--surface-muted);
   --ax-color-elevated: var(--canvas);
   --ax-color-hover: var(--brand-soft);
