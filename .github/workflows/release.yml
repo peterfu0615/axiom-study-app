@@ -17,6 +17,8 @@ jobs:
   build:
     name: Build macOS bundle
     runs-on: macos-latest
+    env:
+      AXIOM_HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
     defaults:
       run:
         working-directory: app
@@ -72,9 +74,9 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           RUNNER_TEMP_PASSWORD: ${{ secrets.RUNNER_TEMP_PASSWORD }}
-        # 注意：必须直接引用 secrets 上下文。步骤自身 env 块定义的变量
-        # 在该步骤 if: 求值时尚未注入，用 env.APPLE_CERTIFICATE 判断会恒为 false。
-        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        # secrets 不能直接用于 if 条件；步骤 env 在条件求值前不可用，
+        # 因此通过 job-level env 暴露布尔开关（见 jobs.build.env）。
+        if: ${{ env.AXIOM_HAS_APPLE_CERTIFICATE == 'true' }}
         run: |
           echo "signing=enabled" >> "$GITHUB_OUTPUT"
           echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
