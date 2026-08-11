@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { MathMarkdown } from '../../components/MathMarkdown'
-import { AsyncState, Badge, Button, EmptyState, Progress, StatusTag } from '../../components/ui'
+import { AsyncState, Badge, Button, EmptyState, Menu, MenuItem, Progress, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
-import type { ReviewRating } from '../../domain/review'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
 import {
@@ -11,33 +9,33 @@ import {
   deferTodayReviewUnit,
   getOrCreateTodayPlan,
   getSevenDayReviewForecast,
-  recordTodayReviewResult,
   refreshTodayPlan,
   replaceTodayReviewUnit,
   type TodayReviewPlan,
   type TodayReviewUnit,
 } from '../../platform/reviewDatabase'
-import { getOrCreatePracticeSetFromReviewUnit } from '../../platform/practiceDatabase'
+import {
+  findPracticeSetForSource,
+  getOrCreatePracticeSetFromReviewUnit,
+  getOrCreatePracticeSetFromTodayPlan,
+} from '../../platform/practiceDatabase'
 import { PracticeSetView } from '../practice/PracticeSetView'
 import './Today.css'
-import { mediaAssetUrl } from '../../platform/native'
 
-const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '压轴' }
-const ratingOptions: Array<{ rating: ReviewRating; label: string; hint: string }> = [
-  { rating: 'again', label: '忘记', hint: '需要很快再练' },
-  { rating: 'hard', label: '困难', hint: '完成了但不够熟练' },
-  { rating: 'good', label: '掌握', hint: '能够独立完成' },
-  { rating: 'easy', label: '轻松', hint: '熟练且有余力' },
-]
+const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
 const loadLabels = { empty: '无负载', light: '轻', normal: '中', heavy: '重' }
-const unitStatusLabels = { pending: '待复习', completed: '已完成', deferred: '已延后' }
+const unitStatusLabels = { pending: '待完成', completed: '已完成', deferred: '已稍后处理' }
+
+function minutes(seconds: number) {
+  return Math.max(1, Math.round(seconds / 60))
+}
 
 function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
   const maxUnits = Math.max(1, ...days.map((day) => day.estimatedUnitCount))
-  return <section className="today-forecast" aria-label="未来 7 天复习负载">
+  return <section className="today-forecast" aria-label="未来 7 天学习安排">
     <div className="today-forecast__heading">
-      <div><p className="eyebrow">未来 7 天</p><h2>复习负载预览</h2></div>
-      <p>按当前状态静态估算，不会提前生成计划。</p>
+      <div><p className="eyebrow">接下来</p><h2>未来 7 天</h2></div>
+      <p>根据当前学习情况估算，完成今天的练习后会自动调整。</p>
     </div>
     <div className="today-forecast__days">
       {days.map((day, index) => {
@@ -46,34 +44,16 @@ function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
         return <article className={`today-forecast__day today-forecast__day--${day.loadLevel}${index === 0 ? ' is-today' : ''}`} key={day.date}>
           <div><strong>{weekday}</strong><span>{date.getMonth() + 1}/{date.getDate()}</span></div>
           <div className="today-forecast__track" aria-hidden="true"><i style={{ height: `${Math.max(day.estimatedUnitCount ? 18 : 3, day.estimatedUnitCount / maxUnits * 100)}%` }} /></div>
-          <strong>{day.estimatedUnitCount} 单元</strong>
-          <span>{day.estimatedProblemCount ? `${day.estimatedProblemCount} 道关联题` : '暂无到期内容'}</span>
-          <small>{loadLabels[day.loadLevel]}{day.overdueProblemCount ? ` · ${day.overdueProblemCount} 道逾期` : ''}</small>
+          <strong>{day.estimatedUnitCount} 个主题</strong>
+          <span>{day.estimatedProblemCount ? `约 ${day.estimatedProblemCount} 道题` : '暂无安排'}</span>
+          <small>{loadLabels[day.loadLevel]}</small>
         </article>
       })}
     </div>
   </section>
 }
 
-function minutes(seconds: number) {
-  return Math.max(1, Math.round(seconds / 60))
-}
-
-function solutionContent(unit: TodayReviewUnit) {
-  try {
-    const solution = JSON.parse(unit.question.solutionJson) as {
-      contentMarkdown?: string
-      steps?: Array<{ title?: string; contentMarkdown?: string; content_markdown?: string }>
-    }
-    if (solution.contentMarkdown?.trim()) return solution.contentMarkdown
-    const steps = solution.steps ?? []
-    return steps.map((step) => [step.title ? `### ${step.title}` : '', step.contentMarkdown ?? step.content_markdown ?? ''].filter(Boolean).join('\n')).join('\n\n')
-  } catch {
-    return ''
-  }
-}
-
-function unitSupportTags(unit: TodayReviewUnit) {
+function supportTags(unit: TodayReviewUnit) {
   const titleNames = new Set(unit.title.split(' · '))
   return [...unit.tags, ...unit.errorCategories]
     .filter((tag) => !titleNames.has(tag.name))
@@ -81,115 +61,42 @@ function unitSupportTags(unit: TodayReviewUnit) {
     .slice(0, 3)
 }
 
-function ReviewUnitRow({
-  unit,
-  busy,
-  onStart,
-  onReplace,
-  onDefer,
-  onPractice,
-}: {
+function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
   unit: TodayReviewUnit
   busy: boolean
-  onStart: () => void
+  onPractice: () => void
   onReplace: () => void
   onDefer: () => void
-  onPractice: () => void
 }) {
-  const supportTags = unitSupportTags(unit)
   return <article className={`today-unit today-unit--${unit.status}`}>
-    <div className="today-unit__order" aria-hidden="true">{unit.orderIndex + 1}</div>
+    <div className="today-unit__order" aria-hidden="true">{unit.status === 'completed' ? <Icon name="check" size={16} /> : unit.orderIndex + 1}</div>
     <div className="today-unit__body">
-      <div className="today-unit__heading">
-        <div>
-          <span>{unit.subject}</span>
-          <h2>{unit.title}</h2>
-        </div>
-      </div>
+      <div className="today-unit__heading"><div><span>{unit.subject}</span><h2>{unit.title}</h2></div></div>
       <div className="today-unit__tags">
-        <Badge>{unit.associationCount} 道相关错题</Badge>
+        <Badge>{unit.associationCount} 道相关题</Badge>
         <Badge>{difficultyLabels[unit.difficulty]}</Badge>
-        {supportTags.map((tag) => <Badge key={`${tag.type}:${tag.id || tag.name}`}>{tag.name}</Badge>)}
+        {supportTags(unit).map((tag) => <Badge key={`${tag.type}:${tag.id || tag.name}`}>{tag.name}</Badge>)}
       </div>
-      <p>{unit.status === 'completed' ? '本次复习已完成，后续时间已根据反馈更新' : unit.selectionReason}</p>
+      <p>{unit.status === 'completed' ? '已根据本次练习结果安排后续学习。' : unit.selectionReason}</p>
     </div>
     <div className="today-unit__aside">
-      <div className="today-unit__statuses">
-        <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>
-        {unit.status === 'completed' && unit.rating && <StatusTag kind={unit.rating}>{ratingOptions.find((item) => item.rating === unit.rating)?.label}</StatusTag>}
-      </div>
-      <div className="today-unit__actions">
-      {unit.status === 'pending' && <>
-        <Button disabled={busy} onClick={onStart} variant="primary">开始复习</Button>
-        <Button disabled={busy} onClick={onPractice} variant="secondary">创建练习</Button>
-        <Button disabled={busy} onClick={onReplace} variant="ghost">换一个</Button>
-        <Button disabled={busy} onClick={onDefer} variant="ghost">稍后复习</Button>
-      </>}
-      </div>
+      <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>
+      {unit.status === 'pending' && <div className="today-unit__actions">
+        <Button disabled={busy} onClick={onPractice} variant="secondary">生成练习</Button>
+        <Menu label={`${unit.title}的更多操作`}>
+          <MenuItem disabled={busy} onClick={onReplace}>换一个主题</MenuItem>
+          <MenuItem disabled={busy} onClick={onDefer}>稍后处理</MenuItem>
+        </Menu>
+      </div>}
     </div>
   </article>
-}
-
-function ReviewRunner({
-  unit,
-  busy,
-  onBack,
-  onComplete,
-}: {
-  unit: TodayReviewUnit
-  busy: boolean
-  onBack: () => void
-  onComplete: (rating: ReviewRating, durationSeconds: number) => Promise<void>
-}) {
-  const [revealed, setRevealed] = useState(false)
-  const [startedAt] = useState(Date.now())
-  const solution = useMemo(() => solutionContent(unit), [unit])
-  return <main className="workspace today-workspace today-runner">
-    <header className="today-runner__header">
-      <Button onClick={onBack} variant="ghost">返回今日计划</Button>
-      <span>{unit.subject} · {minutes(unit.estimatedDurationSeconds)} 分钟</span>
-    </header>
-    <section className="today-question" aria-label="复习题目">
-      <div className="today-question__index">今日复习 · {unit.orderIndex + 1}</div>
-      <h1>{unit.question.title}</h1>
-      {unit.question.questionImagePath && <ReviewQuestionImage alt={`${unit.question.title}原题图片`} path={unit.question.questionImagePath} />}
-      {unit.question.diagramImagePaths.map((path) => <ReviewQuestionImage alt={`${unit.question.title}图形`} key={path} path={path} variant="diagram" />)}
-      <MathMarkdown className="today-question__stem">{unit.question.stemMarkdown}</MathMarkdown>
-    </section>
-    {!revealed ? <section className="today-answer-gate">
-      <h2>先独立完成，再查看解答</h2>
-      <p>可以在纸上作答。确认完成后，标准解法和本次掌握反馈才会显示。</p>
-      <Button onClick={() => setRevealed(true)} variant="primary">我已完成作答</Button>
-    </section> : <section className="today-solution" aria-label="标准解答与复习结果">
-      <div>
-        <p className="eyebrow">标准解答</p>
-        <h2>核对思路与关键步骤</h2>
-      </div>
-      {solution ? <MathMarkdown className="today-solution__content">{solution}</MathMarkdown> : <p className="today-solution__empty">这道题暂时没有完整解答。请根据你的订正结果完成本次掌握反馈。</p>}
-      <div className="today-rating">
-        <div><h3>这次完成得怎么样？</h3><p>反馈会用于安排下一次复习。</p></div>
-        <div className="today-rating__options">
-          {ratingOptions.map((option) => <Button disabled={busy} key={option.rating} onClick={() => onComplete(option.rating, Math.max(1, Math.round((Date.now() - startedAt) / 1000)))} variant={option.rating === 'good' ? 'primary' : 'secondary'}>
-            <span className="today-rating__copy"><strong>{option.label}</strong><small>{option.hint}</small></span>
-          </Button>)}
-        </div>
-      </div>
-    </section>}
-  </main>
-}
-
-function ReviewQuestionImage({ alt, path, variant = 'question' }: { alt: string; path: string; variant?: 'question' | 'diagram' }) {
-  const [failed, setFailed] = useState(false)
-  useEffect(() => setFailed(false), [path])
-  if (failed) return null
-  return <img alt={alt} className={`today-question__image today-question__image--${variant}`} onError={() => setFailed(true)} src={mediaAssetUrl(path)} />
 }
 
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
   const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
-  const [activeUnitId, setActiveUnitId] = useState<string | null>(null)
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
+  const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -199,8 +106,8 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     try {
       const [nextPlan, nextForecast] = await Promise.all([getOrCreateTodayPlan(), getSevenDayReviewForecast()])
       setPlan(nextPlan); setForecast(nextForecast)
-    }
-    catch (reason) { setError(String(reason)) }
+      setTodayPracticeSet(await findPracticeSetForSource('today', nextPlan.id))
+    } catch (reason) { setError(String(reason)) }
     finally { setLoading(false) }
   }, [])
   useEffect(() => { void load() }, [load])
@@ -214,47 +121,52 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     } catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
   }
-  const activeUnit = plan?.units.find((unit) => unit.id === activeUnitId) ?? null
+  const openTodayPractice = async () => {
+    if (!plan) return
+    setBusy(true); setError(null)
+    try {
+      const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
+      const next = todayPracticeSet ?? await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, Math.max(3, moduleIds.length * 2))
+      setTodayPracticeSet(next); setActivePracticeSet(next)
+    } catch (reason) { setError(String(reason)) }
+    finally { setBusy(false) }
+  }
+
   if (activePracticeSet) return <PracticeSetView
-    onBack={() => setActivePracticeSet(null)}
+    onBack={() => { setActivePracticeSet(null); void load() }}
     onOpenPracticeSet={setActivePracticeSet}
     practiceSet={activePracticeSet}
   />
-  if (activeUnit) return <ReviewRunner
-    busy={busy}
-    onBack={() => setActiveUnitId(null)}
-    onComplete={async (rating, durationSeconds) => {
-      await mutate(async () => {
-        await recordTodayReviewResult({ questionId: activeUnit.question.id, rating, durationSeconds })
-        return refreshTodayPlan()
-      })
-      setActiveUnitId(null)
-    }}
-    unit={activeUnit}
-  />
 
-  const completed = plan?.units.filter((unit) => unit.status === 'completed').length ?? 0
-  const actionable = plan?.units.filter((unit) => unit.status !== 'deferred').length ?? 0
-  const progress = actionable ? completed / actionable * 100 : 0
+  const actionableUnits = plan?.units.filter((unit) => unit.status !== 'deferred') ?? []
+  const completed = actionableUnits.filter((unit) => unit.status === 'completed').length
+  const progress = actionableUnits.length ? completed / actionableUnits.length * 100 : 0
+  const pendingUnits = plan?.units.filter((unit) => unit.status === 'pending') ?? []
   return <main className="workspace today-workspace">
     <header className="workspace-header today-header">
-      <div><p className="eyebrow">今天的学习计划</p><h1>今日</h1><p className="subtitle">集中复习真正重复出现的知识、方法与错误模式。</p></div>
-      {plan && plan.units.length > 0 && <div className="today-header__summary"><strong>{completed}/{actionable}</strong><span>已完成</span></div>}
+      <div><p className="eyebrow">今天</p><h1>今日学习</h1><p className="subtitle">完成一组练习，学习安排会根据结果自动更新。</p></div>
+      {actionableUnits.length > 0 && <div className="today-header__summary"><strong>{completed} / {actionableUnits.length}</strong><span>已完成</span></div>}
     </header>
-    <AsyncState error={error} loading={loading} loadingLabel="正在整理今天的复习内容…" onRetry={load}>
+    <AsyncState error={error} loading={loading} loadingLabel="正在准备今天的学习内容…" onRetry={load}>
       {plan && plan.units.length === 0 ? <EmptyState
-        action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查错题</Button>}
-        description="保存并完成解析的错题会在这里形成复习模块。旧错题即使标签不完整，也会安全参与计划。"
+        action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}
+        description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。"
         icon={<Icon name="today" size={22} />}
         secondaryAction={<><Button onClick={() => onNavigate('library')} variant="secondary">前往错题库</Button><Button onClick={() => onNavigate('curriculum')} variant="ghost">查看课程</Button></>}
-        title="今天暂时没有可复习内容"
+        title="今天暂时没有学习安排"
       /> : plan && <>
         <section className="today-overview">
-          <div><strong>今天共 {actionable} 个复习单元</strong><span>预计 {minutes(plan.estimatedDurationSeconds)} 分钟</span></div>
-          <Progress detail={`${completed} 个已完成`} label="今日进度" value={progress} />
+          <div><strong>{actionableUnits.length} 个学习主题</strong><span>预计 {minutes(plan.estimatedDurationSeconds)} 分钟</span></div>
+          <div className="today-overview__action">
+            <Button disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice()} variant="primary">
+              {todayPracticeSet ? '查看今日练习' : '生成今日练习'}
+            </Button>
+            <span>{todayPracticeSet ? '练习已保存，可以继续完成。' : `将围绕 ${pendingUnits.length} 个待完成主题生成一组练习。`}</span>
+          </div>
+          <Progress detail={`${completed} 个已完成`} label="完成进度" value={progress} />
         </section>
-        <section className="today-units" aria-label="今日复习单元">
-          {plan.units.map((unit) => <ReviewUnitRow
+        <section className="today-units" aria-label="今日学习主题">
+          {plan.units.map((unit) => <LearningTopicRow
             busy={busy}
             key={unit.id}
             onDefer={() => void mutate(async () => { await deferTodayReviewUnit(unit.id) })}
@@ -265,11 +177,9 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
               catch (reason) { setError(String(reason)) }
               finally { setBusy(false) }
             })()}
-            onStart={() => setActiveUnitId(unit.id)}
             unit={unit}
           />)}
         </section>
-        <div className="today-more"><Button disabled={busy} onClick={() => void mutate(() => addTodayReviewUnit())} variant="secondary">今日加练</Button></div>
       </>}
       {plan && forecast.length > 0 && <ForecastStrip days={forecast} />}
     </AsyncState>

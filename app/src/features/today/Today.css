@@ -3,10 +3,13 @@
 .today-header__summary { display: grid; justify-items: end; gap: var(--ax-space-1); padding-bottom: var(--ax-space-2); }
 .today-header__summary strong { color: var(--ax-text-primary); font-size: var(--ax-type-page-size); line-height: var(--ax-type-page-line); }
 .today-header__summary span { color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); }
-.today-overview { display: grid; grid-template-columns: minmax(180px, .72fr) minmax(300px, 1.28fr); align-items: center; gap: var(--ax-space-9); padding: var(--ax-space-6) 0 var(--ax-space-8); border-bottom: 1px solid var(--ax-border-default); }
+.today-overview { display: grid; grid-template-columns: minmax(170px, .55fr) minmax(260px, .8fr) minmax(280px, 1fr); align-items: center; gap: var(--ax-space-7); padding: var(--ax-space-6) 0 var(--ax-space-8); border-bottom: 1px solid var(--ax-border-default); }
 .today-overview > div:first-child { display: grid; gap: var(--ax-space-1); }
 .today-overview > div:first-child strong { color: var(--ax-text-primary); font-size: var(--ax-type-item-size); line-height: var(--ax-type-item-line); }
 .today-overview > div:first-child span { color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
+.today-overview__action { display: grid; justify-items: start; gap: var(--ax-space-2); }
+.today-overview__action .ax-button { min-width: 164px; }
+.today-overview__action > span { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
 .today-units { display: grid; margin-top: var(--ax-space-5); }
 .today-unit { min-width: 0; display: grid; grid-template-columns: var(--ax-control-md) minmax(0, 1fr) auto; align-items: start; gap: var(--ax-space-5); padding: var(--ax-space-7) 0; border-bottom: 1px solid var(--ax-border-subtle); }
 .today-unit__order { width: var(--ax-control-md); height: var(--ax-control-md); display: grid; place-items: center; border-radius: var(--ax-radius-pill); color: var(--ax-accent-ink); background: var(--ax-color-selected); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); }

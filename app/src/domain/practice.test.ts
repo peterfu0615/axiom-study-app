@@ -45,6 +45,27 @@ describe('practice planner', () => {
     expect(blueprint.items.map((item) => item.problem.problemId)).toEqual(['targeted', 'generic'])
   })
 
+  it('keeps every daily learning topic represented across subjects', () => {
+    const bundled = (id: string, subject: string, bundle: string, relevance: number): PracticeProblemCandidate => ({
+      ...problem(id, relevance), subject, targetSkillBundleId: bundle,
+    })
+    const blueprint = buildPracticeBlueprint({
+      sourceType: 'today', sourceRef: 'session-1', subject: '综合', subjects: ['数学', '物理'],
+      targetSkills: [
+        { id: 'bundle:algebra', name: '方程', type: 'model', state: null },
+        { id: 'bundle:motion', name: '运动', type: 'model', state: null },
+      ],
+      relatedProblems: [
+        bundled('math-high', '数学', 'algebra', 10),
+        bundled('math-next', '数学', 'algebra', 9),
+        bundled('physics', '物理', 'motion', 1),
+      ],
+      recentFailureCount: 0,
+      desiredBudget: 2,
+    })
+    expect(blueprint.items.map((item) => item.problem.problemId)).toEqual(['math-high', 'physics'])
+  })
+
   it('rejects generated schema success when semantics are invalid', () => {
     expect(validateGeneratedPracticeItem({
       statementMarkdown: '选择正确答案', canonicalAnswer: 'C', solutionJson: '{}', difficulty: 'hard',

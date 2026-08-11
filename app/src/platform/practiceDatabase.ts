@@ -122,8 +122,8 @@ export async function createPracticeSet(input: PracticePlannerInput): Promise<Pr
           options_json, canonical_answer, solution_json, grading_rubric_json,
           generation_metadata_json, validation_status, created_at
         ) VALUES($1,$2,$3,'existing_problem',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'valid',$15)`, [
-          uuid(), setId, index, problem.problemId, input.subject,
-          input.targetSkills[0]?.id.startsWith('bundle:') ? input.targetSkills[0].id.slice(7) : null,
+          uuid(), setId, index, problem.problemId, problem.subject,
+          problem.targetSkillBundleId ?? (input.targetSkills[0]?.id.startsWith('bundle:') ? input.targetSkills[0].id.slice(7) : null),
           JSON.stringify(problem.targetTags), planned.difficulty, problem.statementMarkdown,
           problem.options ? JSON.stringify(problem.options) : null, problem.canonicalAnswer,
           problem.solutionJson, JSON.stringify({ criteria: ['答案正确', '关键步骤完整', '表达清晰'], maxScore: 100 }),
@@ -202,7 +202,8 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
   const candidates: PracticeProblemCandidate[] = related.map((row) => {
     const solutionJson = JSON.stringify({ contentMarkdown: row.solution_content ?? '', steps: parseJSON(row.solution_steps_json, []) })
     return {
-      problemId: row.problem_id, subject: row.subject, statementMarkdown: row.stem_markdown,
+      problemId: row.problem_id, targetSkillBundleId: context.skill_bundle_id,
+      subject: row.subject, statementMarkdown: row.stem_markdown,
       solutionJson, canonicalAnswer: canonicalAnswerFromSolution(solutionJson),
       options: optionsFromStructured(row.structured_content_json), targetTags: tags, diagramIds: [],
       questionImagePath: row.question_image_path, diagramImagePaths: row.diagram_image_path ? [row.diagram_image_path] : [],
@@ -223,6 +224,29 @@ export async function getOrCreatePracticeSetFromReviewUnit(moduleId: string, bud
 
 export async function getOrCreatePracticeSetFromToday(moduleId: string, budget = 3) {
   return createPracticeSet(await plannerInputForReviewModule(moduleId, 'today', budget))
+}
+
+export async function getOrCreatePracticeSetFromTodayPlan(sessionId: string, moduleIds: string[], budget = 6) {
+  const existing = await findPracticeSetForSource('today', sessionId)
+  if (existing) return existing
+  const uniqueModuleIds = [...new Set(moduleIds)]
+  if (!uniqueModuleIds.length) throw new Error('今天没有可用于生成练习的学习主题')
+  const inputs = await Promise.all(uniqueModuleIds.map((moduleId) => plannerInputForReviewModule(moduleId, 'today', budget)))
+  const subjects = [...new Set(inputs.map((input) => input.subject))]
+  const targetSkills = inputs.flatMap((input) => input.targetSkills).filter((target, index, all) =>
+    all.findIndex((item) => item.id === target.id) === index)
+  const relatedProblems = inputs.flatMap((input) => input.relatedProblems).filter((problem, index, all) =>
+    all.findIndex((item) => item.problemId === problem.problemId) === index)
+  return createPracticeSet({
+    sourceType: 'today',
+    sourceRef: sessionId,
+    subject: subjects.length === 1 ? subjects[0] : '综合',
+    subjects,
+    targetSkills,
+    relatedProblems,
+    recentFailureCount: Math.max(...inputs.map((input) => input.recentFailureCount), 0),
+    desiredBudget: Math.max(uniqueModuleIds.length, budget),
+  })
 }
 
 export async function getOrCreatePracticeSetFromSkill(skillBundleId: string, budget = 3) {

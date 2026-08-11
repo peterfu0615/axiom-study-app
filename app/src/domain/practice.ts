@@ -16,6 +16,7 @@ export interface PracticeTargetSkill {
 
 export interface PracticeProblemCandidate {
   problemId: string
+  targetSkillBundleId?: string | null
   subject: string
   statementMarkdown: string
   solutionJson: string
@@ -33,6 +34,7 @@ export interface PracticePlannerInput {
   sourceType: PracticeSourceType
   sourceRef: string
   subject: string
+  subjects?: string[]
   targetSkills: PracticeTargetSkill[]
   relatedProblems: PracticeProblemCandidate[]
   recentFailureCount: number
@@ -114,14 +116,30 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
   const seen = new Set<string>()
   const excluded = new Set(input.excludedProblemIds ?? [])
   const preferredErrors = new Set(input.preferredErrorCategories ?? [])
+  const allowedSubjects = new Set(input.subjects?.length ? input.subjects : [input.subject])
   const candidates = [...input.relatedProblems]
-    .filter((candidate) => candidate.subject === input.subject && !excluded.has(candidate.problemId) && validatePracticeCandidate(candidate).length === 0)
+    .filter((candidate) => allowedSubjects.has(candidate.subject) && !excluded.has(candidate.problemId) && validatePracticeCandidate(candidate).length === 0)
     .sort((left, right) => {
       const leftErrorMatch = left.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
       const rightErrorMatch = right.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
       return rightErrorMatch - leftErrorMatch || right.relevance - left.relevance || left.problemId.localeCompare(right.problemId)
     })
     .filter((candidate) => !seen.has(candidate.problemId) && Boolean(seen.add(candidate.problemId)))
+  const selected: PracticeProblemCandidate[] = []
+  const selectedIds = new Set<string>()
+  for (const target of input.targetSkills) {
+    if (!target.id.startsWith('bundle:') || selected.length >= budget) continue
+    const bundleId = target.id.slice(7)
+    const candidate = candidates.find((item) => item.targetSkillBundleId === bundleId && !selectedIds.has(item.problemId))
+    if (candidate) {
+      selected.push(candidate)
+      selectedIds.add(candidate.problemId)
+    }
+  }
+  for (const candidate of candidates) {
+    if (selected.length >= budget) break
+    if (!selectedIds.has(candidate.problemId)) selected.push(candidate)
+  }
   const warnings: string[] = []
   if (candidates.length < budget) warnings.push(`仅找到 ${candidates.length} 道已验证且不重复的关联题，未用无效占位题补足。`)
   const plan = difficultyPlan[band]
@@ -129,7 +147,7 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
     plannerVersion: PRACTICE_PLANNER_VERSION,
     masteryBand: band,
     requestedBudget: budget,
-    items: candidates.slice(0, budget).map((problem, index) => ({
+    items: selected.map((problem, index) => ({
       sourceType: 'existing_problem',
       problem,
       difficulty: plan[index % plan.length],
