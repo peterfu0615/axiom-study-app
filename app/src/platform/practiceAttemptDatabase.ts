@@ -85,20 +85,25 @@ async function persistCapture(practiceSetId: string, scan: PracticeScanResult): 
           JSON.stringify({ pageDetected: scan.pageDetected, corners: scan.corners, stages: scan.stages }), now,
         ])
       }
+      const persistedResponses = []
       for (const response of scan.responses) {
+        const responseId = (await select<Array<{ id: string }>>(`SELECT id FROM practice_responses
+          WHERE practice_attempt_id=$1 AND practice_item_id=$2 LIMIT 1`,
+        [scan.practiceAttemptId, response.practiceItemId]))[0]?.id ?? crypto.randomUUID()
         await execute(`INSERT INTO practice_responses(id, practice_attempt_id, practice_item_id,
           answer_asset_path, status, created_at, updated_at) VALUES($1,$2,$3,$4,'captured',$5,$5)
           ON CONFLICT(practice_attempt_id, practice_item_id) DO UPDATE SET answer_asset_path=$4,
           extracted_answer_json=NULL, corrected_answer_json=NULL, grading_result_json=NULL,
           status='captured', updated_at=$5`, [
-          crypto.randomUUID(), scan.practiceAttemptId, response.practiceItemId, response.answerAssetPath, now,
+          responseId, scan.practiceAttemptId, response.practiceItemId, response.answerAssetPath, now,
         ])
+        persistedResponses.push({ ...response, regionId: responseId })
       }
       await execute('COMMIT')
       return {
         id: scan.practiceAttemptId, practiceSetId, status: 'captured', startedAt: now,
         submittedAt: now, correctedAssetPath: scan.correctedAssetPath,
-        orientationDegrees: scan.orientationDegrees, responses: scan.responses,
+        orientationDegrees: scan.orientationDegrees, responses: persistedResponses,
       }
     } catch (error) {
       try { await execute('ROLLBACK') } catch { /* original error wins */ }
@@ -126,7 +131,9 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
   if (!attempt) return null
   const responses = await select<Array<{
     id: string; practice_item_id: string; answer_asset_path: string
-  }>>(`SELECT id, practice_item_id, answer_asset_path FROM practice_responses
+    extracted_answer_json: string | null; corrected_answer_json: string | null; grading_result_json: string | null
+  }>>(`SELECT id, practice_item_id, answer_asset_path, extracted_answer_json,
+    corrected_answer_json, grading_result_json FROM practice_responses
     WHERE practice_attempt_id=$1 ORDER BY created_at, id`, [attempt.id])
   return {
     id: attempt.id, practiceSetId, status: attempt.status, startedAt: Number(attempt.started_at),
@@ -135,6 +142,9 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
     responses: responses.map((response, index) => ({
       regionId: response.id, practiceItemId: response.practice_item_id, regionIndex: index,
       answerAssetPath: response.answer_asset_path, pixelWidth: 0, pixelHeight: 0,
+      extractedAnswer: response.corrected_answer_json
+        ? JSON.parse(response.corrected_answer_json) : response.extracted_answer_json ? JSON.parse(response.extracted_answer_json) : null,
+      gradingResult: response.grading_result_json ? JSON.parse(response.grading_result_json) : null,
     })),
   }
 }

@@ -6,10 +6,12 @@ import { Badge, Button, StatusTag } from '../../components/ui'
 import type { Diagram } from '../../domain/diagram'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
+import type { PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import { listDiagrams } from '../../platform/diagramDatabase'
 import { importImage, mediaAssetUrl } from '../../platform/native'
 import { exportPracticePdf, openExportedPracticePdf, type PracticeDocumentRecord } from '../../platform/practiceDocumentDatabase'
 import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
+import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, overridePracticeGrade } from '../../platform/practiceGradingDatabase'
 import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import './PracticeSetView.css'
 
@@ -48,10 +50,45 @@ function solutionMarkdown(value: string) {
   } catch { return '' }
 }
 
+function PracticeResponseReview({ response, item, onChange }: { response: PracticeCapturedResponse; item: PracticeItem; onChange: (response: PracticeCapturedResponse) => void }) {
+  const [answer, setAnswer] = useState(response.extractedAnswer?.rawMarkdown ?? '')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setAnswer(response.extractedAnswer?.rawMarkdown ?? '') }, [response.extractedAnswer?.rawMarkdown])
+  const regrade = async () => {
+    setBusy(true)
+    try {
+      const result = await correctAndRegradePracticeResponse(response.regionId, item, answer)
+      onChange({ ...response, extractedAnswer: result.answer, gradingResult: result.grading })
+    } finally { setBusy(false) }
+  }
+  const override = async (correctness: 'correct' | 'incorrect') => {
+    setBusy(true)
+    try { onChange({ ...response, gradingResult: await overridePracticeGrade(response.regionId, correctness) }) }
+    finally { setBusy(false) }
+  }
+  return <article className="practice-response-review">
+    <img alt={`第 ${response.regionIndex + 1} 个答题区域`} src={mediaAssetUrl(response.answerAssetPath)} />
+    <div>
+      <label>识别到的学生答案<textarea aria-label={`题目 ${item.orderIndex + 1} 的学生答案`} onChange={(event) => setAnswer(event.target.value)} value={answer} /></label>
+      <div className="practice-response-review__actions">
+        <Button disabled={busy || !answer.trim()} onClick={() => void regrade()} variant="secondary">{busy ? '处理中…' : '按修正答案重批'}</Button>
+        <Button disabled={busy} onClick={() => void override('correct')} variant="ghost">确认正确</Button>
+        <Button disabled={busy} onClick={() => void override('incorrect')} variant="ghost">确认错误</Button>
+      </div>
+      {response.gradingResult ? <div className="practice-response-review__grade">
+        <StatusTag kind={response.gradingResult.correctness === 'correct' ? 'completed' : 'pending'}>{response.gradingResult.correctness === 'correct' ? '正确' : response.gradingResult.correctness === 'incorrect' ? '错误' : '需要检查'}</StatusTag>
+        <span>{response.gradingResult.explanation}{response.gradingResult.userConfirmed ? ' · 用户已确认' : ''}</span>
+      </div> : <span className="practice-response-review__pending">尚未识别答案</span>}
+      <details><summary>查看标准答案</summary><MathMarkdown>{item.canonicalAnswer}</MathMarkdown></details>
+    </div>
+  </article>
+}
+
 export function PracticeSetView({ practiceSet, onBack }: { practiceSet: PracticeSet; onBack: () => void }) {
   const [exporting, setExporting] = useState<PracticeDocumentType | null>(null)
   const [exported, setExported] = useState<PracticeDocumentRecord | null>(null)
   const [capturing, setCapturing] = useState(false)
+  const [extracting, setExtracting] = useState(false)
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   const warnings = Array.isArray(practiceSet.generationMetadata.warnings)
@@ -80,6 +117,16 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
     } catch (reason) { setExportError(String(reason)) }
     finally { setCapturing(false) }
   }
+  const extractAnswers = async () => {
+    if (!attempt) return
+    setExtracting(true); setExportError(null)
+    try { setAttempt(await extractAndGradePracticeAttempt(practiceSet, attempt)) }
+    catch (reason) { setExportError(String(reason)) }
+    finally { setExtracting(false) }
+  }
+  const updateResponse = (updated: PracticeCapturedResponse) => setAttempt((current) => current ? {
+    ...current, responses: current.responses.map((response) => response.regionId === updated.regionId ? updated : response),
+  } : current)
   return <main className="workspace practice-workspace">
     <header className="practice-header">
       <Button onClick={onBack} variant="ghost">返回 Review Unit</Button>
@@ -97,12 +144,12 @@ export function PracticeSetView({ practiceSet, onBack }: { practiceSet: Practice
       {exported ? <p><span>{exported.pageCount} 页 · {Math.max(1, Math.round(exported.byteLength / 1024))} KB{exported.cacheHit ? ' · 已复用稳定产物' : ''}</span><Button onClick={() => void openExportedPracticePdf(exported)} variant="ghost">打开 PDF</Button></p> : null}
       {exportError ? <p className="practice-export__error" role="alert">{exportError}</p> : null}
       {attempt ? <section className="practice-capture-result" aria-label="作答回传结果">
-        <div><StatusTag kind="completed">页面已识别</StatusTag><span>方向矫正 {attempt.orientationDegrees}° · 已独立提取 {attempt.responses.length} 个答题区</span></div>
+        <div><StatusTag kind="completed">页面已识别</StatusTag><span>方向矫正 {attempt.orientationDegrees}° · 已独立提取 {attempt.responses.length} 个答题区</span><Button disabled={extracting} onClick={() => void extractAnswers()} variant="primary">{extracting ? '正在识别答案…' : '自动识别并批改'}</Button></div>
         <img alt="透视矫正后的答题卡" src={mediaAssetUrl(attempt.correctedAssetPath)} />
-        <div className="practice-capture-result__responses">{attempt.responses.map((response) => <figure key={response.regionId}>
-          <img alt={`第 ${response.regionIndex + 1} 个答题区域`} src={mediaAssetUrl(response.answerAssetPath)} />
-          <figcaption>题目 {response.practiceItemId.slice(-8)}{response.pixelWidth ? ` · ${response.pixelWidth}×${response.pixelHeight}` : ''}</figcaption>
-        </figure>)}</div>
+        <div className="practice-capture-result__responses">{attempt.responses.map((response) => {
+          const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
+          return item ? <PracticeResponseReview item={item} key={response.regionId} onChange={updateResponse} response={response} /> : null
+        })}</div>
       </section> : null}
     </section>
     {warnings.map((warning) => <p className="practice-warning" key={warning}>{warning}</p>)}

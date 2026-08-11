@@ -8,6 +8,8 @@ export interface PracticeCapturedResponse {
   answerAssetPath: string
   pixelWidth: number
   pixelHeight: number
+  extractedAnswer?: import('./practiceGrading').StructuredStudentAnswer | null
+  gradingResult?: import('./practiceGrading').PracticeGradingResult | null
 }
 
 export interface PracticeScanResult {

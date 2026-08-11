@@ -13,6 +13,8 @@ import type {
   SolutionInput,
 } from '../domain/models'
 import type { TextbookRecognition } from '../domain/horizon'
+import type { PracticeGradingResult, SubjectivePracticeGradingInput } from '../domain/practiceGrading'
+import { buildSubjectivePracticeGradingPrompt, parseSubjectivePracticeGrading, subjectivePracticeGradingJSONSchema } from './practiceGradingContract'
 import {
   classifyAIError,
   type AIErrorEnvelope,
@@ -131,6 +133,11 @@ export interface ReasoningProviderResult {
   repairStrategy: string | null
 }
 
+export interface SubjectivePracticeGradingProviderResult {
+  grading: PracticeGradingResult
+  rawOutput: string
+}
+
 export interface TextbookRecognitionInput {
   sourceName: string
   pageCount: number
@@ -176,6 +183,7 @@ export interface AIProvider {
   extractStudentAttempt?: (
     input: StudentAttemptInput,
   ) => Promise<StudentAttemptProviderResult>
+  gradeSubjectivePractice?: (input: SubjectivePracticeGradingInput) => Promise<SubjectivePracticeGradingProviderResult>
   analyzeStudentReasoning?: (
     input: ReasoningAnalysisInput,
     onChunk?: StreamCallback,
@@ -268,6 +276,11 @@ export class MockAIProvider implements AIProvider {
       }),
       repairStrategy: null,
     }
+  }
+
+  async gradeSubjectivePractice(_input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
+    const grading = parseSubjectivePracticeGrading('{"correctness":"needs_review","score":null,"error_category":null,"evidence":["Mock Provider 未执行真实主观题批改"],"explanation":"需要用户检查"}')
+    return { grading, rawOutput: JSON.stringify(grading) }
   }
 
   async analyzeStudentReasoning(
@@ -490,6 +503,17 @@ export class OpenAICompatibleProvider implements AIProvider {
       }
       throw error
     }
+  }
+
+  async gradeSubjectivePractice(input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+      prompt: buildSubjectivePracticeGradingPrompt(input),
+      jsonSchema: JSON.stringify(subjectivePracticeGradingJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
   }
 
   async analyzeStudentReasoning(
@@ -776,6 +800,17 @@ export class AntigravityCLIProvider implements AIProvider {
     }
   }
 
+  async gradeSubjectivePractice(input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath, model: this.profile.model,
+      prompt: buildSubjectivePracticeGradingPrompt(input),
+      jsonSchema: JSON.stringify(subjectivePracticeGradingJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
+  }
+
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
     _onChunk?: StreamCallback,
@@ -1037,6 +1072,16 @@ export function getStudentAttemptProvidersForRun(
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
   return orderMatchingProviders(providers, providerId, model)
+}
+
+export function getSubjectivePracticeGradingProviders() {
+  const providers = activeProviders.filter(
+    (provider): provider is AIProvider & {
+      gradeSubjectivePractice: NonNullable<AIProvider['gradeSubjectivePractice']>
+    } => provider.supportsText && typeof provider.gradeSubjectivePractice === 'function',
+  )
+  if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
+  return providers
 }
 
 export function getReasoningProvidersForRun(
