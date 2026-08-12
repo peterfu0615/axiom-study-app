@@ -1,0 +1,342 @@
+use std::iter::Peekable;
+use std::str::Chars;
+
+pub fn latex_to_typst(input: &str) -> Result<String, String> {
+    let mut parser = Parser {
+        chars: input.chars().peekable(),
+    };
+    let output = parser.parse_until(None)?;
+    if output.contains('\0') {
+        return Err("公式包含无效字符".to_string());
+    }
+    Ok(normalize_identifier_runs(
+        &output.split_whitespace().collect::<Vec<_>>().join(" "),
+    ))
+}
+
+fn normalize_identifier_runs(value: &str) -> String {
+    const TYPST_WORDS: &[&str] = &[
+        "angle",
+        "triangle",
+        "perp",
+        "parallel",
+        "degree",
+        "because",
+        "therefore",
+        "approx",
+        "times",
+        "div",
+        "plus",
+        "minus",
+        "dot",
+        "infinity",
+        "frac",
+        "sqrt",
+        "bold",
+        "italic",
+        "sans",
+        "mono",
+        "upright",
+        "overline",
+        "underline",
+        "arrow",
+        "op",
+        "sum",
+        "prod",
+        "int",
+        "lim",
+        "sin",
+        "cos",
+        "tan",
+        "log",
+        "ln",
+        "min",
+        "max",
+        "det",
+        "gcd",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "varepsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "vartheta",
+        "iota",
+        "kappa",
+        "lambda",
+        "mu",
+        "nu",
+        "xi",
+        "pi",
+        "varpi",
+        "rho",
+        "varrho",
+        "sigma",
+        "varsigma",
+        "tau",
+        "upsilon",
+        "phi",
+        "varphi",
+        "chi",
+        "psi",
+        "omega",
+    ];
+    let characters: Vec<char> = value.chars().collect();
+    let mut output = String::new();
+    let mut index = 0usize;
+    let mut in_string = false;
+    while index < characters.len() {
+        let character = characters[index];
+        if character == '"' && (index == 0 || characters[index - 1] != '\\') {
+            in_string = !in_string;
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if !in_string && character.is_ascii_alphabetic() {
+            let start = index;
+            while index < characters.len() && characters[index].is_ascii_alphabetic() {
+                index += 1;
+            }
+            let word: String = characters[start..index].iter().collect();
+            if word.len() > 1 && !TYPST_WORDS.contains(&word.as_str()) {
+                output.push_str(
+                    &word
+                        .chars()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            } else {
+                output.push_str(&word);
+            }
+            continue;
+        }
+        output.push(character);
+        index += 1;
+    }
+    output
+}
+
+struct Parser<'a> {
+    chars: Peekable<Chars<'a>>,
+}
+
+impl Parser<'_> {
+    fn parse_until(&mut self, terminator: Option<char>) -> Result<String, String> {
+        let mut output = String::new();
+        while let Some(character) = self.chars.next() {
+            if Some(character) == terminator {
+                return Ok(output);
+            }
+            match character {
+                '\\' => output.push_str(&self.command()?),
+                '{' => {
+                    let group = self.parse_until(Some('}'))?;
+                    output.push('(');
+                    output.push_str(&group);
+                    output.push(')');
+                }
+                '}' => return Err("公式包含未配对的右花括号".to_string()),
+                '$' => {}
+                '&' => output.push_str(" & "),
+                '~' => output.push(' '),
+                _ => output.push(character),
+            }
+        }
+        if terminator.is_some() {
+            Err("公式包含未闭合的花括号".to_string())
+        } else {
+            Ok(output)
+        }
+    }
+
+    fn command(&mut self) -> Result<String, String> {
+        if self.chars.peek() == Some(&'\\') {
+            self.chars.next();
+            return Ok(" \\\\ ".to_string());
+        }
+        let mut name = String::new();
+        while self
+            .chars
+            .peek()
+            .is_some_and(|character| character.is_ascii_alphabetic())
+        {
+            name.push(self.chars.next().expect("peeked character"));
+        }
+        if name.is_empty() {
+            return match self.chars.next() {
+                Some(character @ ('{' | '}' | '%' | '#' | '_' | '&' | '$')) => {
+                    Ok(character.to_string())
+                }
+                Some(',') | Some(';') | Some('!') | Some(' ') => Ok(" ".to_string()),
+                Some(character) => Err(format!("不支持的 LaTeX 转义：\\{character}")),
+                None => Err("公式以孤立反斜杠结尾".to_string()),
+            };
+        }
+
+        match name.as_str() {
+            "frac" | "dfrac" | "tfrac" => {
+                let numerator = self.required_group(&name)?;
+                let denominator = self.required_group(&name)?;
+                Ok(format!("frac({numerator}, {denominator})"))
+            }
+            "sqrt" => {
+                let radicand = self.required_group(&name)?;
+                Ok(format!("sqrt({radicand})"))
+            }
+            "text" | "textrm" | "textnormal" => {
+                let value = self.required_raw_group(&name)?;
+                Ok(typst_math_string(&value))
+            }
+            "mathrm" | "mathbf" | "mathit" | "mathsf" | "mathtt" => {
+                let value = self.required_group(&name)?;
+                let function = match name.as_str() {
+                    "mathbf" => "bold",
+                    "mathit" => "italic",
+                    "mathsf" => "sans",
+                    "mathtt" => "mono",
+                    _ => "upright",
+                };
+                Ok(format!("{function}({value})"))
+            }
+            "overline" | "bar" => Ok(format!("overline({})", self.required_group(&name)?)),
+            "underline" => Ok(format!("underline({})", self.required_group(&name)?)),
+            "vec" | "overrightarrow" => Ok(format!("arrow({})", self.required_group(&name)?)),
+            "operatorname" => {
+                let value = self.required_raw_group(&name)?;
+                Ok(format!("op({})", typst_math_string(&value)))
+            }
+            "left" | "right" => Ok(String::new()),
+            "quad" | "qquad" | "enspace" | "thinspace" => Ok(" ".to_string()),
+            "angle" => Ok("angle".to_string()),
+            "triangle" => Ok("triangle".to_string()),
+            "perp" => Ok("perp".to_string()),
+            "parallel" => Ok("parallel".to_string()),
+            "circ" => Ok("degree".to_string()),
+            "because" => Ok("because".to_string()),
+            "therefore" => Ok("therefore".to_string()),
+            "Longrightarrow" => Ok("==>".to_string()),
+            "Longleftarrow" => Ok("<==".to_string()),
+            "Leftrightarrow" | "Longleftrightarrow" => Ok("<==>".to_string()),
+            "Rightarrow" | "rightarrow" | "to" | "implies" => Ok("=>".to_string()),
+            "Leftarrow" | "leftarrow" | "impliedby" => Ok("<=".to_string()),
+            "geq" | "ge" => Ok(">=".to_string()),
+            "leq" | "le" => Ok("<=".to_string()),
+            "neq" | "ne" => Ok("!=".to_string()),
+            "approx" => Ok("approx".to_string()),
+            "times" => Ok("times".to_string()),
+            "cdot" => Ok("dot.c".to_string()),
+            "div" => Ok("div".to_string()),
+            "pm" => Ok("plus.minus".to_string()),
+            "mp" => Ok("minus.plus".to_string()),
+            "infty" => Ok("infinity".to_string()),
+            "sum" | "prod" | "int" | "lim" | "sin" | "cos" | "tan" | "log" | "ln" | "min"
+            | "max" | "det" | "gcd" => Ok(name),
+            "alpha" | "beta" | "gamma" | "delta" | "epsilon" | "varepsilon" | "zeta" | "eta"
+            | "theta" | "vartheta" | "iota" | "kappa" | "lambda" | "mu" | "nu" | "xi" | "pi"
+            | "varpi" | "rho" | "varrho" | "sigma" | "varsigma" | "tau" | "upsilon" | "phi"
+            | "varphi" | "chi" | "psi" | "omega" | "Gamma" | "Delta" | "Theta" | "Lambda"
+            | "Xi" | "Pi" | "Sigma" | "Upsilon" | "Phi" | "Psi" | "Omega" => {
+                Ok(name.to_ascii_lowercase())
+            }
+            "begin" | "end" => Err(format!(
+                "公式暂不支持 LaTeX 环境命令 \\{name}；请使用独立公式行"
+            )),
+            _ => Err(format!("不支持的 LaTeX 命令：\\{name}")),
+        }
+    }
+
+    fn required_group(&mut self, command: &str) -> Result<String, String> {
+        self.skip_spaces();
+        if self.chars.next() != Some('{') {
+            return Err(format!("LaTeX 命令 \\{command} 缺少花括号参数"));
+        }
+        self.parse_until(Some('}'))
+    }
+
+    fn required_raw_group(&mut self, command: &str) -> Result<String, String> {
+        self.skip_spaces();
+        if self.chars.next() != Some('{') {
+            return Err(format!("LaTeX 命令 \\{command} 缺少花括号参数"));
+        }
+        let mut depth = 1usize;
+        let mut output = String::new();
+        for character in self.chars.by_ref() {
+            match character {
+                '{' => {
+                    depth += 1;
+                    output.push(character);
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(output);
+                    }
+                    output.push(character);
+                }
+                _ => output.push(character),
+            }
+        }
+        Err(format!("LaTeX 命令 \\{command} 的参数未闭合"))
+    }
+
+    fn skip_spaces(&mut self) {
+        while self
+            .chars
+            .peek()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            self.chars.next();
+        }
+    }
+}
+
+fn typst_math_string(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', " ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_required_regression_formulas_to_typst_math() {
+        let cases = [
+            ("y=(3m+1)x-2", "y=(3m+1)x-2"),
+            (r"\angle ABC", "angle A B C"),
+            (r"AC \perp BD", "A C perp B D"),
+            (r"\frac{1}{2}", "frac(1, 2)"),
+            (r"180^\circ", "180^degree"),
+            (r"\sqrt{3}", "sqrt(3)"),
+            ("x^2+2x+1", "x^2+2x+1"),
+        ];
+        for (latex, expected) in cases {
+            assert_eq!(latex_to_typst(latex).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn converts_nested_fractions_text_and_reasoning_symbols() {
+        assert_eq!(
+            latex_to_typst(r"\because m>-\frac{\sqrt{3}}{2}\therefore \text{成立}").unwrap(),
+            r#"because m>-frac(sqrt(3), 2)therefore "成立""#
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_commands_instead_of_leaking_plain_latex() {
+        let error = latex_to_typst(r"x \unsupported y").unwrap_err();
+        assert!(error.contains(r"\unsupported"));
+        assert!(!error.contains("typst"));
+    }
+}

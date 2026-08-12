@@ -54,6 +54,11 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Install pinned Typst renderer
+        run: |
+          cargo install typst-cli --version 0.14.2 --locked
+          typst --version | grep '^typst 0\.14\.2'
+
       - name: Detect architecture
         # 约束：不假设 runner 架构，必须检测 arm64 / x86_64。
         id: arch

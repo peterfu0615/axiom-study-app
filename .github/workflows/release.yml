@@ -37,6 +37,11 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Install pinned Typst renderer
+        run: |
+          cargo install typst-cli --version 0.14.2 --locked
+          typst --version | grep '^typst 0\.14\.2'
+
       - name: Install dependencies
         run: npm ci
 

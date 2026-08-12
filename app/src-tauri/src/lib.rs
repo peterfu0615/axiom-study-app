@@ -9,6 +9,8 @@ mod migration_integrity;
 mod models;
 mod practice_capture;
 mod practice_pdf;
+mod practice_typst;
+mod typst_math;
 mod updater;
 
 use tauri::Manager;
@@ -364,6 +366,7 @@ pub fn run() {
             commands::delete_media_file,
             diagram::render_tikz,
             practice_pdf::render_practice_pdf,
+            practice_typst::render_complete_practice_pdf,
             practice_pdf::open_practice_pdf,
             practice_pdf::save_practice_pdf,
             practice_pdf::print_practice_pdf,
