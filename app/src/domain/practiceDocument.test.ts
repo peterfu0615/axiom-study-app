@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { PracticeItem, PracticeSet } from './practice'
-import { A4_POINTS, PRACTICE_LAYOUT_VERSION, buildPracticeDocument } from './practiceDocument'
+import {
+  A4_POINTS,
+  PRACTICE_LAYOUT_VERSION,
+  buildCompletePracticeDocument,
+  buildPracticeDocument,
+  parsePracticeMarkdown,
+} from './practiceDocument'
 
 const item = (index: number, difficulty: PracticeItem['difficulty'] = 'intermediate'): PracticeItem => ({
   id: `item-${index}`, practiceSetId: 'set-1', orderIndex: index, sourceType: 'existing_problem',
@@ -17,6 +23,49 @@ const set = (count: number): PracticeSet => ({
 })
 
 describe('PracticeDocument', () => {
+  it('preserves common LaTeX as structured math instead of printable text', () => {
+    const blocks = parsePracticeMarkdown([
+      '一次函数 $y=(3m+1)x-2$。',
+      '',
+      '几何关系：\\angle ABC，AC \\perp BD，$180^\\circ$。',
+      '',
+      '$$\\frac{1}{2}+\\sqrt{3}$$',
+      '',
+      '多项式 x^2+2x+1。',
+    ].join('\n'))
+    const serialized = JSON.stringify(blocks)
+    expect(serialized).toContain('"kind":"inlineMath","latex":"y=(3m+1)x-2"')
+    expect(serialized).toContain('"kind":"inlineMath","latex":"\\\\angle ABC"')
+    expect(serialized).toContain('"kind":"inlineMath","latex":"AC \\\\perp BD"')
+    expect(serialized).toContain('"kind":"inlineMath","latex":"180^\\\\circ"')
+    expect(serialized).toContain('"kind":"displayMath","latex":"\\\\frac{1}{2}+\\\\sqrt{3}"')
+    expect(serialized).toContain('"kind":"inlineMath","latex":"x^2+2x+1"')
+    expect(blocks.flatMap((block) => block.kind === 'paragraph' ? block.content : [])
+      .filter((content) => content.kind === 'text').map((content) => content.text).join(''))
+      .not.toMatch(/\\(?:angle|perp|circ|frac|sqrt)\b/u)
+  })
+
+  it('adapts one practice set into three structured sections with forced cover breaks', () => {
+    const practiceSet = set(6)
+    practiceSet.items[0].questionImagePath = '/tmp/source-question.png'
+    practiceSet.items[1].diagramImagePaths = ['/tmp/diagram.svg']
+    practiceSet.items[1].diagramIds = ['diagram-1']
+    const document = buildCompletePracticeDocument(practiceSet, { attemptId: 'attempt-complete', generatedAt: 1_786_464_000_000 })
+
+    expect(document.documentType).toBe('complete')
+    expect(document.sections.map((section) => section.kind)).toEqual(['exercise', 'answer_sheet', 'solution'])
+    document.sections.forEach((section) => {
+      expect(section.blocks[0]).toMatchObject({ kind: 'sectionCover', section: section.kind })
+      expect(section.blocks[1]).toEqual({ kind: 'pageBreak', reason: 'cover_to_body' })
+      expect(section.blocks.filter((block) => block.kind === 'question')).toHaveLength(6)
+    })
+    expect(JSON.stringify(document.sections[0])).toContain('/tmp/source-question.png')
+    expect(JSON.stringify(document.sections[0])).toContain('"kind":"tikzDiagram"')
+    expect(document.sections[1].blocks.flatMap((block) => block.kind === 'question' ? block.content : [])
+      .filter((block) => block.kind === 'answerSpace').map((block) => block.practiceItemId))
+      .toEqual(practiceSet.items.map((practiceItem) => practiceItem.id))
+  })
+
   it('keeps stable A4 question numbering and page identity', () => {
     const left = buildPracticeDocument(set(8), { attemptId: 'attempt-1', documentType: 'questions', generatedAt: 10 })
     const right = buildPracticeDocument(set(8), { attemptId: 'attempt-1', documentType: 'questions', generatedAt: 10 })

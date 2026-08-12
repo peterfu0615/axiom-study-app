@@ -1,9 +1,56 @@
 import type { PracticeItem, PracticeSet } from './practice'
+import { normalizeMathMarkdown } from './mathMarkdown'
 
 export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v1'
 export const A4_POINTS = { width: 595.28, height: 841.89 } as const
 
 export type PracticeDocumentType = 'questions' | 'answer_sheet' | 'solutions'
+export type PracticeSectionKind = 'exercise' | 'answer_sheet' | 'solution'
+
+export type PracticeInlineContent =
+  | { kind: 'text'; text: string }
+  | { kind: 'inlineMath'; latex: string }
+
+export type PracticeContentBlock =
+  | { kind: 'paragraph'; content: PracticeInlineContent[] }
+  | { kind: 'displayMath'; latex: string }
+  | { kind: 'image'; path: string; alt: string; purpose: 'source' | 'diagram' }
+  | { kind: 'tikzDiagram'; path: string; diagramId: string | null; alt: string }
+  | { kind: 'list'; ordered: boolean; items: PracticeInlineContent[][] }
+  | { kind: 'answerSpace'; practiceItemId: string; lineCount: number; minimumHeightPoints: number }
+  | { kind: 'pageBreak'; reason: 'cover_to_body' | 'section' }
+  | {
+    kind: 'sectionCover'
+    section: PracticeSectionKind
+    brand: 'Axiom'
+    title: string
+    subtitle: string
+    dateLabel: string
+    itemCount: number
+  }
+  | {
+    kind: 'question'
+    practiceItemId: string
+    displayNumber: number
+    content: PracticeContentBlock[]
+  }
+
+export interface StructuredPracticeSection {
+  kind: PracticeSectionKind
+  title: string
+  blocks: PracticeContentBlock[]
+}
+
+export interface CompletePracticeDocument {
+  id: string
+  practiceSetId: string
+  attemptId: string
+  documentType: 'complete'
+  title: string
+  metadata: { subject: string; createdAt: number; itemCount: number; strategy: string }
+  layout: { version: typeof PRACTICE_LAYOUT_VERSION; pageSize: 'A4'; widthPoints: number; heightPoints: number; marginPoints: number }
+  sections: StructuredPracticeSection[]
+}
 
 export interface DocumentRect { x: number; y: number; width: number; height: number }
 export interface PracticeAnswerRegion extends DocumentRect {
@@ -60,6 +107,175 @@ function solutionMarkdown(item: PracticeItem) {
 function answerPolicy(item: PracticeItem) {
   const lineCount = item.difficulty === 'advanced' ? 8 : item.difficulty === 'intermediate' ? 6 : 4
   return { lineCount, minimumHeightPoints: lineCount * 18 + 16 }
+}
+
+const DEFINITE_LATEX_COMMAND =
+  /\\(?:d?frac|sqrt|angle|triangle|perp|parallel|overline|underline|vec|overrightarrow|cdot|times|div|pm|leq|geq|neq|approx|infty|sin|cos|tan|log|ln|sum|prod|int|lim|left|right|begin|end|because|therefore|Rightarrow|Leftarrow|Leftrightarrow|rightarrow|leftarrow|to|implies|impliedby|circ)\b/u
+const MATH_CANDIDATE = /[A-Za-z0-9\\{}()[\].,+\-*/=<>^_\s]+/gu
+const MATH_OPERATOR = /[=+\-*/<>^_]|≤|≥|≠|≈/u
+
+function appendText(content: PracticeInlineContent[], text: string) {
+  if (!text) return
+  const previous = content.at(-1)
+  if (previous?.kind === 'text') previous.text += text
+  else content.push({ kind: 'text', text })
+}
+
+function splitPlainPrintableContent(value: string): PracticeInlineContent[] {
+  const content: PracticeInlineContent[] = []
+  let cursor = 0
+  for (const match of value.matchAll(MATH_CANDIDATE)) {
+    const raw = match[0]
+    const start = match.index
+    const candidate = raw.trim()
+    const mathLike = DEFINITE_LATEX_COMMAND.test(candidate)
+      || (MATH_OPERATOR.test(candidate) && /[A-Za-z0-9]/u.test(candidate))
+    if (!candidate || !mathLike) continue
+    appendText(content, value.slice(cursor, start))
+    const leading = raw.length - raw.trimStart().length
+    const trailing = raw.length - raw.trimEnd().length
+    appendText(content, raw.slice(0, leading))
+    content.push({ kind: 'inlineMath', latex: candidate })
+    appendText(content, trailing ? raw.slice(raw.length - trailing) : '')
+    cursor = start + raw.length
+  }
+  appendText(content, value.slice(cursor))
+  return content
+}
+
+export function parsePracticeInlineContent(markdown: string): PracticeInlineContent[] {
+  const normalized = normalizeMathMarkdown(markdown)
+  const content: PracticeInlineContent[] = []
+  let cursor = 0
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (normalized[index] !== '$' || normalized[index + 1] === '$') continue
+    const end = normalized.indexOf('$', index + 1)
+    if (end < 0) continue
+    splitPlainPrintableContent(normalized.slice(cursor, index)).forEach((item) => {
+      if (item.kind === 'text') appendText(content, item.text)
+      else content.push(item)
+    })
+    const latex = normalized.slice(index + 1, end).trim()
+    if (latex) content.push({ kind: 'inlineMath', latex })
+    cursor = end + 1
+    index = end
+  }
+  splitPlainPrintableContent(normalized.slice(cursor)).forEach((item) => {
+    if (item.kind === 'text') appendText(content, item.text)
+    else content.push(item)
+  })
+  return content
+}
+
+export function parsePracticeMarkdown(markdown: string): PracticeContentBlock[] {
+  const normalized = normalizeMathMarkdown(markdown).replace(/\r\n?/g, '\n')
+  const lines = normalized.split('\n')
+  const blocks: PracticeContentBlock[] = []
+  let paragraph: string[] = []
+  const flushParagraph = () => {
+    const value = paragraph.join(' ').trim().replace(/^#{1,6}\s+/u, '').replace(/\*\*/g, '')
+    if (value) blocks.push({ kind: 'paragraph', content: parsePracticeInlineContent(value) })
+    paragraph = []
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim()
+    if (!trimmed) { flushParagraph(); continue }
+    if (trimmed.startsWith('$$')) {
+      flushParagraph()
+      const formula: string[] = []
+      let current = trimmed.slice(2)
+      if (current.endsWith('$$')) {
+        current = current.slice(0, -2)
+      } else {
+        if (current) formula.push(current)
+        while (++index < lines.length) {
+          const line = lines[index]
+          const end = line.indexOf('$$')
+          if (end >= 0) { formula.push(line.slice(0, end)); break }
+          formula.push(line)
+        }
+        current = ''
+      }
+      const latex = [...formula, current].filter(Boolean).join('\n').trim()
+      if (latex) blocks.push({ kind: 'displayMath', latex })
+      continue
+    }
+    const list = trimmed.match(/^([-*+] |\d+[.)、]\s*)(.+)$/u)
+    if (list) {
+      flushParagraph()
+      const ordered = /^\d/u.test(trimmed)
+      const items = [parsePracticeInlineContent(list[2])]
+      while (index + 1 < lines.length) {
+        const next = lines[index + 1].trim().match(/^([-*+] |\d+[.)、]\s*)(.+)$/u)
+        if (!next || /^\d/u.test(lines[index + 1].trim()) !== ordered) break
+        items.push(parsePracticeInlineContent(next[2])); index += 1
+      }
+      blocks.push({ kind: 'list', ordered, items })
+      continue
+    }
+    paragraph.push(trimmed)
+  }
+  flushParagraph()
+  return blocks
+}
+
+function printableImages(item: PracticeItem): PracticeContentBlock[] {
+  const diagrams = item.diagramImagePaths.map((path, index): PracticeContentBlock =>
+    path.toLowerCase().endsWith('.svg')
+      ? { kind: 'tikzDiagram', path, diagramId: item.diagramIds[index] ?? null, alt: `第 ${item.orderIndex + 1} 题矢量图形` }
+      : { kind: 'image', path, alt: `第 ${item.orderIndex + 1} 题图形`, purpose: 'diagram' })
+  if (diagrams.length || !item.questionImagePath) return diagrams
+  return [{ kind: 'image', path: item.questionImagePath, alt: `第 ${item.orderIndex + 1} 题原图`, purpose: 'source' }]
+}
+
+function sectionCover(section: PracticeSectionKind, practiceSet: PracticeSet, createdAt: number): PracticeContentBlock {
+  const title = section === 'exercise' ? `${practiceSet.subject}练习` : section === 'answer_sheet' ? '答题卡' : '答案与解析'
+  const subtitle = section === 'exercise' ? `${practiceSet.items.length} 题` : section === 'answer_sheet'
+    ? '完成练习后，在对应区域作答并提交至 Axiom。' : `完成练习后再查看。\n${practiceSet.subject} · ${practiceSet.items.length} 题`
+  return {
+    kind: 'sectionCover', section, brand: 'Axiom', title, subtitle,
+    dateLabel: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(createdAt),
+    itemCount: practiceSet.items.length,
+  }
+}
+
+function questionBlock(item: PracticeItem, section: PracticeSectionKind): PracticeContentBlock {
+  const content = section === 'answer_sheet'
+    ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }]
+    : [
+      ...parsePracticeMarkdown(item.statementMarkdown),
+      ...(item.options?.length ? [{ kind: 'list' as const, ordered: false, items: item.options.map((option, index) => parsePracticeInlineContent(`${String.fromCharCode(65 + index)}. ${option}`)) }] : []),
+      ...printableImages(item),
+      ...(section === 'exercise' ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }] : [
+        { kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: '答案：' }, ...parsePracticeInlineContent(item.canonicalAnswer)] },
+        ...parsePracticeMarkdown(solutionMarkdown(item)),
+      ]),
+    ]
+  return { kind: 'question', practiceItemId: item.id, displayNumber: item.orderIndex + 1, content }
+}
+
+export function buildCompletePracticeDocument(practiceSet: PracticeSet, input: {
+  attemptId: string
+  generatedAt?: number
+}): CompletePracticeDocument {
+  const createdAt = input.generatedAt ?? Date.now()
+  const id = `${practiceSet.id}:${input.attemptId}:complete:${PRACTICE_LAYOUT_VERSION}`
+  const section = (kind: PracticeSectionKind, title: string): StructuredPracticeSection => ({
+    kind,
+    title,
+    blocks: [
+      sectionCover(kind, practiceSet, createdAt),
+      { kind: 'pageBreak', reason: 'cover_to_body' },
+      ...practiceSet.items.map((item) => questionBlock(item, kind)),
+    ],
+  })
+  return {
+    id, practiceSetId: practiceSet.id, attemptId: input.attemptId, documentType: 'complete',
+    title: `Axiom ${practiceSet.subject}练习`,
+    metadata: { subject: practiceSet.subject, createdAt, itemCount: practiceSet.items.length, strategy: practiceSet.strategy },
+    layout: { version: PRACTICE_LAYOUT_VERSION, pageSize: 'A4', widthPoints: A4_POINTS.width, heightPoints: A4_POINTS.height, marginPoints: margin },
+    sections: [section('exercise', '练习'), section('answer_sheet', '答题卡'), section('solution', '答案与解析')],
+  }
 }
 
 function questionHeight(item: PracticeItem, type: PracticeDocumentType) {
