@@ -302,6 +302,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0043_practice_loop.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 44,
+            description: "unified_practice_documents",
+            sql: include_str!("../migrations/0044_unified_practice_documents.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

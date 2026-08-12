@@ -52,11 +52,12 @@ fn stage_typst_sidecar() {
     if !unchanged {
         fs::copy(&binary, &output).expect("failed to stage Typst sidecar");
     }
-    let mut permissions = fs::metadata(&output)
-        .expect("failed to inspect staged Typst sidecar")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&output, permissions).expect("failed to mark Typst sidecar executable");
+    let metadata = fs::metadata(&output).expect("failed to inspect staged Typst sidecar");
+    if metadata.permissions().mode() & 0o111 == 0 {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&output, permissions).expect("failed to mark Typst sidecar executable");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -114,9 +115,10 @@ fn build_vision_helper() {
     // source file itself is executable. A fresh checkout has no ignored binary,
     // so fs::write would otherwise create it as 0644 and every native workflow
     // would fail with EACCES in the installed app.
-    let mut permissions = fs::metadata(&output)
-        .expect("failed to inspect native helper")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&output, permissions).expect("failed to mark native helper executable");
+    let metadata = fs::metadata(&output).expect("failed to inspect native helper");
+    if metadata.permissions().mode() & 0o111 == 0 {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&output, permissions).expect("failed to mark native helper executable");
+    }
 }

@@ -85,7 +85,11 @@ enum InlineContent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum ContentBlock {
     Paragraph {
         content: Vec<InlineContent>,
@@ -1001,26 +1005,33 @@ pub fn render_complete_practice_pdf(
     app: AppHandle,
     document: CompletePracticeDocument,
 ) -> Result<CompletePdfRenderResult, String> {
-    let binary = typst_binary()?;
-    let probe_directory = std::env::temp_dir();
-    let typst_version = verify_typst(&binary, &probe_directory)?;
-    let hash = content_hash(&document, &typst_version)?;
-    let destination = output_path(&app, &document, &hash)?;
-    let cache_hit = destination.is_file();
-    let output = render_to_path(&document, &destination)?;
-    let metadata =
-        fs::metadata(&destination).map_err(|error| format!("读取完整 PDF 产物失败：{error}"))?;
-    Ok(CompletePdfRenderResult {
-        document_id: document.id,
-        file_path: destination.to_string_lossy().to_string(),
-        content_hash: hash,
-        renderer_version: format!("{RENDERER_VERSION}+{}", output.typst_version),
-        page_count: output.metadata.page_count,
-        byte_length: metadata.len(),
-        cache_hit,
-        section_page_ranges: output.metadata.section_page_ranges,
-        pages: output.metadata.pages,
-    })
+    let document_id = document.id.clone();
+    let result = (|| {
+        let binary = typst_binary()?;
+        let probe_directory = std::env::temp_dir();
+        let typst_version = verify_typst(&binary, &probe_directory)?;
+        let hash = content_hash(&document, &typst_version)?;
+        let destination = output_path(&app, &document, &hash)?;
+        let cache_hit = destination.is_file();
+        let output = render_to_path(&document, &destination)?;
+        let metadata = fs::metadata(&destination)
+            .map_err(|error| format!("读取完整 PDF 产物失败：{error}"))?;
+        Ok(CompletePdfRenderResult {
+            document_id: document.id,
+            file_path: destination.to_string_lossy().to_string(),
+            content_hash: hash,
+            renderer_version: format!("{RENDERER_VERSION}+{}", output.typst_version),
+            page_count: output.metadata.page_count,
+            byte_length: metadata.len(),
+            cache_hit,
+            section_page_ranges: output.metadata.section_page_ranges,
+            pages: output.metadata.pages,
+        })
+    })();
+    if let Err(error) = &result {
+        log::error!("完整练习 PDF 排版失败（{document_id}）：{error}");
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1147,7 +1158,11 @@ mod tests {
             question(
                 "item-1",
                 1,
-                vec![paragraph("答案与解题过程"), formula(r"x^2+2x+1")],
+                vec![
+                    paragraph("答案与解题过程"),
+                    formula(r"\because \text{一次函数 } y=(3m+1)x-2 \therefore m>-\frac{1}{3}"),
+                    formula(r"x^2+2x+1"),
+                ],
             ),
             question(
                 "item-2",
@@ -1218,6 +1233,25 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn accepts_camel_case_structured_content_from_tauri_ipc() {
+        let block: ContentBlock = serde_json::from_value(serde_json::json!({
+            "kind": "answerSpace",
+            "practiceItemId": "item-ipc",
+            "lineCount": 4,
+            "minimumHeightPoints": 88.0
+        }))
+        .expect("deserialize frontend content block");
+        assert!(matches!(
+            block,
+            ContentBlock::AnswerSpace {
+                practice_item_id,
+                line_count: 4,
+                ..
+            } if practice_item_id == "item-ipc"
+        ));
     }
 
     #[test]

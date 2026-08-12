@@ -6,7 +6,6 @@ import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, StatusBadg
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
-import type { PracticeDocumentType } from '../../domain/practiceDocument'
 import { importImage, mediaAssetUrl, preparePracticeSubmission } from '../../platform/native'
 import {
   exportPracticePdf,
@@ -22,10 +21,12 @@ import { getPracticeSet } from '../../platform/practiceDatabase'
 import { practiceErrorMessage } from './productLanguage'
 import './PracticeSetView.css'
 
-const documentTabs: Array<{ value: PracticeDocumentType; label: string }> = [
-  { value: 'questions', label: '练习' },
-  { value: 'answer_sheet', label: '答题卡' },
-  { value: 'solutions', label: '解析' },
+type PracticePdfSection = 'exercise' | 'answerSheet' | 'solution'
+
+const documentTabs: Array<{ value: PracticePdfSection; label: string }> = [
+  { value: 'exercise', label: '练习' },
+  { value: 'answerSheet', label: '答题卡' },
+  { value: 'solution', label: '解析' },
 ]
 
 function ResultCorrection({ response, item, onChange }: {
@@ -89,9 +90,9 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   onBack: () => void
   onOpenPracticeSet?: (practiceSet: PracticeSet) => void
 }) {
-  const [selectedDocument, setSelectedDocument] = useState<PracticeDocumentType>('questions')
-  const [documents, setDocuments] = useState<Partial<Record<PracticeDocumentType, PracticeDocumentRecord>>>({})
-  const [exporting, setExporting] = useState<PracticeDocumentType | null>('questions')
+  const [selectedSection, setSelectedSection] = useState<PracticePdfSection>('exercise')
+  const [document, setDocument] = useState<PracticeDocumentRecord | null>(null)
+  const [exporting, setExporting] = useState(true)
   const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>('ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
@@ -101,18 +102,14 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
 
   useEffect(() => {
     let cancelled = false
-    setDocuments({}); setSelectedDocument('questions'); setExporting('questions'); setMode('ready'); setFeedback(null)
+    setDocument(null); setSelectedSection('exercise'); setExporting(true); setMode('ready'); setFeedback(null)
     void (async () => {
       try {
-        const questions = await exportPracticePdf(practiceSet, 'questions')
-        if (cancelled) return
-        setDocuments((current) => ({ ...current, questions }))
-        setExporting('answer_sheet')
-        const answerSheet = await exportPracticePdf(practiceSet, 'answer_sheet')
-        if (!cancelled) setDocuments((current) => ({ ...current, answer_sheet: answerSheet }))
+        const completeDocument = await exportPracticePdf(practiceSet)
+        if (!cancelled) setDocument(completeDocument)
       } catch (reason) {
         if (!cancelled) setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
-      } finally { if (!cancelled) setExporting(null) }
+      } finally { if (!cancelled) setExporting(false) }
     })()
     void Promise.all([getLatestPracticeAttempt(practiceSet.id), getPracticeLoopForSet(practiceSet.id)])
       .then(([latest, recoveredLoop]) => {
@@ -123,24 +120,22 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     return () => { cancelled = true }
   }, [practiceSet])
 
-  const ensureDocument = async (documentType: PracticeDocumentType) => {
-    if (documents[documentType]) return documents[documentType]!
-    setExporting(documentType); setFeedback(null)
+  const ensureDocument = async () => {
+    if (document) return document
+    setExporting(true); setFeedback(null)
     try {
-      const record = await exportPracticePdf(practiceSet, documentType)
-      setDocuments((current) => ({ ...current, [documentType]: record }))
+      const record = await exportPracticePdf(practiceSet)
+      setDocument(record)
       return record
-    } finally { setExporting(null) }
+    } finally { setExporting(false) }
   }
-  const chooseDocument = (documentType: PracticeDocumentType) => {
-    setSelectedDocument(documentType)
-    if (!documents[documentType]) void ensureDocument(documentType).catch((reason) => setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }))
-  }
-  const currentDocument = documents[selectedDocument]
+  const chooseSection = (section: PracticePdfSection) => setSelectedSection(section)
   const saveCurrent = async () => {
-    const record = currentDocument ?? await ensureDocument(selectedDocument)
+    const record = document ?? await ensureDocument()
+    const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(practiceSet.createdAt)
+    const safeSubject = practiceSet.subject.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '').slice(0, 24) || '练习'
     const destination = await save({
-      defaultPath: `Axiom_${documentTabs.find((tab) => tab.value === selectedDocument)?.label ?? '练习'}.pdf`,
+      defaultPath: `Axiom-${safeSubject}练习-${date}.pdf`,
       filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
     })
     if (!destination) return
@@ -148,13 +143,13 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     setFeedback({ tone: 'success', message: 'PDF 已保存。' })
   }
   const printCurrent = async () => {
-    const record = currentDocument ?? await ensureDocument(selectedDocument)
+    const record = document ?? await ensureDocument()
     await printExportedPracticePdf(record)
     setFeedback({ tone: 'success', message: '已在系统预览中打开，可使用“文件 → 打印”。' })
   }
   const submitAnswer = async () => {
     setFeedback(null)
-    await ensureDocument('answer_sheet')
+    await ensureDocument()
     const selected = await open({
       multiple: false,
       filters: [{ name: '作答文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'heic'] }],
@@ -256,19 +251,19 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
       <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
     </section> : <>
       <section className="practice-toolbar" aria-label="练习文档工具栏">
-        <Tabs ariaLabel="练习文档" onChange={chooseDocument} options={documentTabs} value={selectedDocument} variant="rail" />
+        <Tabs ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} variant="rail" />
         <div className="practice-toolbar__actions">
-          <Button disabled={!currentDocument || exporting !== null} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
-          <Button disabled={!currentDocument || exporting !== null} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
+          <Button disabled={!document || exporting} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
+          <Button disabled={!document || exporting} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
           <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
         </div>
       </section>
-      <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedDocument)?.label} PDF 预览`}>
-        {exporting === selectedDocument || !currentDocument ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备文档…</strong></div> : <>
-          <object data={mediaAssetUrl(currentDocument.filePath)} type="application/pdf">
-            <div className="practice-document-fallback"><p>当前窗口无法直接预览 PDF。</p><Button onClick={() => void openExportedPracticePdf(currentDocument)}>在系统预览中打开</Button></div>
+      <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedSection)?.label} PDF 预览`}>
+        {exporting || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
+          <object data={`${mediaAssetUrl(document.filePath)}#page=${document.sectionPageRanges[selectedSection].startPage}`} type="application/pdf">
+            <div className="practice-document-fallback"><p>当前窗口无法直接预览 PDF。</p><Button onClick={() => void openExportedPracticePdf(document)}>在系统预览中打开</Button></div>
           </object>
-          <footer><span>{currentDocument.pageCount} 页 · {Math.max(1, Math.round(currentDocument.byteLength / 1024))} KB</span><span>A4 文档</span></footer>
+          <footer><span>{document.pageCount} 页 · {Math.max(1, Math.round(document.byteLength / 1024))} KB</span><span>第 {document.sectionPageRanges[selectedSection].startPage} 页 · A4</span></footer>
         </>}
       </section>
       <details className="practice-content-summary">

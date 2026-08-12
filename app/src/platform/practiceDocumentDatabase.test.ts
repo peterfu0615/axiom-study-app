@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PracticeSet } from '../domain/practice'
-import { buildPracticeDocument } from '../domain/practiceDocument'
+import { buildCompletePracticeDocument } from '../domain/practiceDocument'
 
 describe('practice PDF identity', () => {
   it('uses one stable attempt and item identity in machine metadata', () => {
@@ -11,8 +11,15 @@ describe('practice PDF identity', () => {
         diagramIds: [], diagramImagePaths: [],
       }],
     } as unknown as PracticeSet
-    const document = buildPracticeDocument(set, { attemptId: 'attempt-pdf', documentType: 'answer_sheet', generatedAt: 1 })
-    expect(document.pages[0].qrPayload).toContain('set=set-pdf|attempt=attempt-pdf')
-    expect(document.pages[0].answerRegions[0]).toMatchObject({ practiceItemId: 'item-pdf', regionIndex: 0 })
+    const document = buildCompletePracticeDocument(set, { attemptId: 'attempt-pdf', generatedAt: 1 })
+    const answerQuestion = document.sections
+      .find((section) => section.kind === 'answer_sheet')
+      ?.blocks.find((block) => block.kind === 'question')
+    expect(document.id).toContain('set-pdf:attempt-pdf:complete')
+    expect(answerQuestion).toMatchObject({
+      kind: 'question',
+      practiceItemId: 'item-pdf',
+      content: [{ kind: 'answerSpace', practiceItemId: 'item-pdf' }],
+    })
   })
 })

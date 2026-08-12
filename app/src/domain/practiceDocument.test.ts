@@ -5,6 +5,7 @@ import {
   PRACTICE_LAYOUT_VERSION,
   buildCompletePracticeDocument,
   buildPracticeDocument,
+  parsePracticeInlineContent,
   parsePracticeMarkdown,
 } from './practiceDocument'
 
@@ -43,6 +44,19 @@ describe('PracticeDocument', () => {
     expect(blocks.flatMap((block) => block.kind === 'paragraph' ? block.content : [])
       .filter((content) => content.kind === 'text').map((content) => content.text).join(''))
       .not.toMatch(/\\(?:angle|perp|circ|frac|sqrt)\b/u)
+  })
+
+  it('keeps Chinese inside bare LaTeX text groups attached to the formula', () => {
+    const content = parsePracticeInlineContent(
+      String.raw`\therefore m \text{ 的取值范围是 } m > -\frac{1}{3}.`,
+    )
+    expect(content).toEqual([
+      { kind: 'text', text: '∴ ' },
+      {
+        kind: 'inlineMath',
+        latex: String.raw`m \text{ 的取值范围是 } m > -\frac{1}{3}.`,
+      },
+    ])
   })
 
   it('adapts one practice set into three structured sections with forced cover breaks', () => {

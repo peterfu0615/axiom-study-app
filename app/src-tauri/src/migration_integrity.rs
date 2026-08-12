@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 43，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 43；
+//!   1. 全新库一路跑到 44，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 44；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 43；
+//!      校验并推进到 44；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 43（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 44（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_43_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_44_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(43);
+            let migrations = migrations_up_to(44);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 43（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 43);
+                .expect("全新库必须能完整迁移到 44（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 44);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 43);
+            assert_eq!(max_applied_version(&mut conn).await, 44);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=43 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=44 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_43_exactly() {
+    fn migration_list_covers_versions_1_through_44_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=43).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=43");
+        let expected: Vec<i64> = (1..=44).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=44");
     }
 
     #[test]
@@ -189,12 +189,14 @@ mod tests {
             conn.execute("INSERT INTO practice_documents(id, practice_set_id, attempt_id, document_type, layout_version, content_hash, status, file_path, page_count, metadata_json, created_at, updated_at) VALUES ('pdf-practice', 'set-practice', 'attempt-practice', 'answer_sheet', 'practice-a4-v1', 'pdf-hash', 'ready', '/tmp/practice.pdf', 1, '{}', 3, 3)").await.expect("practice document fixture");
             conn.execute("INSERT INTO practice_document_pages(id, practice_document_id, page_index, page_identity, qr_payload, width_points, height_points, created_at) VALUES ('page-practice', 'pdf-practice', 0, 'page-identity-practice', 'AXIOM|set=set-practice|attempt=attempt-practice|page=0', 595.28, 841.89, 3)").await.expect("practice page fixture");
             conn.execute("INSERT INTO practice_answer_regions(id, practice_document_page_id, practice_item_id, region_index, x, y, width, height, created_at) VALUES ('region-practice', 'page-practice', 'item-practice', 0, .1, .2, .8, .2, 3)").await.expect("practice answer region fixture");
+            conn.execute("INSERT INTO practice_attempts(id, practice_set_id, status, started_at, created_at, updated_at) VALUES ('attempt-practice', 'set-practice', 'captured', 4, 4, 4)").await.expect("practice attempt fixture");
+            conn.execute("INSERT INTO practice_attempt_pages(id, practice_attempt_id, practice_document_page_id, source_asset_path, corrected_asset_path, qr_payload, orientation_degrees, geometry_json, status, created_at) VALUES ('attempt-page-practice', 'attempt-practice', 'page-practice', '/tmp/scan.jpg', '/tmp/corrected.jpg', 'AXIOM|set=set-practice|attempt=attempt-practice|page=0', 90, '{\"pageDetected\":true}', 'captured', 4)").await.expect("practice attempt page fixture");
 
             drop(conn);
             let mut reopened = connect(&temp).await;
-            migrate_embedded_schema(&mut reopened, &migrations_up_to(43))
+            migrate_embedded_schema(&mut reopened, &migrations_up_to(44))
                 .await
-                .expect("Practice 数据库重启后迁移必须幂等");
+                .expect("Practice 数据库必须保留机器答题数据并升级为统一文档");
             let snapshot: (String, String, String, String) = sqlx::query_as("SELECT set_row.source_type, set_row.strategy, item.statement_markdown, item.canonical_answer FROM practice_sets set_row JOIN practice_items item ON item.practice_set_id=set_row.id WHERE set_row.id='set-practice'")
                 .fetch_one(&mut reopened).await.expect("读取 Practice 快照");
             assert_eq!(
@@ -211,8 +213,7 @@ mod tests {
             assert_eq!(identity.0, "attempt-practice");
             assert!(identity.1.contains("set=set-practice"));
             assert_eq!(identity.2, "item-practice");
-            reopened.execute("INSERT INTO practice_attempts(id, practice_set_id, status, started_at, created_at, updated_at) VALUES ('attempt-practice', 'set-practice', 'captured', 4, 4, 4)").await.expect("practice attempt fixture");
-            reopened.execute("INSERT INTO practice_attempt_pages(id, practice_attempt_id, practice_document_page_id, source_asset_path, corrected_asset_path, qr_payload, orientation_degrees, geometry_json, status, created_at) VALUES ('attempt-page-practice', 'attempt-practice', 'page-practice', '/tmp/scan.jpg', '/tmp/corrected.jpg', 'AXIOM|set=set-practice|attempt=attempt-practice|page=0', 90, '{\"pageDetected\":true}', 'captured', 4)").await.expect("practice attempt page fixture");
+            reopened.execute("INSERT INTO practice_documents(id, practice_set_id, attempt_id, document_type, layout_version, content_hash, status, file_path, page_count, metadata_json, created_at, updated_at) VALUES ('pdf-complete', 'set-practice', 'attempt-complete', 'complete', 'practice-a4-v1', 'complete-hash', 'ready', '/tmp/complete.pdf', 6, '{\"sectionPageRanges\":{\"exercise\":{\"startPage\":1,\"endPage\":2},\"answerSheet\":{\"startPage\":3,\"endPage\":4},\"solution\":{\"startPage\":5,\"endPage\":6}}}', 5, 5)").await.expect("统一 PracticeDocument 必须可持久化");
             reopened.execute("INSERT INTO practice_responses(id, practice_attempt_id, practice_item_id, answer_asset_path, status, created_at, updated_at) VALUES ('response-practice', 'attempt-practice', 'item-practice', '/tmp/answer.jpg', 'captured', 4, 4)").await.expect("practice response fixture");
             let capture: (String, String, i64) = sqlx::query_as("SELECT response.practice_item_id, page.corrected_asset_path, page.orientation_degrees FROM practice_responses response JOIN practice_attempt_pages page ON page.practice_attempt_id=response.practice_attempt_id WHERE response.id='response-practice'")
                 .fetch_one(&mut reopened).await.expect("读取 PracticeAttempt 回传链路");

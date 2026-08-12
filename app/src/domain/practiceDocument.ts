@@ -124,9 +124,14 @@ function appendText(content: PracticeInlineContent[], text: string) {
 function splitPlainPrintableContent(value: string): PracticeInlineContent[] {
   const content: PracticeInlineContent[] = []
   let cursor = 0
-  for (const match of value.matchAll(MATH_CANDIDATE)) {
-    const raw = match[0]
+  const protectedValue = value.replace(
+    /\\(?:text|textrm|textnormal)\{[^{}]*\}/gu,
+    (group) => group.replace(/[\u3400-\u9fff]/gu, 'T'),
+  )
+  for (const match of protectedValue.matchAll(MATH_CANDIDATE)) {
+    const protectedRaw = match[0]
     const start = match.index
+    const raw = value.slice(start, start + protectedRaw.length)
     const candidate = raw.trim()
     const mathLike = DEFINITE_LATEX_COMMAND.test(candidate)
       || (MATH_OPERATOR.test(candidate) && /[A-Za-z0-9]/u.test(candidate))

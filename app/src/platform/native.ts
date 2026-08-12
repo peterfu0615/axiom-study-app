@@ -10,7 +10,7 @@ import type {
 } from '../domain/models'
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 import type { TikzRenderResult } from '../domain/diagram'
-import type { PracticeDocument } from '../domain/practiceDocument'
+import type { CompletePracticeDocument, PracticeDocument } from '../domain/practiceDocument'
 import type { PracticeScanResult } from '../domain/practiceAttempt'
 
 export interface PersistedProblemImage {
@@ -191,8 +191,45 @@ export interface PdfRenderResult {
   cacheHit: boolean
 }
 
+export interface PracticeSectionPageRange {
+  startPage: number
+  endPage: number
+}
+
+export interface RenderedPracticeAnswerRegion {
+  id: string
+  practiceItemId: string
+  regionIndex: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RenderedPracticeDocumentPage {
+  pageIndex: number
+  pageIdentity: string
+  qrPayload: string
+  widthPoints: number
+  heightPoints: number
+  answerRegions: RenderedPracticeAnswerRegion[]
+}
+
+export interface CompletePdfRenderResult extends PdfRenderResult {
+  sectionPageRanges: {
+    exercise: PracticeSectionPageRange
+    answerSheet: PracticeSectionPageRange
+    solution: PracticeSectionPageRange
+  }
+  pages: RenderedPracticeDocumentPage[]
+}
+
 export function renderPracticePdf(document: PracticeDocument) {
   return invoke<PdfRenderResult>('render_practice_pdf', { document })
+}
+
+export function renderCompletePracticePdf(document: CompletePracticeDocument) {
+  return invoke<CompletePdfRenderResult>('render_complete_practice_pdf', { document })
 }
 
 export function openPracticePdf(path: string) {

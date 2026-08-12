@@ -50,9 +50,9 @@ async function captureContext(practiceSetId: string) {
     FROM practice_documents document
     JOIN practice_document_pages page ON page.practice_document_id=document.id
     LEFT JOIN practice_answer_regions region ON region.practice_document_page_id=page.id
-    WHERE document.practice_set_id=$1 AND document.document_type='answer_sheet' AND document.status='ready'
+    WHERE document.practice_set_id=$1 AND document.document_type='complete' AND document.status='ready'
     ORDER BY document.updated_at DESC, page.page_index, region.region_index`, [practiceSetId])
-  if (!rows.length) throw new Error('请先导出机器答题卡，再导入作答照片')
+  if (!rows.length) throw new Error('请先生成完整练习文档，再导入作答照片')
   const attemptId = rows[0].attempt_id
   return { attemptId, layouts: groupScanLayouts(rows.filter((row) => row.attempt_id === attemptId)) }
 }
