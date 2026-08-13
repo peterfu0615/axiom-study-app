@@ -168,11 +168,13 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   const submitAnswer = async () => {
     setFeedback(null)
     await ensureDocument()
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: '作答文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'heic'] }],
-    })
+    const selected = await open({ multiple: false })
     if (typeof selected !== 'string') return
+    if (!/\.(?:pdf|jpe?g|png|heic)$/iu.test(selected)) {
+      setMode('submit')
+      setFeedback({ tone: 'danger', message: '请选择 PDF、JPG、PNG 或 HEIC 作答文件。' })
+      return
+    }
     setMode('processing')
     try {
       setProcessingStep({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
