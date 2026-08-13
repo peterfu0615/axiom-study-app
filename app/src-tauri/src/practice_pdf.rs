@@ -556,8 +556,10 @@ pub fn open_practice_pdf(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn practice_pdf_exists(path: String) -> Result<bool, String> {
-    Ok(Path::new(&path).is_file())
+pub fn practice_pdf_exists(app: AppHandle, path: String) -> Result<bool, String> {
+    Ok(managed_practice_pdf(&app, &path)
+        .map(|candidate| candidate.is_file())
+        .unwrap_or(false))
 }
 
 fn managed_practice_pdf(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
