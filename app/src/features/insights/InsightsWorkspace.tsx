@@ -16,7 +16,7 @@ function Trend({ insights }: { insights: ReviewInsights }) {
   const max = Math.max(1, ...insights.trend.map((day) => day.completedUnits))
   const visibleLabels = insights.rangeDays === 7 ? 1 : 5
   return <section className="insights-section">
-    <header><div><p className="eyebrow">复习趋势</p><h2>每日完成</h2></div><span>真实完成的 Review Unit</span></header>
+    <header><div><p className="eyebrow">复习趋势</p><h2>每日完成</h2></div><span>已完成练习</span></header>
     <div className={`insights-trend insights-trend--${insights.rangeDays}`}>
       {insights.trend.map((day, index) => <div className="insights-trend__day" key={day.date} title={`${day.date} · ${day.completedUnits} 个单元`}>
         <div className="insights-trend__bar"><i style={{ height: `${Math.max(day.completedUnits ? 14 : 2, day.completedUnits / max * 100)}%` }} /></div>
@@ -65,7 +65,7 @@ export function InsightsWorkspace() {
 
   return <main className="workspace insights-workspace">
     <header className="workspace-header insights-header">
-      <div><p className="eyebrow">学习回顾</p><h1>洞察</h1><p className="subtitle">回顾真实复习行为与长期学习状态。</p></div>
+      <div><h1>洞察</h1><p className="subtitle">复习趋势与掌握变化</p></div>
       <div className="insights-range" role="group" aria-label="洞察时间范围">
         <Button onClick={() => setRange(7)} variant={range === 7 ? 'primary' : 'secondary'}>最近 7 天</Button>
         <Button onClick={() => setRange(30)} variant={range === 30 ? 'primary' : 'secondary'}>最近 30 天</Button>
