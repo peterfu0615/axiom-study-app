@@ -549,14 +549,8 @@ fn build_practice_pages(
         .enumerate()
         .map(|(index, questions)| {
             let page_identity = format!("{}:practice-page:{index}", document.id);
-            let qr_payload = format!(
-                "AXIOM|layout={}|set={}|attempt={}|document={}|page={}",
-                document.layout.version,
-                document.practice_set_id,
-                document.attempt_id,
-                document.id,
-                page_identity
-            );
+            let page_token = format!("{:x}", Sha256::digest(page_identity.as_bytes()));
+            let qr_payload = format!("AXIOM|v=2|page={}", &page_token[..32]);
             let qr_asset = format!("assets/practice-qr-{index}.svg");
             fs::write(render_directory.join(&qr_asset), qr_svg(&qr_payload)?)
                 .map_err(|error| format!("写入练习页二维码失败：{error}"))?;

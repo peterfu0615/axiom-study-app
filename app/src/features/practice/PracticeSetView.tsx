@@ -265,7 +265,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     </header>
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
-      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传答题卡或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>
+      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>
       <button className="practice-submit__dropzone" onClick={() => void submitAnswer()} type="button">
         <Icon name="image" size={28} />
         <strong>选择作答文件</strong>

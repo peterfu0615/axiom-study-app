@@ -117,7 +117,9 @@ fn decode_qr(image: &DynamicImage) -> Option<(String, u16)> {
         let Ok(payload) = String::from_utf8(decoded.payload) else {
             continue;
         };
-        if payload.starts_with("AXIOM|layout=practice-a4-v1|") {
+        if payload.starts_with("AXIOM|layout=practice-a4-v1|")
+            || payload.starts_with("AXIOM|v=2|page=")
+        {
             return Some((payload, correction));
         }
     }
@@ -557,6 +559,19 @@ mod tests {
     use super::*;
     use qrcode::QrCode;
 
+    #[test]
+    fn decodes_an_external_generated_practice_page_when_provided() {
+        let Ok(path) = std::env::var("AXIOM_CAPTURE_PAGE_FIXTURE") else {
+            return;
+        };
+        let image = image::open(path).expect("external practice page should open");
+        let (_, _, payload) = recognize_identity(&image).expect("generated page QR should decode");
+        if let Ok(expected) = std::env::var("AXIOM_CAPTURE_EXPECTED_QR") {
+            assert_eq!(payload, expected);
+        }
+        eprintln!("decoded practice QR: {payload}");
+    }
+
     fn fixture(payload: &str) -> RgbImage {
         let mut image = RgbImage::from_pixel(800, 1132, Rgb([255, 255, 255]));
         let markers = [
@@ -681,6 +696,22 @@ mod tests {
             result.stages.last().map(String::as_str),
             Some("per_item_crop")
         );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn captures_a_v2_practice_page_with_an_inline_answer_region() {
+        let payload = "AXIOM|v=2|page=f85cb7bd0910177ef1109b1502a204d3";
+        let directory =
+            std::env::temp_dir().join(format!("axiom-practice-v2-capture-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temporary output");
+        let source = directory.join("practice-page.png");
+        fixture(payload).save(&source).expect("fixture image");
+        let result = run_capture(&source, &directory, "attempt-v2", &[layout(payload)])
+            .expect("capture v2 practice page");
+        assert_eq!(result.page_identity, "identity-1");
+        assert_eq!(result.responses.len(), 1);
+        assert!(Path::new(&result.responses[0].answer_asset_path).is_file());
         let _ = fs::remove_dir_all(directory);
     }
 
