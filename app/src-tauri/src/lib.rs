@@ -321,6 +321,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0046_practice_grading_revisions.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 47,
+            description: "practice_effective_answer_chain",
+            sql: include_str!("../migrations/0047_practice_effective_answer_chain.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
