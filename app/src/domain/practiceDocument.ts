@@ -234,10 +234,12 @@ function printableImages(item: PracticeItem): PracticeContentBlock[] {
 
 function sectionCover(section: PracticeSectionKind, practiceSet: PracticeSet, createdAt: number): PracticeContentBlock {
   const title = section === 'exercise' ? `${practiceSet.subject}练习` : '答案与解析'
-  const subtitle = section === 'exercise' ? `${practiceSet.items.length} 题` : `完成练习后再查看。\n${practiceSet.subject} · ${practiceSet.items.length} 题`
+  const subtitle = section === 'exercise' ? '' : '完成练习后再查看。'
   return {
     kind: 'sectionCover', section, brand: 'Axiom', title, subtitle,
-    dateLabel: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(createdAt),
+    dateLabel: section === 'exercise'
+      ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(createdAt)
+      : practiceSet.subject,
     itemCount: practiceSet.items.length,
   }
 }

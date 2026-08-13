@@ -365,6 +365,14 @@ fn cover_typst(cover: &ContentBlock) -> Result<String, String> {
         return Err("章节缺少封面".to_string());
     };
     let section_name = section.as_str();
+    let subtitle = if subtitle.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "#v(18pt)\n#text(size: 12pt, fill: rgb(\"#595750\"), {})\n",
+            typst_string(subtitle)
+        )
+    };
     Ok(format!(
         "#context [#metadata((kind: \"section-start\", section: {}, page: counter(page).get().first(), pos: here().position())) <axiom-meta>]\n\
          #v(145pt)\n\
@@ -372,8 +380,7 @@ fn cover_typst(cover: &ContentBlock) -> Result<String, String> {
            #text(font: \"Libertinus Serif\", size: 15pt, weight: \"semibold\", tracking: 1.2pt, {})\n\
            #v(24pt)\n\
            #text(size: 31pt, weight: \"bold\", {})\n\
-           #v(18pt)\n\
-           #text(size: 12pt, fill: rgb(\"#595750\"), {})\n\
+           {}\
            #v(12pt)\n\
            #text(size: 11pt, fill: rgb(\"#77746c\"), {})\n\
            #v(74pt)\n\
@@ -382,7 +389,7 @@ fn cover_typst(cover: &ContentBlock) -> Result<String, String> {
         typst_string(section_name),
         typst_string(brand),
         typst_string(title),
-        typst_string(subtitle),
+        subtitle,
         typst_string(&format!("{date_label} · {item_count} 题")),
     ))
 }
