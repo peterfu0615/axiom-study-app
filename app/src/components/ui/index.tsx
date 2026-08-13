@@ -112,7 +112,7 @@ export function Tabs<T extends string>({
   value: T
   onChange: (value: T) => void
   options: TabOption<T>[]
-  variant?: 'underline' | 'rail'
+  variant?: 'underline' | 'rail' | 'segment'
   ariaLabel: string
 }) {
   return (

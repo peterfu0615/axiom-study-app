@@ -6,7 +6,7 @@ import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, StatusBadg
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
-import { importImage, mediaAssetUrl, preparePracticeSubmission } from '../../platform/native'
+import { importImage, mediaAssetUrl, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
 import {
   exportPracticePdf,
   openExportedPracticePdf,
@@ -92,6 +92,8 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
 }) {
   const [selectedSection, setSelectedSection] = useState<PracticePdfSection>('exercise')
   const [document, setDocument] = useState<PracticeDocumentRecord | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pagePreview, setPagePreview] = useState<PracticePdfPagePreview | null>(null)
   const [exporting, setExporting] = useState(true)
   const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>('ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
@@ -102,7 +104,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
 
   useEffect(() => {
     let cancelled = false
-    setDocument(null); setSelectedSection('exercise'); setExporting(true); setMode('ready'); setFeedback(null)
+    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setExporting(true); setMode('ready'); setFeedback(null)
     void (async () => {
       try {
         const completeDocument = await exportPracticePdf(practiceSet)
@@ -120,6 +122,16 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     return () => { cancelled = true }
   }, [practiceSet])
 
+  useEffect(() => {
+    if (!document) return undefined
+    let cancelled = false
+    setPagePreview(null)
+    void renderPracticePdfPage(document.filePath, currentPage)
+      .then((preview) => { if (!cancelled) setPagePreview(preview) })
+      .catch((reason) => { if (!cancelled) setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }) })
+    return () => { cancelled = true }
+  }, [currentPage, document])
+
   const ensureDocument = async () => {
     if (document) return document
     setExporting(true); setFeedback(null)
@@ -129,7 +141,10 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
       return record
     } finally { setExporting(false) }
   }
-  const chooseSection = (section: PracticePdfSection) => setSelectedSection(section)
+  const chooseSection = (section: PracticePdfSection) => {
+    setSelectedSection(section)
+    if (document) setCurrentPage(document.sectionPageRanges[section].startPage)
+  }
   const saveCurrent = async () => {
     const record = document ?? await ensureDocument()
     const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(practiceSet.createdAt)
@@ -145,7 +160,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   const printCurrent = async () => {
     const record = document ?? await ensureDocument()
     await printExportedPracticePdf(record)
-    setFeedback({ tone: 'success', message: '已在系统预览中打开，可使用“文件 → 打印”。' })
+    const exercise = record.sectionPageRanges.exercise
+    const answerSheet = record.sectionPageRanges.answerSheet
+    setFeedback({
+      tone: 'success',
+      message: `已在系统预览中打开。默认打印练习与答题卡时，请选择第 ${exercise.startPage}–${answerSheet.endPage} 页；也可在系统打印框选择其他页码。`,
+    })
   }
   const submitAnswer = async () => {
     setFeedback(null)
@@ -238,7 +258,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   return <main className="workspace practice-workspace">
     <header className="practice-header">
       <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
-      <div><p className="eyebrow">练习</p><h1>{practiceSet.subject}练习</h1><p>{practiceSet.items.length} 题 · 已保存</p></div>
+      <div className="practice-header__copy"><h1>{practiceSet.subject}练习</h1><p>{practiceSet.items.length} 题 · 已保存</p></div>
+      <div className="practice-header__actions">
+        <Button disabled={!document || exporting} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
+        <Button disabled={!document || exporting} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
+        <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
+      </div>
     </header>
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
@@ -250,20 +275,25 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
       </button>
       <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
     </section> : <>
-      <section className="practice-toolbar" aria-label="练习文档工具栏">
-        <Tabs ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} variant="rail" />
-        <div className="practice-toolbar__actions">
-          <Button disabled={!document || exporting} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
-          <Button disabled={!document || exporting} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
-          <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
-        </div>
-      </section>
+      <nav className="practice-section-nav" aria-label="练习文档章节">
+        <Tabs ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} variant="segment" />
+      </nav>
       <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedSection)?.label} PDF 预览`}>
         {exporting || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
-          <object data={`${mediaAssetUrl(document.filePath)}#page=${document.sectionPageRanges[selectedSection].startPage}`} type="application/pdf">
-            <div className="practice-document-fallback"><p>当前窗口无法直接预览 PDF。</p><Button onClick={() => void openExportedPracticePdf(document)}>在系统预览中打开</Button></div>
-          </object>
-          <footer><span>{document.pageCount} 页 · {Math.max(1, Math.round(document.byteLength / 1024))} KB</span><span>第 {document.sectionPageRanges[selectedSection].startPage} 页 · A4</span></footer>
+          <div className="practice-document-page">
+            {pagePreview
+              ? <img alt={`练习 PDF 第 ${currentPage} 页`} src={mediaAssetUrl(pagePreview.path)} />
+              : <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在载入第 {currentPage} 页…</strong></div>}
+          </div>
+          <footer>
+            <span>{document.pageCount} 页 · {Math.max(1, Math.round(document.byteLength / 1024))} KB</span>
+            <div className="practice-document-pagination">
+              <IconButton className="practice-document-pagination__previous" label="上一页" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><Icon name="chevron" size={16} /></IconButton>
+              <span>第 {currentPage} / {document.pageCount} 页</span>
+              <IconButton label="下一页" disabled={currentPage >= document.pageCount} onClick={() => setCurrentPage((page) => Math.min(document.pageCount, page + 1))}><Icon name="chevron" size={16} /></IconButton>
+            </div>
+            <Button onClick={() => void openExportedPracticePdf(document)} variant="ghost">在系统预览中打开</Button>
+          </footer>
         </>}
       </section>
       <details className="practice-content-summary">

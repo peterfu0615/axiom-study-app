@@ -290,6 +290,46 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
     )
 }
 
+private struct PDFPagePreview: Codable {
+    let path: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+}
+
+private func renderPDFPage(
+    inputPath: String,
+    outputPath: String,
+    pageNumber: Int,
+    pixelWidth: Int
+) throws -> PDFPagePreview {
+    guard let document = PDFDocument(url: URL(fileURLWithPath: inputPath)) else {
+        throw ProcessorError.unreadableImage
+    }
+    guard pageNumber > 0, pageNumber <= document.pageCount,
+          let page = document.page(at: pageNumber - 1), pixelWidth >= 600, pixelWidth <= 2400 else {
+        throw ProcessorError.invalidArguments
+    }
+    let bounds = page.bounds(for: .mediaBox)
+    guard bounds.width > 0, bounds.height > 0 else {
+        throw ProcessorError.renderFailed
+    }
+    let width = CGFloat(pixelWidth)
+    let height = width * bounds.height / bounds.width
+    let image = page.thumbnail(of: NSSize(width: width, height: height), for: .mediaBox)
+    guard let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          let png = bitmap.representation(using: .png, properties: [:]) else {
+        throw ProcessorError.renderFailed
+    }
+    let outputURL = URL(fileURLWithPath: outputPath)
+    try FileManager.default.createDirectory(
+        at: outputURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try png.write(to: outputURL, options: .atomic)
+    return PDFPagePreview(path: outputPath, pixelWidth: Int(width), pixelHeight: Int(height.rounded()))
+}
+
 private func extractTextbookImage(inputPath: String) throws -> TextbookExtractionResult {
     emitTextbookProgress(currentPage: 0, totalPages: 1, pdfTextPages: 0, ocrPages: 0, failedPages: 0, phase: "vision_ocr")
     guard
@@ -1178,6 +1218,23 @@ private enum AxiomVisionCLI {
 
             let resultData: Data
             switch arguments[1] {
+            case "render-pdf-page":
+                guard
+                    let input = value(after: "--input"),
+                    let output = value(after: "--output"),
+                    let pageValue = value(after: "--page"),
+                    let widthValue = value(after: "--width"),
+                    let page = Int(pageValue),
+                    let width = Int(widthValue)
+                else {
+                    throw ProcessorError.invalidArguments
+                }
+                resultData = try JSONEncoder().encode(renderPDFPage(
+                    inputPath: input,
+                    outputPath: output,
+                    pageNumber: page,
+                    pixelWidth: width
+                ))
             case "extract-textbook":
                 guard let input = value(after: "--input") else {
                     throw ProcessorError.invalidArguments

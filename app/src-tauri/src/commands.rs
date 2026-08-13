@@ -481,12 +481,12 @@ fn validate_normalized_rect(rect: &NormalizedRect) -> Result<(), String> {
 }
 
 #[cfg(all(target_os = "macos", debug_assertions))]
-fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
     validate_vision_helper_path(PathBuf::from(env!("AXIOM_VISION_HELPER")))
 }
 
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
-fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn vision_helper_path(_app: &AppHandle) -> Result<PathBuf, String> {
     let executable =
         std::env::current_exe().map_err(|error| format!("无法定位应用程序：{error}"))?;
     let helper = executable

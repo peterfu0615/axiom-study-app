@@ -1063,14 +1063,14 @@ mod tests {
             section,
             brand: "Axiom".into(),
             title: title.into(),
-            subtitle: "数学 · 2 题".into(),
+            subtitle: "数学 · 6 题".into(),
             date_label: "2026年8月12日".into(),
-            item_count: 2,
+            item_count: 6,
         }
     }
 
     fn fixture(image_path: &Path, svg_path: &Path) -> CompletePracticeDocument {
-        let exercise_questions = vec![
+        let mut exercise_questions = vec![
             question(
                 "item-1",
                 1,
@@ -1134,27 +1134,39 @@ mod tests {
                 ],
             ),
         ];
-        let answer_questions = vec![
-            question(
-                "item-1",
-                1,
-                vec![ContentBlock::AnswerSpace {
-                    practice_item_id: "item-1".into(),
-                    line_count: 4,
-                    minimum_height_points: 88.0,
-                }],
-            ),
-            question(
-                "item-2",
-                2,
-                vec![ContentBlock::AnswerSpace {
-                    practice_item_id: "item-2".into(),
-                    line_count: 6,
-                    minimum_height_points: 124.0,
-                }],
-            ),
-        ];
-        let solution_questions = vec![
+        for index in 3..=6 {
+            exercise_questions.push(question(
+                &format!("item-{index}"),
+                index,
+                vec![
+                    paragraph(&format!("第 {index} 题数学公式回归")),
+                    formula(if index % 2 == 0 {
+                        r"x^2+2x+1"
+                    } else {
+                        r"\frac{1}{2}+\sqrt{3}"
+                    }),
+                    ContentBlock::AnswerSpace {
+                        practice_item_id: format!("item-{index}"),
+                        line_count: 4,
+                        minimum_height_points: 88.0,
+                    },
+                ],
+            ));
+        }
+        let answer_questions = (1..=6)
+            .map(|index| {
+                question(
+                    &format!("item-{index}"),
+                    index,
+                    vec![ContentBlock::AnswerSpace {
+                        practice_item_id: format!("item-{index}"),
+                        line_count: if index == 2 { 6 } else { 4 },
+                        minimum_height_points: if index == 2 { 124.0 } else { 88.0 },
+                    }],
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut solution_questions = vec![
             question(
                 "item-1",
                 1,
@@ -1170,6 +1182,20 @@ mod tests {
                 vec![paragraph("相关知识"), formula(r"\angle ABC=180^\circ")],
             ),
         ];
+        for index in 3..=6 {
+            solution_questions.push(question(
+                &format!("item-{index}"),
+                index,
+                vec![
+                    paragraph("答案与解析"),
+                    formula(if index % 2 == 0 {
+                        r"x^2+2x+1=(x+1)^2"
+                    } else {
+                        r"\frac{1}{2}+\sqrt{3}"
+                    }),
+                ],
+            ));
+        }
         CompletePracticeDocument {
             id: "document-fixture".into(),
             practice_set_id: "set-fixture".into(),
@@ -1179,7 +1205,7 @@ mod tests {
             metadata: DocumentMetadata {
                 subject: "数学".into(),
                 created_at: 1_786_464_000_000,
-                item_count: 2,
+                item_count: 6,
                 strategy: "fixture".into(),
             },
             layout: DocumentLayout {
@@ -1289,7 +1315,7 @@ mod tests {
                 .iter()
                 .flat_map(|page| &page.answer_regions)
                 .count(),
-            2
+            6
         );
         assert!(output
             .metadata

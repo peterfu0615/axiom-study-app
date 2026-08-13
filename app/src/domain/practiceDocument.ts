@@ -152,18 +152,19 @@ export function parsePracticeInlineContent(markdown: string): PracticeInlineCont
   const normalized = normalizeMathMarkdown(markdown)
   const content: PracticeInlineContent[] = []
   let cursor = 0
-  for (let index = 0; index < normalized.length; index += 1) {
-    if (normalized[index] !== '$' || normalized[index + 1] === '$') continue
-    const end = normalized.indexOf('$', index + 1)
-    if (end < 0) continue
+  while (cursor < normalized.length) {
+    const index = normalized.indexOf('$', cursor)
+    if (index < 0) break
+    const delimiter = normalized[index + 1] === '$' ? '$$' : '$'
+    const end = normalized.indexOf(delimiter, index + delimiter.length)
+    if (end < 0) break
     splitPlainPrintableContent(normalized.slice(cursor, index)).forEach((item) => {
       if (item.kind === 'text') appendText(content, item.text)
       else content.push(item)
     })
-    const latex = normalized.slice(index + 1, end).trim()
+    const latex = normalized.slice(index + delimiter.length, end).trim()
     if (latex) content.push({ kind: 'inlineMath', latex })
-    cursor = end + 1
-    index = end
+    cursor = end + delimiter.length
   }
   splitPlainPrintableContent(normalized.slice(cursor)).forEach((item) => {
     if (item.kind === 'text') appendText(content, item.text)

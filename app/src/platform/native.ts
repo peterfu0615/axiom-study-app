@@ -232,6 +232,16 @@ export function renderCompletePracticePdf(document: CompletePracticeDocument) {
   return invoke<CompletePdfRenderResult>('render_complete_practice_pdf', { document })
 }
 
+export interface PracticePdfPagePreview {
+  path: string
+  pixelWidth: number
+  pixelHeight: number
+}
+
+export function renderPracticePdfPage(path: string, pageNumber: number) {
+  return invoke<PracticePdfPagePreview>('render_practice_pdf_page', { path, pageNumber })
+}
+
 export function openPracticePdf(path: string) {
   return invoke<void>('open_practice_pdf', { path })
 }

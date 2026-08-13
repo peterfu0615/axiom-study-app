@@ -21,7 +21,8 @@ const practiceSet: PracticeSet = {
 describe('PracticeSetView', () => {
   it('presents one document workspace and keeps internal terms out of the interface', () => {
     const html = renderToStaticMarkup(<PracticeSetView onBack={() => {}} practiceSet={practiceSet} />)
-    expect(html).toContain('练习文档工具栏')
+    expect(html).toContain('练习文档章节')
+    expect(html).toContain('ax-tabs--segment')
     expect(html).toContain('答题卡')
     expect(html).toContain('保存 PDF')
     expect(html).toContain('打印')

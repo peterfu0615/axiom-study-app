@@ -195,6 +195,10 @@
 .ax-tabs--rail { display: grid; align-content: start; gap: 3px; padding: 5px; border-right: 1px solid var(--border); }
 .ax-tabs--rail button { min-height: 38px; padding: 0 9px; border-radius: 8px; text-align: left; }
 .ax-tabs--rail button.is-selected { color: var(--ink); background: var(--brand-wash); }
+.ax-tabs--segment { width: fit-content; max-width: 100%; gap: var(--ax-space-1); padding: var(--ax-space-1); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-md); background: var(--ax-color-inset); }
+.ax-tabs--segment button { min-width: 86px; min-height: var(--ax-control-md); justify-content: center; padding: 0 var(--ax-control-padding-inline); border-radius: calc(var(--ax-radius-md) - var(--ax-space-1)); color: var(--ax-text-secondary); }
+.ax-tabs--segment button:hover:not(:disabled) { color: var(--ax-text-primary); background: var(--ax-color-surface); }
+.ax-tabs--segment button.is-selected { color: var(--ax-primary-control-ink); background: var(--ax-accent); box-shadow: var(--ax-shadow-card); }
 
 .ax-status-badge { display: inline-flex; align-items: center; justify-content: center; width: fit-content; max-width: max-content; min-width: 0; min-height: var(--ax-space-7); flex: 0 0 auto; padding: 0 var(--ax-space-3); border-radius: var(--ax-radius-pill); font-size: var(--ax-type-caption-size); font-weight: var(--ax-type-caption-weight); line-height: var(--ax-type-caption-line); white-space: nowrap; }
 .ax-status-badge--neutral { color: var(--ax-text-secondary); background: var(--ax-color-inset); }

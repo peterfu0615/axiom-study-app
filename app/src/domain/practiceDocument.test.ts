@@ -59,6 +59,20 @@ describe('PracticeDocument', () => {
     ])
   })
 
+  it('preserves adjacent display delimiters embedded in a canonical answer', () => {
+    const content = parsePracticeInlineContent(
+      String.raw`解不等式 $3m+1 > 0$ 得：$$3m > -1$$ $$m > -\frac{1}{3}$$ $\therefore m$ 的取值范围是 $m > -\frac{1}{3}$。`,
+    )
+    expect(content.filter((item) => item.kind === 'inlineMath').map((item) => item.latex)).toEqual([
+      '3m+1 > 0',
+      '3m > -1',
+      String.raw`m > -\frac{1}{3}`,
+      String.raw`\therefore m`,
+      String.raw`m > -\frac{1}{3}`,
+    ])
+    expect(content.filter((item) => item.kind === 'text').map((item) => item.text).join('')).not.toContain('$')
+  })
+
   it('adapts one practice set into three structured sections with forced cover breaks', () => {
     const practiceSet = set(6)
     practiceSet.items[0].questionImagePath = '/tmp/source-question.png'
