@@ -315,6 +315,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0045_validated_diagram_assets.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 46,
+            description: "practice_grading_revisions",
+            sql: include_str!("../migrations/0046_practice_grading_revisions.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

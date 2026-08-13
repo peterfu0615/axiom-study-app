@@ -131,10 +131,12 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
   if (!attempt) return null
   const responses = await select<Array<{
     id: string; practice_item_id: string; answer_asset_path: string
-    extracted_answer_json: string | null; corrected_answer_json: string | null; grading_result_json: string | null
-  }>>(`SELECT id, practice_item_id, answer_asset_path, extracted_answer_json,
-    corrected_answer_json, grading_result_json FROM practice_responses
-    WHERE practice_attempt_id=$1 ORDER BY created_at, id`, [attempt.id])
+    effective_answer_json: string | null; effective_grading_json: string | null
+  }>>(`SELECT response.id, response.practice_item_id, response.answer_asset_path,
+    effective.effective_answer_json, effective.effective_grading_json
+    FROM practice_responses response
+    JOIN practice_effective_responses effective ON effective.response_id=response.id
+    WHERE response.practice_attempt_id=$1 ORDER BY response.created_at, response.id`, [attempt.id])
   return {
     id: attempt.id, practiceSetId, status: attempt.status, startedAt: Number(attempt.started_at),
     submittedAt: attempt.submitted_at === null ? null : Number(attempt.submitted_at),
@@ -142,9 +144,8 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
     responses: responses.map((response, index) => ({
       regionId: response.id, practiceItemId: response.practice_item_id, regionIndex: index,
       answerAssetPath: response.answer_asset_path, pixelWidth: 0, pixelHeight: 0,
-      extractedAnswer: response.corrected_answer_json
-        ? JSON.parse(response.corrected_answer_json) : response.extracted_answer_json ? JSON.parse(response.extracted_answer_json) : null,
-      gradingResult: response.grading_result_json ? JSON.parse(response.grading_result_json) : null,
+      extractedAnswer: response.effective_answer_json ? JSON.parse(response.effective_answer_json) : null,
+      gradingResult: response.effective_grading_json ? JSON.parse(response.effective_grading_json) : null,
     })),
   }
 }

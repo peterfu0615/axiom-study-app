@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, StatusBadge, Tabs, type Feedback } from '../../components/ui'
+import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
@@ -29,10 +29,11 @@ const documentTabs: Array<{ value: PracticePdfSection; label: string }> = [
   { value: 'solution', label: '解析' },
 ]
 
-function ResultCorrection({ response, item, onChange }: {
+function ResultCorrection({ response, item, onChange, onError }: {
   response: PracticeCapturedResponse
   item: PracticeItem
   onChange: (response: PracticeCapturedResponse) => void
+  onError: (reason: unknown) => void
 }) {
   const [answer, setAnswer] = useState(response.extractedAnswer?.rawMarkdown ?? '')
   const [busy, setBusy] = useState(false)
@@ -42,11 +43,13 @@ function ResultCorrection({ response, item, onChange }: {
     try {
       const result = await correctAndRegradePracticeResponse(response.regionId, item, answer)
       onChange({ ...response, extractedAnswer: result.answer, gradingResult: result.grading })
-    } finally { setBusy(false) }
+    } catch (reason) { onError(reason) }
+    finally { setBusy(false) }
   }
   const override = async (correctness: 'correct' | 'incorrect') => {
     setBusy(true)
     try { onChange({ ...response, gradingResult: await overridePracticeGrade(response.regionId, correctness) }) }
+    catch (reason) { onError(reason) }
     finally { setBusy(false) }
   }
   return <details className="practice-result__correction">
@@ -63,10 +66,11 @@ function ResultCorrection({ response, item, onChange }: {
   </details>
 }
 
-function ResultItem({ item, response, onChange }: {
+function ResultItem({ item, response, onChange, onError }: {
   item: PracticeItem
   response: PracticeCapturedResponse
   onChange: (response: PracticeCapturedResponse) => void
+  onError: (reason: unknown) => void
 }) {
   const result = response.gradingResult
   const tone = result?.correctness === 'correct' ? 'success' : result?.correctness === 'needs_review' || !result ? 'warning' : 'danger'
@@ -81,7 +85,7 @@ function ResultItem({ item, response, onChange }: {
     </dl>
     {result?.explanation && <p className="practice-result-item__explanation">{result.explanation}</p>}
     {tags.length > 0 && <div className="practice-result-item__tags"><span>相关知识</span>{tags.map((tag) => <Badge key={tag.id || tag.name}>{tag.name}</Badge>)}</div>}
-    <ResultCorrection item={item} onChange={onChange} response={response} />
+    <ResultCorrection item={item} onChange={onChange} onError={onError} response={response} />
   </article>
 }
 
@@ -244,7 +248,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     <section className="practice-results" aria-label="逐题结果">
       {attempt.responses.map((response) => {
         const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
-        return item ? <ResultItem item={item} key={response.regionId} onChange={updateResponse} response={response} /> : null
+        return item ? <ResultItem item={item} key={response.regionId} onChange={updateResponse} onError={() => setFeedback({ tone: 'danger', message: '未能保存这次批改修改，请重试。' })} response={response} /> : null
       })}
     </section>
     <section className="practice-result-next">
@@ -282,7 +286,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
     </section> : <>
       <nav className="practice-section-nav" aria-label="练习文档章节">
-        <Tabs ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} variant="segment" />
+        <SegmentedControl ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} />
       </nav>
       <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedSection)?.label} PDF 预览`}>
         {exporting || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
