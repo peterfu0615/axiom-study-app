@@ -36,7 +36,7 @@ type ErrorContext = Partial<Pick<AIErrorEnvelope,
 const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
   'title' | 'userMessage' | 'retryable' | 'fallbackAllowed'>> = {
   AUTHENTICATION_ERROR: {
-    title: 'AI 服务认证失败', userMessage: 'API Key 无效或没有访问当前模型的权限，请检查 Provider 设置。',
+    title: 'AI 服务认证失败', userMessage: 'API Key 无效或没有访问当前模型的权限，请检查 AI 服务设置。',
     retryable: false, fallbackAllowed: false,
   },
   NETWORK_ERROR: {
@@ -52,7 +52,7 @@ const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
     retryable: true, fallbackAllowed: true,
   },
   PROVIDER_ERROR: {
-    title: '模型服务暂时不可用', userMessage: 'Provider 未能完成请求，可以重新尝试。',
+    title: '模型服务暂时不可用', userMessage: 'AI 服务未能完成请求，可以重新尝试。',
     retryable: true, fallbackAllowed: true,
   },
   MODEL_CAPABILITY_ERROR: {
@@ -60,7 +60,7 @@ const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
     retryable: false, fallbackAllowed: true,
   },
   REQUEST_INVALID: {
-    title: 'AI 请求无法发送', userMessage: '请求配置或输入无效，请检查题目图片与 Provider 设置。',
+    title: 'AI 请求无法发送', userMessage: '请求配置或输入无效，请检查题目图片与 AI 服务设置。',
     retryable: false, fallbackAllowed: false,
   },
   MODEL_OUTPUT_ERROR: {
@@ -76,7 +76,7 @@ const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
     retryable: false, fallbackAllowed: false,
   },
   PERSISTENCE_ERROR: {
-    title: '分析结果保存失败', userMessage: '结果未能安全写入本地数据库，请重新尝试。',
+    title: '分析结果保存失败', userMessage: '结果未能保存，请重新尝试。',
     retryable: true, fallbackAllowed: false,
   },
   CANCELLED: {

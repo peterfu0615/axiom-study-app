@@ -51,7 +51,7 @@ function newProvider(index: number): AIProviderProfile {
 }
 
 function providerSubtitle(profile: AIProviderProfile): string {
-  if (profile.provider === 'mock') return 'Mock Provider'
+  if (profile.provider === 'mock') return '模拟服务'
   if (profile.provider === 'antigravity_cli') return 'Gemini · Antigravity CLI'
   return profile.baseUrl || 'OpenAI Compatible'
 }
@@ -118,7 +118,7 @@ export function AISettings() {
       const saved = await saveAIProviderProfiles(profiles)
       configureAIProviders(saved)
       setProfiles(saved)
-      setMessage({ text: 'Provider 配置已保存并立即生效', tone: 'success' })
+      setMessage({ text: 'AI 服务设置已保存并立即生效', tone: 'success' })
       window.setTimeout(() => setMessage(null), 3200)
     } catch (error) {
       setMessage({ text: `保存失败：${readableError(error)}`, tone: 'error' })
@@ -175,14 +175,11 @@ export function AISettings() {
     <main className="workspace settings-workspace">
       <header className="workspace-header">
         <div>
-          <p className="eyebrow">应用偏好</p>
           <h1>设置</h1>
-          <p className="subtitle">
-            管理 AI 模型 Provider、外观与关于信息。
-          </p>
+          <p className="subtitle">AI 服务、外观与应用信息</p>
         </div>
         <span className="settings-provider-badge">
-          {enabledVisionCount} 个 VLM 可用
+          {enabledVisionCount} 个图片识别服务可用
         </span>
       </header>
 
@@ -272,7 +269,7 @@ export function AISettings() {
                           {index + 1}
                         </span>
                         <span className="provider-nav-copy">
-                          <strong>{profile.name || '未命名 Provider'}</strong>
+                          <strong>{profile.name || '未命名服务'}</strong>
                           <small>{providerSubtitle(profile)}</small>
                           <span className="provider-nav-tags">
                             {profile.enabled ? (
@@ -281,10 +278,10 @@ export function AISettings() {
                               <span className="provider-tag">停用</span>
                             )}
                             {profile.supportsVision && (
-                              <span className="provider-tag">VLM</span>
+                              <span className="provider-tag">图片</span>
                             )}
                             {profile.supportsText && (
-                              <span className="provider-tag">LLM</span>
+                              <span className="provider-tag">文本</span>
                             )}
                           </span>
                         </span>
@@ -320,7 +317,7 @@ export function AISettings() {
                     ))
                   ) : (
                     <div className="provider-nav-empty">
-                      {loading ? '读取中…' : '尚未配置 Provider'}
+                      {loading ? '读取中…' : '尚未配置 AI 服务'}
                     </div>
                   )}
                 </div>
@@ -331,9 +328,9 @@ export function AISettings() {
                   <>
                     <header className="provider-detail-header">
                       <div>
-                        <p className="eyebrow">Provider 详情</p>
+                        <p className="eyebrow">AI 服务</p>
                         <h2>
-                          {selectedProfile.name || '未命名 Provider'}
+                          {selectedProfile.name || '未命名服务'}
                         </h2>
                         <p className="provider-detail-subtitle">
                           {providerSubtitle(selectedProfile)}
@@ -369,10 +366,10 @@ export function AISettings() {
                         </label>
                         <ListboxSelect
                           disabled={saving || selectedProfile.provider === 'mock'}
-                          label="Provider"
+                          label="服务类型"
                           onValueChange={(value) => update(selectedProfile.id, { provider: value as AIProviderKind })}
                           options={[
-                            { value: 'mock', label: 'Mock Provider' },
+                            { value: 'mock', label: '模拟服务' },
                             { value: 'openai_compatible', label: 'OpenAI Compatible' },
                             { value: 'antigravity_cli', label: 'Gemini (Antigravity CLI)' },
                           ]}
@@ -409,7 +406,7 @@ export function AISettings() {
                           </label>
                         )}
                         <label>
-                          <span>Model</span>
+                          <span>模型</span>
                           <input
                             disabled={saving || selectedProfile.provider === 'mock'}
                             onChange={(event) =>
@@ -447,7 +444,7 @@ export function AISettings() {
                                 placeholder={
                                   selectedProfile.hasApiKey
                                     ? '不填写则保留已保存 Key'
-                                    : '输入 Provider API Key'
+                                    : '输入 API Key'
                                 }
                                 type="password"
                                 value={selectedProfile.apiKey}
@@ -492,7 +489,7 @@ export function AISettings() {
                             }
                             type="checkbox"
                           />
-                          VLM（图片）
+                          支持图片识别
                         </label>
                         <label>
                           <input
@@ -505,15 +502,15 @@ export function AISettings() {
                             }
                             type="checkbox"
                           />
-                          LLM（文本 / 推理）
+                          支持文本与推理
                         </label>
                       </div>
                     </div>
                   </>
                 ) : (
                   <div className="provider-detail-empty">
-                    <strong>选择左侧的 Provider 查看详情</strong>
-                    <p>或点击"添加"创建新的 Provider 配置。</p>
+                    <strong>选择左侧的 AI 服务查看详情</strong>
+                    <p>或点击“添加”配置新的 AI 服务。</p>
                   </div>
                 )}
               </article>
@@ -594,7 +591,7 @@ export function AISettings() {
                 onClick={() => void save()}
                 type="button"
               >
-                {saving ? '保存中…' : '保存全部配置'}
+                {saving ? '保存中…' : '保存设置'}
               </button>
             </div>
           )}

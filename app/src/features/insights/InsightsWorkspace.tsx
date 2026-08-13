@@ -77,10 +77,10 @@ export function InsightsWorkspace() {
         icon={<Icon name="insights" size={22} />} title={`最近 ${range} 天还没有复习记录`}
       /> : insights && <>
         <section className="insights-overview" aria-label="学习概览">
-          <div><span>完成单元</span><strong>{insights.overview.completedUnits}</strong></div>
+          <div><span>已完成练习</span><strong>{insights.overview.completedUnits}</strong></div>
           <div><span>复习题目</span><strong>{insights.overview.completedProblems}</strong></div>
           <div><span>完成率</span><strong>{percent(insights.overview.completionRate)}</strong></div>
-          <div><span>暂缓单元</span><strong>{insights.overview.deferredUnits}</strong></div>
+          <div><span>已暂缓</span><strong>{insights.overview.deferredUnits}</strong></div>
         </section>
         <Trend insights={insights} />
         <section className="insights-split">
@@ -89,7 +89,7 @@ export function InsightsWorkspace() {
             <div className="insights-ratings">{Object.entries(insights.ratings).map(([rating, count]) => <div key={rating}><span>{ratingLabels[rating as keyof typeof ratingLabels]}</span><i><b style={{ width: `${totalRatings ? count / totalRatings * 100 : 0}%` }} /></i><strong>{count}</strong></div>)}</div>
           </article>
           <article className="insights-section insights-section--compact">
-            <header><div><p className="eyebrow">状态变化</p><h2>掌握变化</h2></div><span>仅真实历史证据</span></header>
+            <header><div><h2>掌握变化</h2></div></header>
             {changeDays.length ? <div className="insights-changes">{changeDays.slice(-5).map((day) => <div key={day.date}><span>{day.date.slice(5).replace('-', '/')}</span><strong className={(day.masteryDelta ?? 0) >= 0 ? 'is-positive' : 'is-negative'}>{(day.masteryDelta ?? 0) >= 0 ? '+' : ''}{Math.round((day.masteryDelta ?? 0) * 100)}%</strong></div>)}</div>
               : <p className="insights-change-copy">当前范围内还没有足够的状态变化记录。</p>}
           </article>

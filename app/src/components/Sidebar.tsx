@@ -64,7 +64,7 @@ export function Sidebar({
         </button>
         <div className="local-first-note">
           <span className="status-dot" />
-          本地数据已启用
+          数据保存在本机
         </div>
       </div>
     </aside>

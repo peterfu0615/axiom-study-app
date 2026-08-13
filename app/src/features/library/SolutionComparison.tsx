@@ -721,7 +721,6 @@ export function SolutionComparison({
       <section className="solution-comparison-section">
         <header className="problem-solution-header">
           <div>
-            <p className="eyebrow">Learning Feedback</p>
             <h3>解题过程</h3>
           </div>
           {reasoning?.status === 'completed' ? (

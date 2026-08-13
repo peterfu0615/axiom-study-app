@@ -979,7 +979,7 @@ export function ProblemLibrary() {
                           <div className="problem-ai-error-region">
                             <ErrorState
                               error={activeModelRun?.error ?? classifyAIError(
-                                activeModelRun?.errorMessage || 'Provider 未返回错误详情',
+                                activeModelRun?.errorMessage || 'AI 服务未返回错误详情',
                                 { runId: activeModelRun?.id ?? null },
                               )}
                               onRetry={updating ? undefined : () => void retryAI()}

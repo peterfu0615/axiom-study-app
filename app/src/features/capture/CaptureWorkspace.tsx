@@ -289,14 +289,13 @@ export function CaptureWorkspace() {
     <main className="workspace capture-workspace">
       <header className="workspace-header">
         <div>
-          <p className="eyebrow">采集工作台</p>
           <h1>添加错题</h1>
         </div>
         <div className="runtime-pill">
           <span className={`status-dot ${capabilities ? 'online' : ''}`} />
           {capabilities
-            ? `macOS ${capabilities.architecture} · 本地数据库`
-            : '浏览器预览模式'}
+            ? '图片与题目数据保存在本机'
+            : '正在准备采集…'}
         </div>
       </header>
 
