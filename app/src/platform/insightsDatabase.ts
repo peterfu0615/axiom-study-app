@@ -7,7 +7,7 @@ import {
   type InsightSkill,
   type ReviewInsightRecord,
 } from '../domain/reviewInsights'
-import { addLocalReviewDays, initialReviewSkillState, localReviewDate, startOfLocalReviewDay, type ReviewRating, type ReviewTag } from '../domain/review'
+import { addLocalReviewDays, applyReviewRating, initialReviewSkillState, localReviewDate, startOfLocalReviewDay, type ReviewRating, type ReviewSkillState, type ReviewTag } from '../domain/review'
 
 const select = <T>(sql: string, params: unknown[] = []) => invoke<T>('db_select', { sql, params })
 const num = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -45,7 +45,16 @@ interface SkillRow {
   uncertainty: number
 }
 
-interface ChangeRow { log_id: string; reviewed_at: number; previous_state_json: string; new_state_json: string }
+interface ChangeRow {
+  log_id: string
+  reviewed_at: number
+  previous_state_json: string
+  new_state_json: string
+  subject: string
+  skill_bundle_id: string
+  difficulty: DifficultyLevel
+  effective_rating: ReviewRating
+}
 
 export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.now()) {
   const fromStart = addLocalReviewDays(startOfLocalReviewDay(now), -(rangeDays - 1))
@@ -80,14 +89,15 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
       ORDER BY state.subject, definition.tag_type, definition.canonical_name
     `),
     select<ChangeRow[]>(`
-      SELECT log.id AS log_id, log.reviewed_at, log.previous_state_json,
+      SELECT log.id AS log_id, log.reviewed_at, log.previous_state_json, log.new_state_json,
+        log.subject, log.skill_bundle_id, instance.difficulty,
         CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
-          THEN json_set(log.new_state_json, '$.effectiveRating',
-            CASE json_extract(effective.effective_grading_json, '$.correctness')
-              WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END)
-          ELSE log.new_state_json END AS new_state_json
+          THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
+            WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END
+          ELSE log.rating END AS effective_rating
       FROM horizon_review_logs log
       JOIN review_attempts attempt ON attempt.id=log.review_attempt_id
+      JOIN question_instances instance ON instance.id=attempt.question_instance_id
       LEFT JOIN practice_evidences practice_evidence ON practice_evidence.review_attempt_id=attempt.id
       LEFT JOIN practice_effective_responses effective ON effective.response_id=practice_evidence.practice_response_id
       WHERE log.reviewed_at >= $1
@@ -114,9 +124,14 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
       uncertainty: num(row.uncertainty, 1),
     },
   }))
+  const replayedBundles = new Map<string, ReviewSkillState>()
   const changes: BundleMasteryChange[] = changeRows.flatMap((row) => {
-    const previous = parse<{ masteryEstimate?: number }>(row.previous_state_json, {})
-    const next = parse<{ masteryEstimate?: number }>(row.new_state_json, {})
+    const storedPrevious = parse<Partial<ReviewSkillState>>(row.previous_state_json, {})
+    const previous = replayedBundles.get(`${row.subject}:${row.skill_bundle_id}`) ?? {
+      ...initialReviewSkillState(), ...storedPrevious,
+    }
+    const next = applyReviewRating(previous, row.effective_rating, row.difficulty, num(row.reviewed_at))
+    replayedBundles.set(`${row.subject}:${row.skill_bundle_id}`, next)
     return Number.isFinite(previous.masteryEstimate) && Number.isFinite(next.masteryEstimate) ? [{
       logId: row.log_id, reviewedAt: num(row.reviewed_at), previousMastery: num(previous.masteryEstimate), newMastery: num(next.masteryEstimate),
     }] : []
