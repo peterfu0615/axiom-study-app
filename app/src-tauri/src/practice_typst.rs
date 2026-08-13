@@ -18,7 +18,7 @@ const A4_HEIGHT_POINTS: f32 = 841.89;
 const PAGE_MARGIN_POINTS: f32 = 42.0;
 const CONTENT_WIDTH_POINTS: f32 = A4_WIDTH_POINTS - PAGE_MARGIN_POINTS * 2.0;
 const TYPST_VERSION: &str = "0.14.2";
-const RENDERER_VERSION: &str = "axiom-typst-v1";
+const RENDERER_VERSION: &str = "axiom-typst-v2";
 const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,7 +63,6 @@ struct PracticeSection {
 #[serde(rename_all = "snake_case")]
 enum SectionKind {
     Exercise,
-    AnswerSheet,
     Solution,
 }
 
@@ -71,7 +70,6 @@ impl SectionKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Exercise => "exercise",
-            Self::AnswerSheet => "answerSheet",
             Self::Solution => "solution",
         }
     }
@@ -179,26 +177,18 @@ pub struct CompletePdfRenderResult {
 }
 
 #[derive(Debug)]
-struct AnswerQuestion {
-    practice_item_id: String,
-    display_number: usize,
-    line_count: usize,
-    height: f32,
-}
-
-#[derive(Debug)]
-struct AnswerPage {
+struct PracticePage {
     local_index: usize,
     page_identity: String,
     qr_payload: String,
     qr_asset: String,
-    questions: Vec<AnswerQuestion>,
+    questions: Vec<ContentBlock>,
 }
 
 #[derive(Debug)]
 struct BuildOutput {
     source: String,
-    answer_pages: Vec<AnswerPage>,
+    practice_pages: Vec<PracticePage>,
 }
 
 struct RenderedMetadata {
@@ -281,7 +271,7 @@ fn block_typst(
     block: &ContentBlock,
     render_directory: &Path,
     assets: &mut HashMap<String, String>,
-    answer_sheet: bool,
+    page_identity: Option<&str>,
 ) -> Result<String, String> {
     match block {
         ContentBlock::Paragraph { content } => Ok(format!(
@@ -329,14 +319,29 @@ fn block_typst(
             ))
         }
         ContentBlock::AnswerSpace {
+            practice_item_id,
             line_count,
             minimum_height_points,
-            ..
-        } if !answer_sheet => Ok(format!(
-            "#block(width: 100%, height: {}pt, below: 8pt, inset: (top: 7pt))[#for _ in range({}) {{ line(length: 100%, stroke: .45pt + rgb(\"#c9c7c0\")); v(13pt) }}]\n",
-            minimum_height_points, line_count
-        )),
-        ContentBlock::AnswerSpace { .. } => Ok(String::new()),
+        } => {
+            let identity = page_identity.ok_or_else(|| "答题区域缺少页面身份".to_string())?;
+            let region_id = format!("{identity}:answer:{practice_item_id}:0");
+            Ok(format!(
+                "#block(width: 100%, below: 9pt)[\n\
+                   #text(size: 8.5pt, fill: rgb(\"#77746c\"))[作答]\n\
+                   #v(4pt)\n\
+                   #context [#metadata((kind: \"answer-region\", id: {}, practice_item_id: {}, region_index: 0, page_identity: {}, page: counter(page).get().first(), pos: here().position(), width: 471.28, height: {})) <axiom-meta>]\n\
+                   #rect(width: 100%, height: {}pt, stroke: .65pt + rgb(\"#aaa79e\"), radius: 2pt)[\n\
+                     #pad(x: 10pt, y: 8pt)[#for _ in range({}) {{ line(length: 100%, stroke: .32pt + rgb(\"#dedbd2\")); v(13pt) }}]\n\
+                   ]\n\
+                 ]\n",
+                typst_string(&region_id),
+                typst_string(practice_item_id),
+                typst_string(identity),
+                minimum_height_points,
+                minimum_height_points,
+                line_count,
+            ))
+        }
         ContentBlock::PageBreak { reason } => {
             let _ = reason;
             Ok("#pagebreak()\n".to_string())
@@ -407,6 +412,7 @@ fn question_typst(
     section: SectionKind,
     render_directory: &Path,
     assets: &mut HashMap<String, String>,
+    page_identity: Option<&str>,
 ) -> Result<String, String> {
     let ContentBlock::Question {
         practice_item_id: _,
@@ -418,7 +424,12 @@ fn question_typst(
     };
     let mut body = String::new();
     for block in content {
-        body.push_str(&block_typst(block, render_directory, assets, false)?);
+        body.push_str(&block_typst(
+            block,
+            render_directory,
+            assets,
+            page_identity,
+        )?);
     }
     let breakable = section == SectionKind::Solution;
     Ok(format!(
@@ -434,45 +445,6 @@ fn question_typst(
         display_number,
         body
     ))
-}
-
-fn answer_questions(section: &PracticeSection) -> Result<Vec<AnswerQuestion>, String> {
-    section
-        .blocks
-        .iter()
-        .filter_map(|block| {
-            let ContentBlock::Question {
-                practice_item_id,
-                display_number,
-                content,
-            } = block
-            else {
-                return None;
-            };
-            Some((practice_item_id, display_number, content))
-        })
-        .map(|(practice_item_id, display_number, content)| {
-            let answer = content.iter().find_map(|block| {
-                let ContentBlock::AnswerSpace {
-                    line_count,
-                    minimum_height_points,
-                    ..
-                } = block
-                else {
-                    return None;
-                };
-                Some((*line_count, *minimum_height_points))
-            });
-            let (line_count, minimum_height_points) =
-                answer.ok_or_else(|| format!("第 {display_number} 题缺少答题区域"))?;
-            Ok(AnswerQuestion {
-                practice_item_id: practice_item_id.clone(),
-                display_number: *display_number,
-                line_count,
-                height: minimum_height_points.max(88.0),
-            })
-        })
-        .collect()
 }
 
 fn qr_svg(payload: &str) -> Result<String, String> {
@@ -498,18 +470,63 @@ fn qr_svg(payload: &str) -> Result<String, String> {
     ))
 }
 
-fn build_answer_pages(
+fn estimated_block_height(block: &ContentBlock) -> f32 {
+    match block {
+        ContentBlock::Paragraph { content } => {
+            let characters = content
+                .iter()
+                .map(|inline| match inline {
+                    InlineContent::Text { text } => text.chars().count(),
+                    InlineContent::InlineMath { latex } => latex.chars().count().max(8),
+                })
+                .sum::<usize>();
+            22.0 * ((characters.max(1) as f32 / 35.0).ceil())
+        }
+        ContentBlock::DisplayMath { .. } => 40.0,
+        ContentBlock::Image { .. } | ContentBlock::TikzDiagram { .. } => 166.0,
+        ContentBlock::List { items, .. } => 24.0 * items.len().max(1) as f32,
+        ContentBlock::AnswerSpace {
+            minimum_height_points,
+            ..
+        } => minimum_height_points + 28.0,
+        _ => 0.0,
+    }
+}
+
+fn estimated_question_height(question: &ContentBlock) -> Result<f32, String> {
+    let ContentBlock::Question {
+        display_number,
+        content,
+        ..
+    } = question
+    else {
+        return Err("练习正文包含非题目块".to_string());
+    };
+    if !content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::AnswerSpace { .. }))
+    {
+        return Err(format!("第 {display_number} 题缺少答题区域"));
+    }
+    Ok(56.0 + content.iter().map(estimated_block_height).sum::<f32>())
+}
+
+fn build_practice_pages(
     document: &CompletePracticeDocument,
     section: &PracticeSection,
     render_directory: &Path,
-) -> Result<Vec<AnswerPage>, String> {
-    let questions = answer_questions(section)?;
-    let mut groups: Vec<Vec<AnswerQuestion>> = Vec::new();
+) -> Result<Vec<PracticePage>, String> {
+    let questions = section
+        .blocks
+        .iter()
+        .filter(|block| matches!(block, ContentBlock::Question { .. }))
+        .cloned();
+    let mut groups: Vec<Vec<ContentBlock>> = Vec::new();
     let mut current = Vec::new();
     let mut used = 0.0f32;
     for question in questions {
-        let required = question.height + 44.0;
-        if !current.is_empty() && used + required > 650.0 {
+        let required = estimated_question_height(&question)?;
+        if !current.is_empty() && used + required > 610.0 {
             groups.push(current);
             current = Vec::new();
             used = 0.0;
@@ -524,7 +541,7 @@ fn build_answer_pages(
         .into_iter()
         .enumerate()
         .map(|(index, questions)| {
-            let page_identity = format!("{}:answer-page:{index}", document.id);
+            let page_identity = format!("{}:practice-page:{index}", document.id);
             let qr_payload = format!(
                 "AXIOM|layout={}|set={}|attempt={}|document={}|page={}",
                 document.layout.version,
@@ -533,10 +550,10 @@ fn build_answer_pages(
                 document.id,
                 page_identity
             );
-            let qr_asset = format!("assets/answer-qr-{index}.svg");
+            let qr_asset = format!("assets/practice-qr-{index}.svg");
             fs::write(render_directory.join(&qr_asset), qr_svg(&qr_payload)?)
-                .map_err(|error| format!("写入答题卡二维码失败：{error}"))?;
-            Ok(AnswerPage {
+                .map_err(|error| format!("写入练习页二维码失败：{error}"))?;
+            Ok(PracticePage {
                 local_index: index,
                 page_identity,
                 qr_payload,
@@ -547,35 +564,23 @@ fn build_answer_pages(
         .collect()
 }
 
-fn answer_page_typst(page: &AnswerPage, document: &CompletePracticeDocument) -> String {
+fn practice_page_typst(
+    page: &PracticePage,
+    document: &CompletePracticeDocument,
+    render_directory: &Path,
+    assets: &mut HashMap<String, String>,
+) -> Result<String, String> {
     let mut questions = String::new();
     for question in &page.questions {
-        let region_id = format!(
-            "{}:answer:{}:0",
-            page.page_identity, question.practice_item_id
-        );
-        questions.push_str(&format!(
-            "#block(width: 100%, below: 12pt)[\n\
-               #text(size: 11pt, weight: \"bold\")[第 {} 题]\n\
-               #v(6pt)\n\
-               #pad(x: 4pt)[\n\
-                 #context [#metadata((kind: \"answer-region\", id: {}, practice_item_id: {}, region_index: 0, page_identity: {}, page: counter(page).get().first(), pos: here().position(), width: {}, height: {})) <axiom-meta>]\n\
-                 #rect(width: 100%, height: {}pt, stroke: .65pt + rgb(\"#aaa79e\"), radius: 2pt)[\n\
-                   #pad(x: 10pt, y: 8pt)[#for _ in range({}) {{ line(length: 100%, stroke: .32pt + rgb(\"#dedbd2\")); v(12pt) }}]\n\
-                 ]\n\
-               ]\n\
-             ]\n",
-            question.display_number,
-            typst_string(&region_id),
-            typst_string(&question.practice_item_id),
-            typst_string(&page.page_identity),
-            CONTENT_WIDTH_POINTS - 8.0,
-            question.height,
-            question.height,
-            question.line_count,
-        ));
+        questions.push_str(&question_typst(
+            question,
+            SectionKind::Exercise,
+            render_directory,
+            assets,
+            Some(&page.page_identity),
+        )?);
     }
-    format!(
+    Ok(format!(
         "#block(width: {}pt, height: 839pt)[\n\
            #place(top + left, dx: 24pt, dy: 24pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 560.28pt, dy: 24pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
@@ -583,22 +588,21 @@ fn answer_page_typst(page: &AnswerPage, document: &CompletePracticeDocument) -> 
            #place(top + left, dx: 560.28pt, dy: 806.89pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 493pt, dy: 30pt)[#image({}, width: 58pt, height: 58pt)]\n\
            #place(top + left, dx: 42pt, dy: 42pt)[#box(width: {}pt)[\n\
-             #text(size: 16pt, weight: \"bold\")[Axiom 答题卡]\n\
+             #text(size: 16pt, weight: \"bold\")[Axiom {}练习]\n\
              #v(4pt)\n\
-             #text(size: 9pt, fill: rgb(\"#77746c\"))[{} · {} 题]\n\
+             #text(size: 9pt, fill: rgb(\"#77746c\"))[姓名：________________　日期：______________]\n\
              #v(16pt)\n\
              {}\n\
            ]]\n\
-           #place(top + left, dx: 42pt, dy: 818pt)[#text(size: 7pt, fill: rgb(\"#77746c\"))[答题卡 {}]]\n\
+           #place(top + left, dx: 42pt, dy: 818pt)[#text(size: 7pt, fill: rgb(\"#77746c\"))[练习页 {}]]\n\
          ]\n",
         A4_WIDTH_POINTS,
         typst_string(&page.qr_asset),
         CONTENT_WIDTH_POINTS,
         document.metadata.subject,
-        document.metadata.item_count,
         questions,
         page.local_index + 1,
-    )
+    ))
 }
 
 fn build_source(
@@ -606,29 +610,28 @@ fn build_source(
     render_directory: &Path,
 ) -> Result<BuildOutput, String> {
     if document.document_type != "complete"
-        || document.layout.version != "practice-a4-v1"
+        || document.layout.version != "practice-a4-v2"
         || (document.layout.width_points - A4_WIDTH_POINTS).abs() > 0.5
         || (document.layout.height_points - A4_HEIGHT_POINTS).abs() > 0.5
         || (document.layout.margin_points - PAGE_MARGIN_POINTS).abs() > 0.5
     {
         return Err("不支持的完整练习文档 layout".to_string());
     }
-    if document.sections.len() != 3
+    if document.sections.len() != 2
         || document.sections[0].kind != SectionKind::Exercise
-        || document.sections[1].kind != SectionKind::AnswerSheet
-        || document.sections[2].kind != SectionKind::Solution
+        || document.sections[1].kind != SectionKind::Solution
     {
-        return Err("完整练习文档必须按练习、答题卡、解析组织".to_string());
+        return Err("完整练习文档必须按练习、解析组织".to_string());
     }
     fs::create_dir_all(render_directory.join("assets"))
         .map_err(|error| format!("创建 Typst 资源目录失败：{error}"))?;
-    let answer_pages = build_answer_pages(document, &document.sections[1], render_directory)?;
+    let practice_pages = build_practice_pages(document, &document.sections[0], render_directory)?;
     let mut assets = HashMap::new();
     let mut source = format!(
         "#set document(title: {}, author: \"Axiom\")\n\
          #set page(paper: \"a4\", margin: (x: 42pt, top: 42pt, bottom: 42pt))\n\
-         #set text(font: (\"Source Han Serif\", \"Songti SC\", \"Libertinus Serif\"), size: 10.5pt, fill: rgb(\"#25231c\"), lang: \"zh\")\n\
-         #show math.equation: set text(font: (\"New Computer Modern Math\", \"Source Han Serif\", \"Songti SC\"))\n\
+         #set text(font: (\"Libertinus Serif\", \"Source Han Serif\", \"Songti SC\"), size: 10.5pt, fill: rgb(\"#25231c\"), lang: \"zh\")\n\
+         #show math.equation: set text(font: (\"New Computer Modern Math\", \"Libertinus Serif\", \"Source Han Serif\"))\n\
          #set par(justify: true, leading: .72em)\n\
          #let horizontal-rule() = line(length: 100%, stroke: .55pt + rgb(\"#a9a69d\"))\n",
         typst_string(&document.title)
@@ -647,7 +650,7 @@ fn build_source(
         source.push_str("#pagebreak()\n");
 
         match section.kind {
-            SectionKind::Exercise | SectionKind::Solution => {
+            SectionKind::Solution => {
                 source.push_str(
                     "#set page(paper: \"a4\", margin: (x: 42pt, top: 42pt, bottom: 42pt), footer: context [#align(center)[#text(size: 7pt, fill: rgb(\"#77746c\"))[第 #counter(page).display() 页 / 共 #counter(page).final().first() 页]]])\n",
                 );
@@ -665,18 +668,24 @@ fn build_source(
                         section.kind,
                         render_directory,
                         &mut assets,
+                        None,
                     )?);
                 }
             }
-            SectionKind::AnswerSheet => {
+            SectionKind::Exercise => {
                 source.push_str(
                     "#set page(paper: \"a4\", margin: 0pt, header: none, footer: none)\n",
                 );
-                for (index, page) in answer_pages.iter().enumerate() {
+                for (index, page) in practice_pages.iter().enumerate() {
                     if index > 0 {
                         source.push_str("#pagebreak()\n");
                     }
-                    source.push_str(&answer_page_typst(page, document));
+                    source.push_str(&practice_page_typst(
+                        page,
+                        document,
+                        render_directory,
+                        &mut assets,
+                    )?);
                 }
             }
         }
@@ -686,7 +695,7 @@ fn build_source(
     );
     Ok(BuildOutput {
         source,
-        answer_pages,
+        practice_pages,
     })
 }
 
@@ -766,7 +775,7 @@ fn parse_points(value: &Value) -> Result<f32, String> {
 
 fn rendered_metadata(
     metadata_json: &str,
-    answer_pages: &[AnswerPage],
+    practice_pages: &[PracticePage],
 ) -> Result<RenderedMetadata, String> {
     let values: Vec<Value> = serde_json::from_str(metadata_json)
         .map_err(|error| format!("解析 Typst metadata 失败：{error}"))?;
@@ -852,9 +861,6 @@ fn rendered_metadata(
     let exercise_start = *section_starts
         .get("exercise")
         .ok_or_else(|| "缺少练习章节页码".to_string())?;
-    let answer_start = *section_starts
-        .get("answerSheet")
-        .ok_or_else(|| "缺少答题卡章节页码".to_string())?;
     let solution_start = *section_starts
         .get("solution")
         .ok_or_else(|| "缺少解析章节页码".to_string())?;
@@ -863,13 +869,6 @@ fn rendered_metadata(
             "exercise".to_string(),
             SectionPageRange {
                 start_page: exercise_start,
-                end_page: answer_start - 1,
-            },
-        ),
-        (
-            "answerSheet".to_string(),
-            SectionPageRange {
-                start_page: answer_start,
                 end_page: solution_start - 1,
             },
         ),
@@ -881,12 +880,12 @@ fn rendered_metadata(
             },
         ),
     ]);
-    let pages = answer_pages
+    let pages = practice_pages
         .iter()
         .map(|page| {
             let (global_page, regions) =
                 regions_by_page.remove(&page.page_identity).ok_or_else(|| {
-                    format!("答题卡页面 {} 缺少真实区域 metadata", page.local_index + 1)
+                    format!("练习页面 {} 缺少真实区域 metadata", page.local_index + 1)
                 })?;
             Ok(RenderedDocumentPage {
                 page_index: global_page - 1,
@@ -986,7 +985,7 @@ fn render_to_path(
             ],
             &render_directory,
         )?;
-        let metadata = rendered_metadata(&metadata_json, &build.answer_pages)?;
+        let metadata = rendered_metadata(&metadata_json, &build.practice_pages)?;
         let temporary = destination.with_extension(format!("{}.tmp", Uuid::new_v4()));
         fs::write(&temporary, bytes).map_err(|error| format!("写入 PDF 临时文件失败：{error}"))?;
         fs::rename(&temporary, destination)
@@ -1089,7 +1088,7 @@ mod tests {
                     ContentBlock::Image {
                         path: image_path.to_string_lossy().to_string(),
                         alt: "原始图片".into(),
-                        purpose: "source".into(),
+                        purpose: "diagram".into(),
                     },
                     ContentBlock::AnswerSpace {
                         practice_item_id: "item-1".into(),
@@ -1153,19 +1152,6 @@ mod tests {
                 ],
             ));
         }
-        let answer_questions = (1..=6)
-            .map(|index| {
-                question(
-                    &format!("item-{index}"),
-                    index,
-                    vec![ContentBlock::AnswerSpace {
-                        practice_item_id: format!("item-{index}"),
-                        line_count: if index == 2 { 6 } else { 4 },
-                        minimum_height_points: if index == 2 { 124.0 } else { 88.0 },
-                    }],
-                )
-            })
-            .collect::<Vec<_>>();
         let mut solution_questions = vec![
             question(
                 "item-1",
@@ -1209,7 +1195,7 @@ mod tests {
                 strategy: "fixture".into(),
             },
             layout: DocumentLayout {
-                version: "practice-a4-v1".into(),
+                version: "practice-a4-v2".into(),
                 width_points: A4_WIDTH_POINTS,
                 height_points: A4_HEIGHT_POINTS,
                 margin_points: PAGE_MARGIN_POINTS,
@@ -1226,20 +1212,6 @@ mod tests {
                             },
                         ],
                         exercise_questions,
-                    ]
-                    .concat(),
-                },
-                PracticeSection {
-                    kind: SectionKind::AnswerSheet,
-                    title: "答题卡".into(),
-                    blocks: [
-                        vec![
-                            cover(SectionKind::AnswerSheet, "答题卡"),
-                            ContentBlock::PageBreak {
-                                reason: "cover_to_body".into(),
-                            },
-                        ],
-                        answer_questions,
                     ]
                     .concat(),
                 },
@@ -1289,25 +1261,25 @@ mod tests {
             .save(&image_path)
             .expect("write fixture image");
         let svg_path = directory.join("diagram.svg");
-        fs::write(&svg_path, r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><path d="M0 3L2 0L4 3Z" fill="none" stroke="#25231c"/></svg>"##).expect("write fixture svg");
+        fs::write(&svg_path, r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><path d="M0 3L2 0L4 3Z" fill="none" stroke="#25231c" stroke-width="0.045"/></svg>"##).expect("write fixture svg");
         let document = fixture(&image_path, &svg_path);
         let destination = directory.join("practice.pdf");
         let output =
             render_to_path(&document, &destination).expect("render Typst practice document");
         assert!(output.typst_version.starts_with("typst 0.14.2"));
-        assert!(output.metadata.page_count >= 6);
+        assert!(output.metadata.page_count >= 4);
         assert_eq!(
             output.metadata.section_page_ranges["exercise"].start_page,
             1
         );
         assert!(
             output.metadata.section_page_ranges["exercise"].end_page
-                < output.metadata.section_page_ranges["answerSheet"].start_page
-        );
-        assert!(
-            output.metadata.section_page_ranges["answerSheet"].end_page
                 < output.metadata.section_page_ranges["solution"].start_page
         );
+        assert!(!output
+            .metadata
+            .section_page_ranges
+            .contains_key("answerSheet"));
         assert_eq!(
             output
                 .metadata

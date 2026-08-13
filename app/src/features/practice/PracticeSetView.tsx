@@ -21,11 +21,10 @@ import { getPracticeSet } from '../../platform/practiceDatabase'
 import { practiceErrorMessage } from './productLanguage'
 import './PracticeSetView.css'
 
-type PracticePdfSection = 'exercise' | 'answerSheet' | 'solution'
+type PracticePdfSection = 'exercise' | 'solution'
 
 const documentTabs: Array<{ value: PracticePdfSection; label: string }> = [
   { value: 'exercise', label: '练习' },
-  { value: 'answerSheet', label: '答题卡' },
   { value: 'solution', label: '解析' },
 ]
 
@@ -161,10 +160,9 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     const record = document ?? await ensureDocument()
     await printExportedPracticePdf(record)
     const exercise = record.sectionPageRanges.exercise
-    const answerSheet = record.sectionPageRanges.answerSheet
     setFeedback({
       tone: 'success',
-      message: `已在系统预览中打开。默认打印练习与答题卡时，请选择第 ${exercise.startPage}–${answerSheet.endPage} 页；也可在系统打印框选择其他页码。`,
+      message: `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
     })
   }
   const submitAnswer = async () => {

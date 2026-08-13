@@ -1,11 +1,11 @@
 import type { PracticeItem, PracticeSet } from './practice'
 import { normalizeMathMarkdown } from './mathMarkdown'
 
-export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v1'
+export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v2'
 export const A4_POINTS = { width: 595.28, height: 841.89 } as const
 
 export type PracticeDocumentType = 'questions' | 'answer_sheet' | 'solutions'
-export type PracticeSectionKind = 'exercise' | 'answer_sheet' | 'solution'
+export type PracticeSectionKind = 'exercise' | 'solution'
 
 export type PracticeInlineContent =
   | { kind: 'text'; text: string }
@@ -226,18 +226,15 @@ export function parsePracticeMarkdown(markdown: string): PracticeContentBlock[] 
 }
 
 function printableImages(item: PracticeItem): PracticeContentBlock[] {
-  const diagrams = item.diagramImagePaths.map((path, index): PracticeContentBlock =>
+  return item.diagramImagePaths.map((path, index): PracticeContentBlock =>
     path.toLowerCase().endsWith('.svg')
       ? { kind: 'tikzDiagram', path, diagramId: item.diagramIds[index] ?? null, alt: `第 ${item.orderIndex + 1} 题矢量图形` }
       : { kind: 'image', path, alt: `第 ${item.orderIndex + 1} 题图形`, purpose: 'diagram' })
-  if (diagrams.length || !item.questionImagePath) return diagrams
-  return [{ kind: 'image', path: item.questionImagePath, alt: `第 ${item.orderIndex + 1} 题原图`, purpose: 'source' }]
 }
 
 function sectionCover(section: PracticeSectionKind, practiceSet: PracticeSet, createdAt: number): PracticeContentBlock {
-  const title = section === 'exercise' ? `${practiceSet.subject}练习` : section === 'answer_sheet' ? '答题卡' : '答案与解析'
-  const subtitle = section === 'exercise' ? `${practiceSet.items.length} 题` : section === 'answer_sheet'
-    ? '完成练习后，在对应区域作答并提交至 Axiom。' : `完成练习后再查看。\n${practiceSet.subject} · ${practiceSet.items.length} 题`
+  const title = section === 'exercise' ? `${practiceSet.subject}练习` : '答案与解析'
+  const subtitle = section === 'exercise' ? `${practiceSet.items.length} 题` : `完成练习后再查看。\n${practiceSet.subject} · ${practiceSet.items.length} 题`
   return {
     kind: 'sectionCover', section, brand: 'Axiom', title, subtitle,
     dateLabel: new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(createdAt),
@@ -246,9 +243,7 @@ function sectionCover(section: PracticeSectionKind, practiceSet: PracticeSet, cr
 }
 
 function questionBlock(item: PracticeItem, section: PracticeSectionKind): PracticeContentBlock {
-  const content = section === 'answer_sheet'
-    ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }]
-    : [
+  const content = [
       ...parsePracticeMarkdown(item.statementMarkdown),
       ...(item.options?.length ? [{ kind: 'list' as const, ordered: false, items: item.options.map((option, index) => parsePracticeInlineContent(`${String.fromCharCode(65 + index)}. ${option}`)) }] : []),
       ...printableImages(item),
@@ -280,7 +275,7 @@ export function buildCompletePracticeDocument(practiceSet: PracticeSet, input: {
     title: `Axiom ${practiceSet.subject}练习`,
     metadata: { subject: practiceSet.subject, createdAt, itemCount: practiceSet.items.length, strategy: practiceSet.strategy },
     layout: { version: PRACTICE_LAYOUT_VERSION, pageSize: 'A4', widthPoints: A4_POINTS.width, heightPoints: A4_POINTS.height, marginPoints: margin },
-    sections: [section('exercise', '练习'), section('answer_sheet', '答题卡'), section('solution', '答案与解析')],
+    sections: [section('exercise', '练习'), section('solution', '答案与解析')],
   }
 }
 

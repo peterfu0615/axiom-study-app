@@ -73,7 +73,7 @@ describe('PracticeDocument', () => {
     expect(content.filter((item) => item.kind === 'text').map((item) => item.text).join('')).not.toContain('$')
   })
 
-  it('adapts one practice set into three structured sections with forced cover breaks', () => {
+  it('adapts one practice set into practice and solution sections with forced cover breaks', () => {
     const practiceSet = set(6)
     practiceSet.items[0].questionImagePath = '/tmp/source-question.png'
     practiceSet.items[1].diagramImagePaths = ['/tmp/diagram.svg']
@@ -81,15 +81,15 @@ describe('PracticeDocument', () => {
     const document = buildCompletePracticeDocument(practiceSet, { attemptId: 'attempt-complete', generatedAt: 1_786_464_000_000 })
 
     expect(document.documentType).toBe('complete')
-    expect(document.sections.map((section) => section.kind)).toEqual(['exercise', 'answer_sheet', 'solution'])
+    expect(document.sections.map((section) => section.kind)).toEqual(['exercise', 'solution'])
     document.sections.forEach((section) => {
       expect(section.blocks[0]).toMatchObject({ kind: 'sectionCover', section: section.kind })
       expect(section.blocks[1]).toEqual({ kind: 'pageBreak', reason: 'cover_to_body' })
       expect(section.blocks.filter((block) => block.kind === 'question')).toHaveLength(6)
     })
-    expect(JSON.stringify(document.sections[0])).toContain('/tmp/source-question.png')
+    expect(JSON.stringify(document.sections[0])).not.toContain('/tmp/source-question.png')
     expect(JSON.stringify(document.sections[0])).toContain('"kind":"tikzDiagram"')
-    expect(document.sections[1].blocks.flatMap((block) => block.kind === 'question' ? block.content : [])
+    expect(document.sections[0].blocks.flatMap((block) => block.kind === 'question' ? block.content : [])
       .filter((block) => block.kind === 'answerSpace').map((block) => block.practiceItemId))
       .toEqual(practiceSet.items.map((practiceItem) => practiceItem.id))
   })

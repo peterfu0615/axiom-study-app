@@ -13,13 +13,11 @@ describe('practice PDF identity', () => {
     } as unknown as PracticeSet
     const document = buildCompletePracticeDocument(set, { attemptId: 'attempt-pdf', generatedAt: 1 })
     const answerQuestion = document.sections
-      .find((section) => section.kind === 'answer_sheet')
+      .find((section) => section.kind === 'exercise')
       ?.blocks.find((block) => block.kind === 'question')
     expect(document.id).toContain('set-pdf:attempt-pdf:complete')
-    expect(answerQuestion).toMatchObject({
-      kind: 'question',
-      practiceItemId: 'item-pdf',
-      content: [{ kind: 'answerSpace', practiceItemId: 'item-pdf' }],
-    })
+    expect(answerQuestion).toMatchObject({ kind: 'question', practiceItemId: 'item-pdf' })
+    expect(answerQuestion?.kind === 'question' && answerQuestion.content
+      .some((block) => block.kind === 'answerSpace' && block.practiceItemId === 'item-pdf')).toBe(true)
   })
 })

@@ -218,7 +218,6 @@ export interface RenderedPracticeDocumentPage {
 export interface CompletePdfRenderResult extends PdfRenderResult {
   sectionPageRanges: {
     exercise: PracticeSectionPageRange
-    answerSheet: PracticeSectionPageRange
     solution: PracticeSectionPageRange
   }
   pages: RenderedPracticeDocumentPage[]
