@@ -255,6 +255,36 @@ mod tests {
     }
 
     #[test]
+    fn grading_revisions_are_append_only_and_latest_effective() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("grading-revisions");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(46))
+                .await
+                .expect("批改修正迁移必须成功");
+            conn.execute("INSERT INTO source_documents(id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-revision', '/tmp/revision.png', 'revision-hash', 'import', 'captured', 1, 1)").await.expect("source");
+            conn.execute("INSERT INTO problems(id, source_document_id, subject, stem_markdown, status, created_at, updated_at) VALUES ('problem-revision', 'doc-revision', '数学', '求 x', 'saved', 1, 1)").await.expect("problem");
+            conn.execute("INSERT INTO skill_bundles(id, subject, canonical_key, primary_knowledge_tag_id, difficulty_context, created_at) VALUES ('bundle-revision', '数学', 'revision-key', 'legacy:problem-revision', 'basic', 1)").await.expect("bundle");
+            conn.execute("INSERT INTO practice_sets(id, subject, source_type, source_ref, strategy, status, target_skills_json, generation_metadata_json, created_at, updated_at) VALUES ('set-revision', '数学', 'review_unit', 'module-revision', 'deterministic-v1', 'ready', '[]', '{}', 1, 1)").await.expect("set");
+            conn.execute("INSERT INTO practice_items(id, practice_set_id, order_index, source_type, source_problem_id, subject, target_skill_bundle_id, difficulty, statement_markdown, canonical_answer, solution_json, grading_rubric_json, validation_status, created_at) VALUES ('item-revision', 'set-revision', 0, 'existing_problem', 'problem-revision', '数学', 'bundle-revision', 'basic', '求 x', 'x=2', '{\"contentMarkdown\":\"解\"}', '{\"criteria\":[\"答案正确\"]}', 'valid', 1)").await.expect("item");
+            conn.execute("INSERT INTO practice_attempts(id, practice_set_id, status, started_at, created_at, updated_at) VALUES ('attempt-revision', 'set-revision', 'completed', 1, 1, 1)").await.expect("attempt");
+            conn.execute("INSERT INTO practice_responses(id, practice_attempt_id, practice_item_id, answer_asset_path, extracted_answer_json, grading_result_json, status, created_at, updated_at) VALUES ('response-revision', 'attempt-revision', 'item-revision', '/tmp/answer.png', '{\"rawMarkdown\":\"x=1\"}', '{\"correctness\":\"incorrect\",\"score\":0}', 'graded', 1, 1)").await.expect("response");
+            conn.execute("INSERT INTO practice_grading_revisions(id, practice_attempt_id, practice_response_id, revision_index, revision_type, previous_grading_json, new_grading_json, corrected_answer_json, operation_key, created_at) VALUES ('revision-1', 'attempt-revision', 'response-revision', 1, 'manual_override', '{\"correctness\":\"incorrect\"}', '{\"correctness\":\"correct\",\"score\":100}', '{\"rawMarkdown\":\"x=2\"}', 'manual:correct', 2)").await.expect("revision");
+            let effective: (String, String) = sqlx::query_as("SELECT effective_answer_json, effective_grading_json FROM practice_effective_responses WHERE response_id='response-revision'").fetch_one(&mut conn).await.expect("effective view");
+            assert!(effective.0.contains("x=2"));
+            assert!(effective.1.contains("correct"));
+            assert!(conn.execute("UPDATE practice_grading_revisions SET operation_key='changed' WHERE id='revision-1'").await.is_err());
+            assert!(conn
+                .execute("DELETE FROM practice_grading_revisions WHERE id='revision-1'")
+                .await
+                .is_err());
+            conn.execute("INSERT INTO practice_grading_revisions(id, practice_attempt_id, practice_response_id, revision_index, revision_type, previous_grading_json, new_grading_json, corrected_answer_json, operation_key, created_at) VALUES ('revision-2', 'attempt-revision', 'response-revision', 2, 'manual_override', '{\"correctness\":\"correct\"}', '{\"correctness\":\"incorrect\",\"score\":0}', NULL, 'manual:incorrect', 3)").await.expect("second revision");
+            let latest: String = sqlx::query_scalar("SELECT effective_grading_json FROM practice_effective_responses WHERE response_id='response-revision'").fetch_one(&mut conn).await.expect("latest effective grading");
+            assert!(latest.contains("incorrect"));
+        });
+    }
+
+    #[test]
     fn stable_subject_identity_backfills_legacy_horizon_relations() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("subject-id");

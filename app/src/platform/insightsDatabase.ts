@@ -54,12 +54,18 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
   const [rows, skillRows, changeRows] = await Promise.all([
     select<RecordRow[]>(`
       SELECT module.id AS module_id, session.session_date, module.status,
-        module.completed_at, instance.source_problem_id, attempt.rating,
+        module.completed_at, instance.source_problem_id,
+        CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
+          THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
+            WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END
+          ELSE attempt.rating END AS rating,
         instance.target_tags_json
       FROM review_modules module
       JOIN review_sessions session ON session.id = module.session_id
       JOIN question_instances instance ON instance.review_module_id = module.id
       LEFT JOIN review_attempts attempt ON attempt.question_instance_id = instance.id
+      LEFT JOIN practice_evidences practice_evidence ON practice_evidence.review_attempt_id=attempt.id
+      LEFT JOIN practice_effective_responses effective ON effective.response_id=practice_evidence.practice_response_id
       WHERE session.session_date BETWEEN $1 AND $2
       ORDER BY session.session_date, module.order_index, module.id
     `, [fromDate, toDate]),

@@ -192,7 +192,7 @@ function solutionDetails(item: PracticeItem) {
 export function answerPolicy(item: PracticeItem) {
   const answerUnits = estimateVisibleWritingUnits(item.canonicalAnswer)
   const solution = solutionDetails(item)
-  const proofLike = /证明|求证|证明题|prove/iu.test(`${item.statementMarkdown}\n${item.gradingRubric.criteria.join(' ')}`)
+  const proofLike = /证明|求证|证明题|prove/iu.test(`${item.statementMarkdown}\n${item.gradingRubric?.criteria?.join(' ') ?? ''}`)
   const rawHeight = 58 + answerUnits * .75 + Math.min(solution.units, 360) * .20
     + Math.min(Math.max(solution.stepCount - 1, 0), 7) * 12 + (proofLike ? 24 : 0)
   const height = Math.round(Math.min(220, Math.max(76, item.options?.length ? Math.min(88, rawHeight) : rawHeight)) * 100) / 100
