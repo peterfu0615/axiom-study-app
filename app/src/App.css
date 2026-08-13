@@ -67,7 +67,7 @@
   color: var(--muted);
   background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ax-type-body-size);
   font-weight: 570;
   text-align: left;
   cursor: pointer;
