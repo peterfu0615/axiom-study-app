@@ -388,6 +388,7 @@ pub fn run() {
             practice_preview::render_practice_pdf_page,
             practice_typst::render_complete_practice_pdf,
             practice_pdf::open_practice_pdf,
+            practice_pdf::practice_pdf_exists,
             practice_pdf::save_practice_pdf,
             practice_pdf::print_practice_pdf,
             practice_capture::process_practice_scan,

@@ -74,9 +74,18 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
       ORDER BY state.subject, definition.tag_type, definition.canonical_name
     `),
     select<ChangeRow[]>(`
-      SELECT id AS log_id, reviewed_at, previous_state_json, new_state_json
-      FROM horizon_review_logs WHERE reviewed_at >= $1
-      ORDER BY reviewed_at, id
+      SELECT log.id AS log_id, log.reviewed_at, log.previous_state_json,
+        CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
+          THEN json_set(log.new_state_json, '$.effectiveRating',
+            CASE json_extract(effective.effective_grading_json, '$.correctness')
+              WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END)
+          ELSE log.new_state_json END AS new_state_json
+      FROM horizon_review_logs log
+      JOIN review_attempts attempt ON attempt.id=log.review_attempt_id
+      LEFT JOIN practice_evidences practice_evidence ON practice_evidence.review_attempt_id=attempt.id
+      LEFT JOIN practice_effective_responses effective ON effective.response_id=practice_evidence.practice_response_id
+      WHERE log.reviewed_at >= $1
+      ORDER BY log.reviewed_at, log.id
     `, [fromStart]),
   ])
 

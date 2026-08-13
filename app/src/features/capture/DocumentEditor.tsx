@@ -26,6 +26,7 @@ import {
 } from '../../platform/database'
 import { runProblemAIWorker } from '../../ai/pipeline'
 import { processDocument } from '../../platform/native'
+import { SegmentedControl } from '../../components/ui'
 
 type EnhancementMode = 'color' | 'grayscale'
 type PreviewMode = 'corrected' | 'original'
@@ -489,41 +490,8 @@ export function DocumentEditor({
       <section className="editor-layout">
         <div className="document-panel">
           <div className="document-toolbar">
-            <div className="segmented-control">
-              <button
-                className={previewMode === 'corrected' ? 'active' : ''}
-                disabled={!correctedPath}
-                onClick={() => setPreviewMode('corrected')}
-                type="button"
-              >
-                优化后
-              </button>
-              <button
-                className={previewMode === 'original' ? 'active' : ''}
-                onClick={() => setPreviewMode('original')}
-                type="button"
-              >
-                原图
-              </button>
-            </div>
-            <div className="segmented-control">
-              <button
-                className={mode === 'color' ? 'active' : ''}
-                disabled={processing || saving}
-                onClick={() => void runProcessing('color')}
-                type="button"
-              >
-                保留色彩
-              </button>
-              <button
-                className={mode === 'grayscale' ? 'active' : ''}
-                disabled={processing || saving}
-                onClick={() => void runProcessing('grayscale')}
-                type="button"
-              >
-                文档灰度
-              </button>
-            </div>
+            <SegmentedControl ariaLabel="页面预览" onChange={setPreviewMode} options={[{ value: 'corrected', label: '优化后', disabled: !correctedPath }, { value: 'original', label: '原图' }]} value={previewMode} />
+            <SegmentedControl ariaLabel="处理方式" onChange={(next) => void runProcessing(next)} options={[{ value: 'color', label: '保留色彩', disabled: processing || saving }, { value: 'grayscale', label: '文档灰度', disabled: processing || saving }]} value={mode} />
             <span className="processing-summary">
               {processing
                 ? '正在本机处理…'

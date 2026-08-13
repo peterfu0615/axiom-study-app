@@ -3,6 +3,7 @@ import type { PracticeSet } from '../domain/practice'
 import { buildCompletePracticeDocument, type CompletePracticeDocument } from '../domain/practiceDocument'
 import {
   openPracticePdf,
+  practicePdfExists,
   printPracticePdf,
   renderCompletePracticePdf,
   savePracticePdf,
@@ -96,7 +97,7 @@ async function readReadyDocument(practiceSet: PracticeSet): Promise<PracticeDocu
       }
       grouped.set(Number(row.page_index), page)
     }
-    if (!grouped.size || !candidate.file_path) continue
+    if (!grouped.size || !candidate.file_path || !(await practicePdfExists(candidate.file_path))) continue
     return {
       documentId: candidate.id, filePath: candidate.file_path, contentHash: candidate.content_hash,
       rendererVersion: metadata.rendererVersion ?? RENDERER_CONTRACT, pageCount: Number(candidate.page_count),

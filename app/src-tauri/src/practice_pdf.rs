@@ -555,6 +555,11 @@ pub fn open_practice_pdf(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn practice_pdf_exists(path: String) -> Result<bool, String> {
+    Ok(Path::new(&path).is_file())
+}
+
 fn managed_practice_pdf(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     let export_root = app
         .path()

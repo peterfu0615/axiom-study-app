@@ -9,7 +9,7 @@
 //!   1. 全新库一路跑到 46，且与 sqlx Migrator 校验兼容（幂等重跑）；
 //!   2. 27 状态的库可以升级到 46；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 45；
+//!      校验并推进到 46；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -82,7 +82,7 @@ mod tests {
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_45_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_46_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;

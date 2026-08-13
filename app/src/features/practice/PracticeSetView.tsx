@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
@@ -105,17 +105,18 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(initialAttempt ?? null)
   const [loop, setLoop] = useState<PracticeLoop | null>(null)
+  const [attemptLoaded, setAttemptLoaded] = useState(Boolean(initialAttempt))
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
 
   useEffect(() => {
     let cancelled = false
     setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setExporting(false); setFeedback(null)
-    setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready')
+    setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt))
     if (!initialAttempt) {
       void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
         if (!cancelled) {
-          setAttempt(latest)
+          setAttempt(latest); setAttemptLoaded(true)
           if (latest?.responses.some((response) => response.gradingResult)) setMode('results')
         }
       }).catch(() => null)
@@ -137,7 +138,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     return () => { cancelled = true }
   }, [currentPage, document])
 
-  const ensureDocument = async () => {
+  const ensureDocument = useCallback(async () => {
     if (document) return document
     setExporting(true); setFeedback(null)
     try {
@@ -145,11 +146,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       setDocument(record)
       return record
     } finally { setExporting(false) }
-  }
+  }, [document, practiceSet])
   useEffect(() => {
-    if (mode === 'results' || document || exporting) return
+    if (!attemptLoaded || mode === 'results' || document || exporting) return
     void ensureDocument().catch((reason) => setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }))
-  }, [mode, document, exporting, practiceSet])
+  }, [attemptLoaded, mode, document, exporting, ensureDocument])
   const chooseSection = (section: PracticePdfSection) => {
     setSelectedSection(section)
     if (document) setCurrentPage(document.sectionPageRanges[section].startPage)

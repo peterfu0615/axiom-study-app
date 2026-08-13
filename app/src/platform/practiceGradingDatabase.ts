@@ -107,6 +107,11 @@ async function persistCorrection(input: {
       if (!row) throw new Error('找不到需要修正的作答')
       const currentAnswer = row.effective_answer_json ? JSON.parse(row.effective_answer_json) as StructuredStudentAnswer : null
       const currentGrading = row.effective_grading_json ? JSON.parse(row.effective_grading_json) as PracticeGradingResult : null
+      if (currentGrading && JSON.stringify(currentGrading) === JSON.stringify(input.grading)
+        && (!input.answer || JSON.stringify(currentAnswer) === JSON.stringify(input.answer))) {
+        await execute('COMMIT')
+        return { answer: currentAnswer, grading: currentGrading }
+      }
       if (!row.has_evidence) {
         await execute(`UPDATE practice_responses SET corrected_answer_json=$1, grading_result_json=$2,
           status=$3, updated_at=$4 WHERE id=$5`, [
@@ -116,9 +121,10 @@ async function persistCorrection(input: {
         await execute('COMMIT')
         return { answer: input.answer ?? currentAnswer, grading: input.grading }
       }
+      const operation = `${input.operationKey}:from:${row.latest_revision_index ?? 0}`
       const duplicate = (await select<Array<{ revision_index: number; new_grading_json: string; corrected_answer_json: string | null }>>(`
         SELECT revision_index, new_grading_json, corrected_answer_json FROM practice_grading_revisions
-        WHERE practice_response_id=$1 AND operation_key=$2 LIMIT 1`, [input.responseId, input.operationKey]))[0]
+        WHERE practice_response_id=$1 AND operation_key=$2 LIMIT 1`, [input.responseId, operation]))[0]
       if (duplicate) {
         await execute('COMMIT')
         return {
@@ -133,8 +139,8 @@ async function persistCorrection(input: {
         previous_grading_json, new_grading_json, corrected_answer_json, operation_key, created_at
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [
         crypto.randomUUID(), row.practice_attempt_id, input.responseId, revisionIndex, input.type,
-        JSON.stringify(currentGrading ?? {}), JSON.stringify(input.grading), input.answer ? JSON.stringify(input.answer) : null,
-        input.operationKey, now,
+          JSON.stringify(currentGrading ?? {}), JSON.stringify(input.grading), JSON.stringify(input.answer ?? currentAnswer),
+        operation, now,
       ])
       await rebuildLearningStateInTransaction()
       await reconcilePracticeLoop(input.responseId, input.grading, now)

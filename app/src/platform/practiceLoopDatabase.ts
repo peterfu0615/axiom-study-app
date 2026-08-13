@@ -39,7 +39,7 @@ function loopFromRow(row: LoopRow): PracticeLoop {
 
 const loopSelect = `SELECT loop.*,
   (SELECT round.practice_set_id FROM practice_loop_rounds round
-    WHERE round.practice_loop_id=loop.id AND round.status='active'
+    WHERE round.practice_loop_id=loop.id AND round.status='active' AND round.superseded_at IS NULL
     ORDER BY round.round_index DESC LIMIT 1) AS next_practice_set_id
   FROM practice_loops loop`
 

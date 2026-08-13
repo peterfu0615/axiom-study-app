@@ -14,6 +14,7 @@ import {
   replaceProblemRegions,
 } from '../../platform/database'
 import { mediaAssetUrl } from '../../platform/native'
+import { SegmentedControl } from '../../components/ui'
 
 type PreviewMode = 'corrected' | 'original'
 
@@ -223,23 +224,7 @@ export function ProblemCropEditor({
       <section className="editor-layout problem-crop-layout">
         <div className="document-panel">
           <div className="document-toolbar">
-            <div className="segmented-control">
-              <button
-                className={previewMode === 'corrected' ? 'active' : ''}
-                disabled={!canEdit}
-                onClick={() => setPreviewMode('corrected')}
-                type="button"
-              >
-                优化后 · 可编辑
-              </button>
-              <button
-                className={previewMode === 'original' ? 'active' : ''}
-                onClick={() => setPreviewMode('original')}
-                type="button"
-              >
-                原图参考
-              </button>
-            </div>
+            <SegmentedControl ariaLabel="图片参考" onChange={setPreviewMode} options={[{ value: 'corrected', label: '优化后 · 可编辑', disabled: !canEdit }, { value: 'original', label: '原图参考' }]} value={previewMode} />
             <span className="processing-summary">
               {previewMode === 'corrected'
                 ? '拖动区域移动，拖动四角调整范围'

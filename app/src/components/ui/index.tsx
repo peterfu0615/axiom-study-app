@@ -102,6 +102,37 @@ export interface TabOption<T extends string> {
   disabled?: boolean
 }
 
+export function SegmentedControl<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: T
+  onChange: (value: T) => void
+  options: Array<{ value: T; label: ReactNode; disabled?: boolean }>
+  ariaLabel: string
+}) {
+  return (
+    <div aria-label={ariaLabel} className="segmented-control" role="tablist">
+      {options.map((option) => (
+        <button
+          aria-selected={value === option.value}
+          className={value === option.value ? 'active' : ''}
+          disabled={option.disabled}
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          role="tab"
+          tabIndex={value === option.value ? 0 : -1}
+          type="button"
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function Tabs<T extends string>({
   value,
   onChange,

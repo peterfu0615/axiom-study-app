@@ -241,6 +241,10 @@ export function renderPracticePdfPage(path: string, pageNumber: number) {
   return invoke<PracticePdfPagePreview>('render_practice_pdf_page', { path, pageNumber })
 }
 
+export function practicePdfExists(path: string) {
+  return invoke<boolean>('practice_pdf_exists', { path })
+}
+
 export function openPracticePdf(path: string) {
   return invoke<void>('open_practice_pdf', { path })
 }

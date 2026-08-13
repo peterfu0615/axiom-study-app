@@ -145,9 +145,15 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
       FROM skill_states
     `),
     select<HistoryRow[]>(`
-      SELECT instance.source_problem_id AS problem_id, attempt.created_at AS reviewed_at, attempt.rating
+      SELECT instance.source_problem_id AS problem_id, attempt.created_at AS reviewed_at,
+        CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
+          THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
+            WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END
+          ELSE attempt.rating END AS rating
       FROM review_attempts attempt
       JOIN question_instances instance ON instance.id = attempt.question_instance_id
+      LEFT JOIN practice_evidences practice_evidence ON practice_evidence.review_attempt_id=attempt.id
+      LEFT JOIN practice_effective_responses effective ON effective.response_id=practice_evidence.practice_response_id
       WHERE instance.source_problem_id IS NOT NULL
       ORDER BY attempt.created_at DESC
     `),

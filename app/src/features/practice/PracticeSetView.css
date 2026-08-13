@@ -84,6 +84,6 @@
   .practice-header { grid-template-columns: var(--ax-control-md) minmax(0, 1fr); }
   .practice-header__actions { display: grid; grid-template-columns: 1fr 1fr; padding-left: 0; }
   .practice-header__actions .ax-button:last-child { grid-column: 1 / -1; }
-  .practice-section-nav .ax-tabs { width: 100%; }
-  .practice-section-nav .ax-tabs button { min-width: 0; flex: 1; }
+  .practice-section-nav .segmented-control { width: 100%; }
+  .practice-section-nav .segmented-control button { min-width: 0; flex: 1; }
 }
