@@ -119,6 +119,7 @@ fn decode_qr(image: &DynamicImage) -> Option<(String, u16)> {
         };
         if payload.starts_with("AXIOM|layout=practice-a4-v1|")
             || payload.starts_with("AXIOM|v=2|page=")
+            || payload.starts_with("AXIOM|v=3|page=")
         {
             return Some((payload, correction));
         }

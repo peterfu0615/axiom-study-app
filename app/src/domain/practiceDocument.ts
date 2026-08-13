@@ -1,7 +1,7 @@
 import type { PracticeItem, PracticeSet } from './practice'
 import { normalizeMathMarkdown } from './mathMarkdown'
 
-export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v2'
+export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v3'
 export const A4_POINTS = { width: 595.28, height: 841.89 } as const
 
 export type PracticeDocumentType = 'questions' | 'answer_sheet' | 'solutions'
@@ -104,9 +104,99 @@ function solutionMarkdown(item: PracticeItem) {
   } catch { return '' }
 }
 
-function answerPolicy(item: PracticeItem) {
-  const lineCount = item.difficulty === 'advanced' ? 8 : item.difficulty === 'intermediate' ? 6 : 4
-  return { lineCount, minimumHeightPoints: lineCount * 18 + 16 }
+function readBalancedGroup(value: string, openIndex: number) {
+  if (value[openIndex] !== '{') return { text: '', end: openIndex }
+  let depth = 0
+  for (let index = openIndex; index < value.length; index += 1) {
+    if (value[index] === '{') depth += 1
+    if (value[index] === '}') {
+      depth -= 1
+      if (depth === 0) return { text: value.slice(openIndex + 1, index), end: index }
+    }
+  }
+  return { text: value.slice(openIndex + 1), end: value.length - 1 }
+}
+
+const visibleSymbolCommands = new Set([
+  'angle', 'circ', 'perp', 'parallel', 'cdot', 'times', 'div', 'pm', 'leq', 'geq',
+  'neq', 'approx', 'infty', 'sin', 'cos', 'tan', 'log', 'ln', 'sum', 'prod', 'int',
+  'lim', 'therefore', 'because', 'Rightarrow', 'Leftarrow', 'Leftrightarrow',
+  'rightarrow', 'leftarrow', 'to', 'implies', 'impliedby',
+])
+
+/**
+ * Estimate the amount of visible handwriting, not the raw TeX source length.
+ * This intentionally remains a small monotone estimator rather than trying to
+ * duplicate a TeX layout engine. It is shared by document construction and
+ * the legacy normalized document adapter.
+ */
+export function estimateVisibleWritingUnits(markdown: string): number {
+  let units = 0
+  const visit = (value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index]
+      if (character === '\n' || character === '\r') { units += 10; continue }
+      if (character === '$' || character === '`' || character === '{' || character === '}') continue
+      if (character === '\\') {
+        if (value[index + 1] === '\\') { units += 10; index += 1; continue }
+        const command = value.slice(index + 1).match(/^[A-Za-z]+/u)?.[0] ?? ''
+        if (!command) { units += .45; continue }
+        index += command.length
+        let cursor = index + 1
+        while (value[cursor] === ' ') cursor += 1
+        if (command === 'frac') {
+          const numerator = readBalancedGroup(value, cursor)
+          const denominator = readBalancedGroup(value, numerator.end + 1)
+          visit(numerator.text); visit(denominator.text); units += 1.5
+          index = denominator.end
+        } else if (command === 'sqrt') {
+          if (value[cursor] === '[') {
+            const optionEnd = value.indexOf(']', cursor + 1)
+            cursor = optionEnd >= 0 ? optionEnd + 1 : cursor
+          }
+          const radicand = readBalancedGroup(value, cursor)
+          visit(radicand.text); units += 1; index = radicand.end
+        } else if (command === 'text' || command === 'textrm' || command === 'textnormal') {
+          const text = readBalancedGroup(value, cursor)
+          visit(text.text); index = text.end
+        } else if (command === 'left' || command === 'right' || command === 'mathrm' || command === 'mathbf' || command === 'mathit') {
+          const next = value[cursor]
+          if (next && !/[A-Za-z0-9\\]/u.test(next)) units += .45
+        } else {
+          units += visibleSymbolCommands.has(command) ? 1 : 1
+        }
+        continue
+      }
+      if (/[\u3400-\u9fff]/u.test(character)) units += 1
+      else if (/[A-Za-z0-9]/u.test(character)) units += .7
+      else if (/\s/u.test(character)) continue
+      else units += .45
+    }
+  }
+  visit(markdown.replace(/```[\s\S]*?```/gu, ''))
+  return Math.max(0, units)
+}
+
+function solutionDetails(item: PracticeItem) {
+  try {
+    const solution = JSON.parse(item.solutionJson) as {
+      contentMarkdown?: string
+      steps?: Array<{ content?: string; contentMarkdown?: string; content_markdown?: string }>
+    }
+    const steps = solution.steps?.map((step) => step.content ?? step.contentMarkdown ?? step.content_markdown ?? '').filter(Boolean) ?? []
+    if (steps.length) return { units: steps.reduce((sum, step) => sum + estimateVisibleWritingUnits(step), 0), stepCount: steps.length }
+    return { units: estimateVisibleWritingUnits(solution.contentMarkdown ?? ''), stepCount: 0 }
+  } catch { return { units: 0, stepCount: 0 } }
+}
+
+export function answerPolicy(item: PracticeItem) {
+  const answerUnits = estimateVisibleWritingUnits(item.canonicalAnswer)
+  const solution = solutionDetails(item)
+  const proofLike = /证明|求证|证明题|prove/iu.test(`${item.statementMarkdown}\n${item.gradingRubric.criteria.join(' ')}`)
+  const rawHeight = 58 + answerUnits * .75 + Math.min(solution.units, 360) * .20
+    + Math.min(Math.max(solution.stepCount - 1, 0), 7) * 12 + (proofLike ? 24 : 0)
+  const height = Math.round(Math.min(220, Math.max(76, item.options?.length ? Math.min(88, rawHeight) : rawHeight)) * 100) / 100
+  return { minimumHeightPoints: height, lineCount: Math.min(12, Math.max(3, Math.floor((height - 24) / 16))) }
 }
 
 const DEFINITE_LATEX_COMMAND =

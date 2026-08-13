@@ -5,6 +5,8 @@ import {
   PRACTICE_LAYOUT_VERSION,
   buildCompletePracticeDocument,
   buildPracticeDocument,
+  answerPolicy,
+  estimateVisibleWritingUnits,
   parsePracticeInlineContent,
   parsePracticeMarkdown,
 } from './practiceDocument'
@@ -24,6 +26,24 @@ const set = (count: number): PracticeSet => ({
 })
 
 describe('PracticeDocument', () => {
+  it('scales answer space by visible writing rather than TeX command length', () => {
+    const short = { ...item(0), canonicalAnswer: 'x=2', solutionJson: '{"steps":[{"contentMarkdown":"代入。"}]}' }
+    const fraction = { ...item(1), canonicalAnswer: String.raw`\frac{1}{2}`, solutionJson: '{"steps":[{"contentMarkdown":"通分并化简。"}]}' }
+    const medium = { ...item(2), canonicalAnswer: 'x=2', solutionJson: '{"steps":[{"contentMarkdown":"移项。"},{"contentMarkdown":"合并同类项。"},{"contentMarkdown":"检验。"}]}' }
+    const proof = { ...item(3, 'advanced'), statementMarkdown: '证明四边形面积关系。', canonicalAnswer: '所以结论成立。', solutionJson: '{"steps":[{"contentMarkdown":"连接辅助线。"},{"contentMarkdown":"证明两个三角形全等。"},{"contentMarkdown":"推出对应边相等。"},{"contentMarkdown":"完成证明。"}]}' }
+    expect(estimateVisibleWritingUnits(String.raw`\frac{1}{2}`)).toBeLessThan(estimateVisibleWritingUnits(String.raw`\frac{123456}{789012}`))
+    expect(answerPolicy(short).minimumHeightPoints).toBeLessThanOrEqual(answerPolicy(fraction).minimumHeightPoints)
+    expect(answerPolicy(fraction).minimumHeightPoints).toBeLessThan(answerPolicy(medium).minimumHeightPoints)
+    expect(answerPolicy(medium).minimumHeightPoints).toBeLessThanOrEqual(answerPolicy(proof).minimumHeightPoints)
+    for (const candidate of [short, fraction, medium, proof]) {
+      const policy = answerPolicy(candidate)
+      expect(policy.minimumHeightPoints).toBeGreaterThanOrEqual(76)
+      expect(policy.minimumHeightPoints).toBeLessThanOrEqual(220)
+      expect(policy.lineCount).toBeGreaterThanOrEqual(3)
+      expect(policy.lineCount).toBeLessThanOrEqual(12)
+    }
+  })
+
   it('preserves common LaTeX as structured math instead of printable text', () => {
     const blocks = parsePracticeMarkdown([
       '一次函数 $y=(3m+1)x-2$。',

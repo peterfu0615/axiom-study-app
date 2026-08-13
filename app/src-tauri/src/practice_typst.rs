@@ -550,7 +550,14 @@ fn build_practice_pages(
         .map(|(index, questions)| {
             let page_identity = format!("{}:practice-page:{index}", document.id);
             let page_token = format!("{:x}", Sha256::digest(page_identity.as_bytes()));
-            let qr_payload = format!("AXIOM|v=2|page={}", &page_token[..32]);
+            let qr_payload = match document.layout.version.as_str() {
+                "practice-a4-v1" => {
+                    format!("AXIOM|layout=practice-a4-v1|page={}", &page_token[..32])
+                }
+                "practice-a4-v2" => format!("AXIOM|v=2|page={}", &page_token[..32]),
+                "practice-a4-v3" => format!("AXIOM|v=3|page={}", &page_token[..32]),
+                _ => return Err("不支持的完整练习文档二维码版本".to_string()),
+            };
             let qr_asset = format!("assets/practice-qr-{index}.svg");
             fs::write(render_directory.join(&qr_asset), qr_svg(&qr_payload)?)
                 .map_err(|error| format!("写入练习页二维码失败：{error}"))?;
@@ -611,7 +618,10 @@ fn build_source(
     render_directory: &Path,
 ) -> Result<BuildOutput, String> {
     if document.document_type != "complete"
-        || document.layout.version != "practice-a4-v2"
+        || !matches!(
+            document.layout.version.as_str(),
+            "practice-a4-v1" | "practice-a4-v2" | "practice-a4-v3"
+        )
         || (document.layout.width_points - A4_WIDTH_POINTS).abs() > 0.5
         || (document.layout.height_points - A4_HEIGHT_POINTS).abs() > 0.5
         || (document.layout.margin_points - PAGE_MARGIN_POINTS).abs() > 0.5
