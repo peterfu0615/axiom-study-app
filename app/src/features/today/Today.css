@@ -1,13 +1,9 @@
-.today-workspace { max-width: 1120px; }
-.today-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .55fr) auto; align-items: end; gap: var(--ax-space-8); padding-bottom: var(--ax-space-7); border-bottom: 1px solid var(--ax-border-default); }
+.today-workspace { width: 100%; }
+.today-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: clamp(var(--ax-space-5), 3vw, var(--ax-space-9)); padding-bottom: var(--ax-space-7); border-bottom: 1px solid var(--ax-border-default); }
 .today-header__copy { min-width: 0; }
 .today-header__date { margin: 0 0 var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .today-header__copy h1 { margin: 0; }
 .today-header__copy .subtitle { margin-top: var(--ax-space-2); }
-.today-header__progress { display: grid; gap: var(--ax-space-3); }
-.today-header__progress strong { color: var(--ax-text-primary); font-size: var(--ax-type-item-size); line-height: var(--ax-type-item-line); }
-.today-header__progress > div { width: 100%; height: 7px; overflow: hidden; border-radius: var(--ax-radius-pill); background: var(--ax-color-inset); }
-.today-header__progress > div span { display: block; height: 100%; border-radius: inherit; background: var(--ax-accent); transition: width var(--ax-motion-standard) ease; }
 .today-header__cta { min-width: 164px; }
 .today-units { display: grid; margin-top: var(--ax-space-5); }
 .today-unit { min-width: 0; display: grid; grid-template-columns: var(--ax-control-md) minmax(0, 1fr) auto; align-items: start; gap: var(--ax-space-5); padding: var(--ax-space-7) 0; border-bottom: 1px solid var(--ax-border-subtle); }
@@ -16,7 +12,7 @@
 .today-unit__heading { min-width: 0; }
 .today-unit__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); overflow-wrap: anywhere; }
 .today-unit__meta { min-width: 0; display: flex; flex-wrap: wrap; gap: var(--ax-space-3) var(--ax-space-6); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
-.today-unit__aside { min-width: 110px; display: grid; justify-items: end; gap: var(--ax-space-4); }
+.today-unit__aside { display: grid; justify-items: end; gap: var(--ax-space-4); }
 .today-unit__statuses, .today-unit__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-2); }
 .today-unit__actions .ax-button { min-height: var(--ax-control-sm); }
 .today-unit--completed .today-unit__order { color: var(--ax-success-fg); background: var(--ax-success-bg); }
@@ -62,9 +58,7 @@
 .today-rating__copy small { font-size: var(--ax-type-caption-size); font-weight: var(--ax-type-body-weight); line-height: var(--ax-type-caption-line); }
 
 @media (max-width: 980px) {
-  .today-header { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-  .today-header__progress { min-width: 150px; }
-  .today-header__cta { grid-column: 1 / -1; width: fit-content; }
+  .today-header { align-items: center; }
   .today-unit { grid-template-columns: var(--ax-control-md) minmax(0, 1fr); }
   .today-unit__aside { grid-column: 2; width: 100%; justify-items: start; }
   .today-unit__statuses, .today-unit__actions { justify-content: flex-start; }
@@ -74,6 +68,5 @@
 
 @media (max-width: 620px) {
   .today-header { grid-template-columns: 1fr; }
-  .today-header__progress { min-width: 0; }
   .today-header__cta { width: 100%; }
 }

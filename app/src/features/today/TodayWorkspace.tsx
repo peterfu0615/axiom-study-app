@@ -73,7 +73,7 @@ function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
 }) {
   const supporting = supportTags(unit).map((tag) => tag.name)
   return <article className={`today-unit today-unit--${unit.status}`}>
-    <div className="today-unit__order" aria-hidden="true">{unit.status === 'completed' ? <Icon name="check" size={16} /> : unit.orderIndex + 1}</div>
+    <div className="today-unit__order" aria-hidden="true">{unit.status === 'completed' ? <Icon name="check" size={16} /> : String(unit.orderIndex + 1).padStart(2, '0')}</div>
     <div className="today-unit__body">
       <div className="today-unit__heading"><h2>{unit.title}</h2></div>
       <div className="today-unit__meta">
@@ -145,7 +145,6 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
 
   const actionableUnits = plan?.units.filter((unit) => unit.status !== 'deferred') ?? []
   const completed = actionableUnits.filter((unit) => unit.status === 'completed').length
-  const progress = actionableUnits.length ? completed / actionableUnits.length * 100 : 0
   const pendingUnits = plan?.units.filter((unit) => unit.status === 'pending') ?? []
   const now = new Date()
   const todayDate = `${now.getMonth() + 1} 月 ${now.getDate()} 日 · ${new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(now)}`
@@ -158,11 +157,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         : '查看今日练习'
   return <main className="workspace today-workspace">
     <header className="workspace-header today-header">
-      <div className="today-header__copy"><p className="today-header__date">{todayDate}</p><h1>今日</h1>{plan && <p className="subtitle">{actionableUnits.length} 个主题 · 预计 {minutes(plan.estimatedDurationSeconds)} 分钟</p>}</div>
-      {actionableUnits.length > 0 && <div className="today-header__progress">
-        <strong>{completed} / {actionableUnits.length}</strong>
-        <div aria-label={`今日进度 ${Math.round(progress)}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(progress)} role="progressbar"><span style={{ width: `${progress}%` }} /></div>
-      </div>}
+      <div className="today-header__copy"><p className="today-header__date">{todayDate}</p><h1>今日</h1>{plan && <p className="subtitle">{completed} / {actionableUnits.length} · 共预计 {minutes(plan.estimatedDurationSeconds)} 分钟</p>}</div>
       {plan && plan.units.length > 0 && <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice()} variant="primary">{practiceCta}</Button>}
     </header>
     <AsyncState error={error} loading={loading} loadingLabel="正在准备今天的学习内容…" onRetry={load}>
