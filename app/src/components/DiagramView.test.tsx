@@ -8,7 +8,9 @@ const diagram = (overrides: Partial<Diagram> = {}): Diagram => ({
   source: '\\draw (0,0)--(1,1);', renderStatus: 'rendered',
   renderedAssetPath: '/tmp/diagram.svg', renderedMimeType: 'image/svg+xml',
   renderHash: 'hash', rendererVersion: 'v1', renderErrorCode: null,
-  renderErrorMessage: null, createdAt: 1, updatedAt: 1, ...overrides,
+  renderErrorMessage: null, validationStatus: 'validated', validationErrors: [],
+  contract: { requiredLabels: [], requiredRelations: [] }, width: 1, height: 1,
+  repairAttempts: 0, createdAt: 1, updatedAt: 1, ...overrides,
 })
 
 describe('DiagramView', () => {
@@ -26,6 +28,14 @@ describe('DiagramView', () => {
     })} />)
     expect(html).toContain('图形暂时无法生成')
     expect(html).toContain('路径无效')
+    expect(html).not.toContain('<img')
+  })
+
+  it('does not display a compiled asset that failed validation', () => {
+    const html = renderToStaticMarkup(<DiagramView diagram={diagram({
+      validationStatus: 'rejected', validationErrors: ['缺少点名 A'],
+    })} />)
+    expect(html).toContain('缺少点名 A')
     expect(html).not.toContain('<img')
   })
 })

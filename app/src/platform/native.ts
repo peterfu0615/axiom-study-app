@@ -9,7 +9,7 @@ import type {
   AIProviderProfile,
 } from '../domain/models'
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
-import type { TikzRenderResult } from '../domain/diagram'
+import type { DiagramValidationContract, TikzRenderResult } from '../domain/diagram'
 import type { CompletePracticeDocument, PracticeDocument } from '../domain/practiceDocument'
 import type { PracticeScanResult } from '../domain/practiceAttempt'
 
@@ -177,8 +177,8 @@ export async function removeProblemDiagram(path: string) {
   return invoke<void>('remove_problem_diagram', { path })
 }
 
-export async function renderTikz(source: string) {
-  return invoke<TikzRenderResult>('render_tikz', { source })
+export async function renderTikz(source: string, contract?: DiagramValidationContract) {
+  return invoke<TikzRenderResult>('render_tikz', { source, contract: contract ?? null })
 }
 
 export interface PdfRenderResult {

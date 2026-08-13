@@ -4,13 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v1";
-pub const TIKZ_PREAMBLE_VERSION: &str = "axiom-tikz-preamble-v1";
+pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v2";
+pub const TIKZ_PREAMBLE_VERSION: &str = "axiom-tikz-preamble-v2";
+pub const TIKZ_VALIDATOR_VERSION: &str = "axiom-diagram-validator-v1";
 const MAX_SOURCE_BYTES: usize = 32 * 1024;
 const MAX_COMMANDS: usize = 500;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -47,8 +48,23 @@ pub struct TikzRenderResult {
     pub render_hash: String,
     pub renderer_version: String,
     pub cache_hit: bool,
+    pub validation_status: String,
+    pub validation_errors: Vec<String>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+    pub aspect_ratio: Option<f64>,
+    pub ink_coverage: Option<f64>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramValidationContract {
+    #[serde(default)]
+    required_labels: Vec<String>,
+    #[serde(default)]
+    required_relations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +77,8 @@ enum RenderError {
     TooManyCommands,
     Timeout,
     OutputTooLarge,
+    VisualValidation(String),
+    SemanticValidation(String),
     Io(String),
 }
 
@@ -75,6 +93,8 @@ impl RenderError {
             Self::TooManyCommands => "too_many_commands",
             Self::Timeout => "render_timeout",
             Self::OutputTooLarge => "output_too_large",
+            Self::VisualValidation(_) => "visual_validation_failed",
+            Self::SemanticValidation(_) => "semantic_validation_failed",
             Self::Io(_) => "render_io_failed",
         }
     }
@@ -89,6 +109,8 @@ impl RenderError {
             Self::TooManyCommands => "TikZ 命令数量超过限制".to_string(),
             Self::Timeout => "TikZ 渲染超过时间限制".to_string(),
             Self::OutputTooLarge => "TikZ 渲染结果超过 1 MB 限制".to_string(),
+            Self::VisualValidation(detail) => format!("TikZ 图形视觉检查未通过：{detail}"),
+            Self::SemanticValidation(detail) => format!("TikZ 图形语义检查未通过：{detail}"),
             Self::Io(detail) => format!("TikZ 缓存写入失败：{detail}"),
         }
     }
@@ -109,6 +131,7 @@ enum Primitive {
         dashed: bool,
         thick: bool,
         arrow: bool,
+        right_angle: bool,
     },
     Circle {
         center: Point,
@@ -155,12 +178,33 @@ fn normalize_source(source: &str) -> Result<String, RenderError> {
             "只允许 TikZ body，不允许完整环境".to_string(),
         ));
     }
+    for parameter in [
+        "transform canvas",
+        "minimum size",
+        "line width",
+        "xscale",
+        "yscale",
+        "scale=",
+        "opacity=",
+    ] {
+        if lower.contains(parameter) {
+            return Err(RenderError::InvalidGeometry(format!(
+                "不允许由图形源控制布局参数：{parameter}"
+            )));
+        }
+    }
     Ok(normalized)
 }
 
-fn render_hash(normalized: &str, preamble_version: &str) -> String {
-    let identity =
-        format!("renderer={TIKZ_RENDERER_VERSION}\npreamble={preamble_version}\n{normalized}");
+fn render_hash(
+    normalized: &str,
+    preamble_version: &str,
+    contract: &DiagramValidationContract,
+) -> String {
+    let contract = serde_json::to_string(contract).unwrap_or_default();
+    let identity = format!(
+        "renderer={TIKZ_RENDERER_VERSION}\npreamble={preamble_version}\nvalidator={TIKZ_VALIDATOR_VERSION}\ncontract={contract}\n{normalized}"
+    );
     format!("{:x}", Sha256::digest(identity.as_bytes()))
 }
 
@@ -174,7 +218,7 @@ fn parse_coordinates(command: &str) -> Vec<Point> {
         let mut values = pair.split(',').map(str::trim);
         if let (Some(x), Some(y), None) = (values.next(), values.next(), values.next()) {
             if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) {
-                if x.is_finite() && y.is_finite() && x.abs() <= 10_000.0 && y.abs() <= 10_000.0 {
+                if x.is_finite() && y.is_finite() && x.abs() <= 100.0 && y.abs() <= 100.0 {
                     points.push(Point { x, y });
                 }
             }
@@ -289,6 +333,7 @@ fn parse_primitives(normalized: &str, deadline: Instant) -> Result<Vec<Primitive
                 dashed: options.contains("dashed"),
                 thick: options.contains("thick"),
                 arrow: options.contains("->"),
+                right_angle: options.contains("axiomRightAngle"),
             });
         }
     }
@@ -307,7 +352,20 @@ fn escape_xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn primitives_to_svg(primitives: &[Primitive]) -> Result<String, RenderError> {
+#[derive(Debug, Clone, Copy)]
+struct DiagramMetrics {
+    min_x: f64,
+    max_y: f64,
+    width: f64,
+    height: f64,
+    aspect_ratio: f64,
+    ink_coverage: f64,
+}
+
+fn validate_primitives(
+    primitives: &[Primitive],
+    contract: &DiagramValidationContract,
+) -> Result<DiagramMetrics, RenderError> {
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
@@ -328,6 +386,95 @@ fn primitives_to_svg(primitives: &[Primitive]) -> Result<String, RenderError> {
     if !min_x.is_finite() || max_x - min_x <= 0.0 || max_y - min_y <= 0.0 {
         return Err(RenderError::InvalidGeometry("图形边界为空".to_string()));
     }
+    let raw_width = max_x - min_x;
+    let raw_height = max_y - min_y;
+    let aspect_ratio = raw_width / raw_height;
+    if raw_width > 100.0 || raw_height > 100.0 || !(0.12..=8.0).contains(&aspect_ratio) {
+        return Err(RenderError::VisualValidation(format!(
+            "边界比例异常（{raw_width:.2} × {raw_height:.2}，比例 {aspect_ratio:.2}）"
+        )));
+    }
+    let area = raw_width * raw_height;
+    let mut ink_area = 0.0;
+    let mut labels = Vec::new();
+    let mut has_right_angle = false;
+    for primitive in primitives {
+        match primitive {
+            Primitive::Path {
+                points,
+                closed,
+                fill,
+                thick,
+                right_angle,
+                ..
+            } => {
+                let length = points
+                    .windows(2)
+                    .map(|pair| {
+                        ((pair[1].x - pair[0].x).powi(2) + (pair[1].y - pair[0].y).powi(2)).sqrt()
+                    })
+                    .sum::<f64>();
+                ink_area += length * if *thick { 0.07 } else { 0.045 };
+                if *fill && *closed {
+                    let polygon_area = points
+                        .iter()
+                        .zip(points.iter().cycle().skip(1))
+                        .take(points.len())
+                        .map(|(left, right)| left.x * right.y - right.x * left.y)
+                        .sum::<f64>()
+                        .abs()
+                        / 2.0;
+                    if polygon_area / area > 0.45 {
+                        return Err(RenderError::VisualValidation(
+                            "大面积不透明填充会遮挡图形".to_string(),
+                        ));
+                    }
+                    ink_area += polygon_area;
+                }
+                has_right_angle |= *right_angle;
+            }
+            Primitive::Circle { radius, fill, .. } => {
+                ink_area += if *fill {
+                    std::f64::consts::PI * radius.powi(2)
+                } else {
+                    std::f64::consts::TAU * radius * 0.045
+                };
+            }
+            Primitive::Text { value, .. } => {
+                labels.push(value.as_str());
+                ink_area += 0.08 * value.chars().count().max(1) as f64;
+            }
+        }
+    }
+    let ink_coverage = (ink_area / area).clamp(0.0, 1.0);
+    if !(0.0005..=0.55).contains(&ink_coverage) {
+        return Err(RenderError::VisualValidation(format!(
+            "墨迹覆盖率异常（{:.1}%）",
+            ink_coverage * 100.0
+        )));
+    }
+    let missing_labels = contract
+        .required_labels
+        .iter()
+        .filter(|required| !labels.contains(&required.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_labels.is_empty() {
+        return Err(RenderError::SemanticValidation(format!(
+            "缺少点名 {}",
+            missing_labels.join("、")
+        )));
+    }
+    if contract
+        .required_relations
+        .iter()
+        .any(|relation| matches!(relation.as_str(), "perpendicular" | "right_angle"))
+        && !has_right_angle
+    {
+        return Err(RenderError::SemanticValidation(
+            "缺少垂直关系标记".to_string(),
+        ));
+    }
     let padding = ((max_x - min_x).max(max_y - min_y) * 0.08).max(0.35);
     min_x -= padding;
     min_y -= padding;
@@ -335,6 +482,27 @@ fn primitives_to_svg(primitives: &[Primitive]) -> Result<String, RenderError> {
     max_y += padding;
     let width = max_x - min_x;
     let height = max_y - min_y;
+    Ok(DiagramMetrics {
+        min_x,
+        max_y,
+        width,
+        height,
+        aspect_ratio,
+        ink_coverage,
+    })
+}
+
+fn primitives_to_svg(
+    primitives: &[Primitive],
+    metrics: DiagramMetrics,
+) -> Result<String, RenderError> {
+    let DiagramMetrics {
+        min_x,
+        max_y,
+        width,
+        height,
+        ..
+    } = metrics;
     let map = |point: Point| (point.x - min_x, max_y - point.y);
     let mut body = String::new();
     for primitive in primitives {
@@ -346,6 +514,7 @@ fn primitives_to_svg(primitives: &[Primitive]) -> Result<String, RenderError> {
                 dashed,
                 thick,
                 arrow,
+                right_angle: _,
             } => {
                 let rendered = points
                     .iter()
@@ -405,30 +574,32 @@ fn render_to_cache(
     cache_directory: &Path,
     source: &str,
     preamble_version: &str,
+    contract: &DiagramValidationContract,
     timeout: Duration,
-) -> Result<(PathBuf, String, bool), RenderError> {
+) -> Result<(PathBuf, String, bool, DiagramMetrics), RenderError> {
     let normalized = normalize_source(source)?;
-    let hash = render_hash(&normalized, preamble_version);
-    fs::create_dir_all(cache_directory).map_err(|error| RenderError::Io(error.to_string()))?;
-    let destination = cache_directory.join(format!("{hash}.svg"));
-    if destination.is_file() {
-        return Ok((destination, hash, true));
-    }
+    let hash = render_hash(&normalized, preamble_version, contract);
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(RenderError::Timeout)?;
     let primitives = parse_primitives(&normalized, deadline)?;
+    let metrics = validate_primitives(&primitives, contract)?;
+    fs::create_dir_all(cache_directory).map_err(|error| RenderError::Io(error.to_string()))?;
+    let destination = cache_directory.join(format!("{hash}.svg"));
+    if destination.is_file() {
+        return Ok((destination, hash, true, metrics));
+    }
     if Instant::now() >= deadline {
         return Err(RenderError::Timeout);
     }
-    let svg = primitives_to_svg(&primitives)?;
+    let svg = primitives_to_svg(&primitives, metrics)?;
     let temporary = cache_directory.join(format!(".{hash}-{}.tmp", Uuid::new_v4()));
     fs::write(&temporary, svg.as_bytes()).map_err(|error| RenderError::Io(error.to_string()))?;
     match fs::rename(&temporary, &destination) {
-        Ok(()) => Ok((destination, hash, false)),
+        Ok(()) => Ok((destination, hash, false, metrics)),
         Err(_) if destination.is_file() => {
             let _ = fs::remove_file(temporary);
-            Ok((destination, hash, true))
+            Ok((destination, hash, true, metrics))
         }
         Err(error) => {
             let _ = fs::remove_file(temporary);
@@ -437,46 +608,97 @@ fn render_to_cache(
     }
 }
 
-fn failed_result(source: &str, error: RenderError) -> TikzRenderResult {
+fn failed_result(
+    source: &str,
+    contract: &DiagramValidationContract,
+    error: RenderError,
+) -> TikzRenderResult {
     let normalized = normalize_source(source).unwrap_or_else(|_| source.trim().to_string());
     TikzRenderResult {
         render_status: "failed".to_string(),
         rendered_asset_path: None,
         rendered_mime_type: None,
-        render_hash: render_hash(&normalized, TIKZ_PREAMBLE_VERSION),
+        render_hash: render_hash(&normalized, TIKZ_PREAMBLE_VERSION, contract),
         renderer_version: TIKZ_RENDERER_VERSION.to_string(),
         cache_hit: false,
+        validation_status: "rejected".to_string(),
+        validation_errors: vec![error.message()],
+        width: None,
+        height: None,
+        aspect_ratio: None,
+        ink_coverage: None,
         error_code: Some(error.code().to_string()),
         error_message: Some(error.message()),
     }
 }
 
 #[tauri::command]
-pub fn render_tikz(app: AppHandle, source: String) -> TikzRenderResult {
+pub fn render_tikz(
+    app: AppHandle,
+    source: String,
+    contract: Option<DiagramValidationContract>,
+) -> TikzRenderResult {
+    let contract = contract.unwrap_or_default();
     let cache_directory = match app.path().app_data_dir() {
         // Keep generated assets directly under the existing managed diagrams
         // directory so media inventory and garbage collection can see them.
         Ok(path) => path.join("media").join("diagrams"),
-        Err(error) => return failed_result(&source, RenderError::Io(error.to_string())),
+        Err(error) => return failed_result(&source, &contract, RenderError::Io(error.to_string())),
     };
     match render_to_cache(
         &cache_directory,
         &source,
         TIKZ_PREAMBLE_VERSION,
+        &contract,
         RENDER_TIMEOUT,
     ) {
-        Ok((path, hash, cache_hit)) => TikzRenderResult {
+        Ok((path, hash, cache_hit, metrics)) => TikzRenderResult {
             render_status: "rendered".to_string(),
             rendered_asset_path: Some(path.to_string_lossy().to_string()),
             rendered_mime_type: Some("image/svg+xml".to_string()),
             render_hash: hash,
             renderer_version: TIKZ_RENDERER_VERSION.to_string(),
             cache_hit,
+            validation_status: "validated".to_string(),
+            validation_errors: Vec::new(),
+            width: Some(metrics.width),
+            height: Some(metrics.height),
+            aspect_ratio: Some(metrics.aspect_ratio),
+            ink_coverage: Some(metrics.ink_coverage),
             error_code: None,
             error_message: None,
         },
-        Err(error) => failed_result(&source, error),
+        Err(error) => failed_result(&source, &contract, error),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn render_validated_fixture(
+    cache_directory: &Path,
+    source: &str,
+    required_labels: &[&str],
+    require_perpendicular: bool,
+) -> PathBuf {
+    let contract = DiagramValidationContract {
+        required_labels: required_labels
+            .iter()
+            .map(|label| (*label).to_string())
+            .collect(),
+        required_relations: if require_perpendicular {
+            vec!["perpendicular".to_string()]
+        } else {
+            Vec::new()
+        },
+    };
+    render_to_cache(
+        cache_directory,
+        source,
+        TIKZ_PREAMBLE_VERSION,
+        &contract,
+        RENDER_TIMEOUT,
+    )
+    .expect("validated fixture should render")
+    .0
 }
 
 #[cfg(test)]
@@ -490,9 +712,14 @@ mod tests {
 
     fn render_fixture(label: &str, source: &str) -> String {
         let directory = cache_directory(label);
-        let (path, _, _) =
-            render_to_cache(&directory, source, TIKZ_PREAMBLE_VERSION, RENDER_TIMEOUT)
-                .expect("fixture should render");
+        let (path, _, _, _) = render_to_cache(
+            &directory,
+            source,
+            TIKZ_PREAMBLE_VERSION,
+            &DiagramValidationContract::default(),
+            RENDER_TIMEOUT,
+        )
+        .expect("fixture should render");
         let svg = fs::read_to_string(path).expect("svg should exist");
         let _ = fs::remove_dir_all(directory);
         svg
@@ -544,6 +771,7 @@ mod tests {
             &cache_directory("invalid"),
             r"\draw (0,0);",
             TIKZ_PREAMBLE_VERSION,
+            &DiagramValidationContract::default(),
             RENDER_TIMEOUT,
         )
         .expect_err("single point path must fail");
@@ -551,20 +779,94 @@ mod tests {
     }
 
     #[test]
+    fn validates_bounds_visual_sanity_and_semantic_contract() {
+        let directory = cache_directory("validated-contract");
+        let perpendicular = DiagramValidationContract {
+            required_labels: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+            required_relations: vec!["perpendicular".into()],
+        };
+        let valid_source = include_str!("../tests/fixtures/tikz/perpendicular.tikz");
+        let valid = render_to_cache(
+            &directory,
+            valid_source,
+            TIKZ_PREAMBLE_VERSION,
+            &perpendicular,
+            RENDER_TIMEOUT,
+        )
+        .expect("labelled perpendicular diagram should validate");
+        assert!((0.12..=8.0).contains(&valid.3.aspect_ratio));
+        assert!((0.0005..=0.55).contains(&valid.3.ink_coverage));
+        if let Ok(output) = std::env::var("AXIOM_TIKZ_TEST_OUTPUT") {
+            fs::copy(&valid.0, output).expect("copy standalone validated SVG");
+        }
+
+        let missing_mark = render_to_cache(
+            &directory,
+            r"\draw (-2,0)--(2,0); \draw (0,-2)--(0,2); \node at (-2.3,0) {A}; \node at (2.3,0) {C}; \node at (0,-2.3) {B}; \node at (0,2.3) {D};",
+            TIKZ_PREAMBLE_VERSION,
+            &perpendicular,
+            RENDER_TIMEOUT,
+        )
+        .expect_err("missing right-angle mark must fail semantic validation");
+        assert!(matches!(missing_mark, RenderError::SemanticValidation(_)));
+
+        for source in [
+            r"\draw[line width=40pt] (0,0)--(2,2);",
+            r"\draw[scale=100] (0,0)--(2,2);",
+            include_str!("../tests/fixtures/tikz/invalid-black-fill.tikz"),
+            r"\draw (0,0)--(1000,1);",
+        ] {
+            assert!(render_to_cache(
+                &directory,
+                source,
+                TIKZ_PREAMBLE_VERSION,
+                &DiagramValidationContract::default(),
+                RENDER_TIMEOUT,
+            )
+            .is_err());
+        }
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn enforces_timeout_and_cache_version_identity() {
         let directory = cache_directory("timeout-cache");
         let source = r"\draw (0,0)--(1,1);";
         assert_eq!(
-            render_to_cache(&directory, source, TIKZ_PREAMBLE_VERSION, Duration::ZERO)
-                .expect_err("zero budget must time out"),
+            render_to_cache(
+                &directory,
+                source,
+                TIKZ_PREAMBLE_VERSION,
+                &DiagramValidationContract::default(),
+                Duration::ZERO,
+            )
+            .expect_err("zero budget must time out"),
             RenderError::Timeout
         );
-        let first = render_to_cache(&directory, source, "preamble-v1", RENDER_TIMEOUT)
-            .expect("first render");
-        let second = render_to_cache(&directory, source, "preamble-v1", RENDER_TIMEOUT)
-            .expect("cache render");
-        let changed = render_to_cache(&directory, source, "preamble-v2", RENDER_TIMEOUT)
-            .expect("changed preamble render");
+        let first = render_to_cache(
+            &directory,
+            source,
+            "preamble-v1",
+            &DiagramValidationContract::default(),
+            RENDER_TIMEOUT,
+        )
+        .expect("first render");
+        let second = render_to_cache(
+            &directory,
+            source,
+            "preamble-v1",
+            &DiagramValidationContract::default(),
+            RENDER_TIMEOUT,
+        )
+        .expect("cache render");
+        let changed = render_to_cache(
+            &directory,
+            source,
+            "preamble-v2",
+            &DiagramValidationContract::default(),
+            RENDER_TIMEOUT,
+        )
+        .expect("changed preamble render");
         assert!(!first.2);
         assert!(second.2);
         assert_eq!(first.1, second.1);
@@ -580,8 +882,14 @@ mod tests {
             .map(|_| {
                 let directory = Arc::clone(&directory);
                 thread::spawn(move || {
-                    render_to_cache(&directory, source, TIKZ_PREAMBLE_VERSION, RENDER_TIMEOUT)
-                        .expect("concurrent render")
+                    render_to_cache(
+                        &directory,
+                        source,
+                        TIKZ_PREAMBLE_VERSION,
+                        &DiagramValidationContract::default(),
+                        RENDER_TIMEOUT,
+                    )
+                    .expect("concurrent render")
                 })
             })
             .collect::<Vec<_>>();

@@ -39,7 +39,7 @@ async function exportAttemptId(practiceSetId: string) {
 async function hydrateDiagramAssets(practiceSet: PracticeSet): Promise<PracticeSet> {
   const items = await Promise.all(practiceSet.items.map(async (item) => {
     const generated = await select<Array<{ rendered_asset_path: string }>>(
-      "SELECT rendered_asset_path FROM diagrams WHERE owner_type='practice_item' AND owner_id=$1 AND render_status='rendered' AND rendered_asset_path IS NOT NULL ORDER BY created_at, id",
+      "SELECT rendered_asset_path FROM diagrams WHERE owner_type='practice_item' AND owner_id=$1 AND render_status='rendered' AND validation_status='validated' AND rendered_asset_path IS NOT NULL ORDER BY created_at, id",
       [item.id],
     )
     const paths = [...new Set([...item.diagramImagePaths, ...generated.map((row) => row.rendered_asset_path)])]

@@ -53,4 +53,20 @@ describe('controlled TikZ generation contract', () => {
     expect(rendered.repairCount).toBe(TIKZ_REPAIR_LIMIT)
     expect(rendered.result.renderStatus).toBe('failed')
   })
+
+  it('repairs a compiled diagram that fails visual or semantic validation', async () => {
+    let renders = 0
+    const rendered = await renderGeneratedTikzWithRepair({
+      initialSource: '\\fill (0,0)--(4,0)--(2,3)--cycle;',
+      render: async () => (++renders === 1
+        ? { renderStatus: 'rendered' as const, validationStatus: 'rejected' as const, validationErrors: ['大面积填充'], errorCode: null, errorMessage: null }
+        : { renderStatus: 'rendered' as const, validationStatus: 'validated' as const, validationErrors: [], errorCode: null, errorMessage: null }),
+      repair: async (prompt) => {
+        expect(prompt).toContain('大面积填充')
+        return '\\draw (0,0)--(4,0)--(2,3)--cycle;'
+      },
+    })
+    expect(rendered.repairCount).toBe(1)
+    expect(rendered.result.validationStatus).toBe('validated')
+  })
 })

@@ -193,7 +193,7 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
       COALESCE((SELECT region.image_path FROM problem_regions region
         WHERE region.problem_id=problem.id AND region.region_type='diagram' AND region.image_path IS NOT NULL
         ORDER BY CASE region.source WHEN 'manual' THEN 0 ELSE 1 END, region.updated_at DESC LIMIT 1
-      ), problem.ai_diagram_image_path) AS diagram_image_path
+      ), CASE WHEN problem.ai_has_diagram=1 THEN problem.ai_diagram_image_path END) AS diagram_image_path
     FROM skill_bundle_problems link JOIN problems problem ON problem.id=link.problem_id
     LEFT JOIN problem_solutions solution ON solution.problem_id=problem.id AND solution.status='completed'
     LEFT JOIN problem_difficulties difficulty ON difficulty.problem_id=problem.id

@@ -1260,8 +1260,12 @@ mod tests {
         image::RgbImage::from_pixel(320, 120, image::Rgb([245, 245, 245]))
             .save(&image_path)
             .expect("write fixture image");
-        let svg_path = directory.join("diagram.svg");
-        fs::write(&svg_path, r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><path d="M0 3L2 0L4 3Z" fill="none" stroke="#25231c" stroke-width="0.045"/></svg>"##).expect("write fixture svg");
+        let svg_path = crate::diagram::render_validated_fixture(
+            &directory.join("diagram-cache"),
+            include_str!("../tests/fixtures/tikz/perpendicular.tikz"),
+            &["A", "B", "C", "D"],
+            true,
+        );
         let document = fixture(&image_path, &svg_path);
         let destination = directory.join("practice.pdf");
         let output =

@@ -22,6 +22,9 @@ function diagramFromRender(index: number, source: string, render: Awaited<Return
     renderedMimeType: render.renderedMimeType,
     renderHash: render.renderHash, rendererVersion: render.rendererVersion,
     renderErrorCode: render.errorCode, renderErrorMessage: render.errorMessage,
+    validationStatus: render.validationStatus, validationErrors: render.validationErrors,
+    contract: { requiredLabels: [], requiredRelations: [] }, width: render.width,
+    height: render.height, repairAttempts: 0,
     createdAt: now, updatedAt: now,
   }
 }
