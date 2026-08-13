@@ -286,7 +286,11 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
       module.estimated_duration_seconds, module.order_index, module.status,
       module.completed_at, instance.id AS question_id, instance.source_problem_id,
       instance.stem_markdown, instance.structured_content_json, instance.solution_json,
-      instance.target_tags_json, attempt.rating,
+      instance.target_tags_json,
+      CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
+        THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
+          WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END
+        ELSE attempt.rating END AS rating,
       problem.crop_image_path AS current_question_image_path,
       COALESCE((SELECT region.image_path FROM problem_regions region
         WHERE region.problem_id = instance.source_problem_id AND region.region_type = 'diagram' AND region.image_path IS NOT NULL
@@ -298,6 +302,8 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
     JOIN skill_bundles bundle ON bundle.id = module.skill_bundle_id
     JOIN question_instances instance ON instance.review_module_id = module.id
     LEFT JOIN review_attempts attempt ON attempt.question_instance_id = instance.id
+    LEFT JOIN practice_evidences practice_evidence ON practice_evidence.review_attempt_id=attempt.id
+    LEFT JOIN practice_effective_responses effective ON effective.response_id=practice_evidence.practice_response_id
     LEFT JOIN problems problem ON problem.id = instance.source_problem_id
     WHERE module.session_id = $1
     ORDER BY module.order_index, module.id
