@@ -140,6 +140,8 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   if (activePracticeSet) return <PracticeSetView
     onBack={() => { setActivePracticeSet(null); void load() }}
     onOpenPracticeSet={setActivePracticeSet}
+    initialAttempt={todayAttempt?.practiceSetId === activePracticeSet.id ? todayAttempt : undefined}
+    initialMode={todayAttempt?.practiceSetId === activePracticeSet.id && todayAttempt.status === 'completed' ? 'results' : undefined}
     practiceSet={activePracticeSet}
   />
 

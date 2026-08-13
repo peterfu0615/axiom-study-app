@@ -24,6 +24,17 @@ export interface PracticeDocumentRecord extends CompletePdfRenderResult {
   status: 'ready'
 }
 
+const RENDERER_CONTRACT = 'axiom-typst-v2'
+
+function sourceHash(document: CompletePracticeDocument) {
+  let hash = 2166136261
+  for (const character of JSON.stringify(document)) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 async function exportAttemptId(practiceSetId: string) {
   const existing = (await select<Array<{ attempt_id: string }>>(
     `SELECT document.attempt_id FROM practice_documents document
@@ -48,6 +59,56 @@ async function hydrateDiagramAssets(practiceSet: PracticeSet): Promise<PracticeS
   return { ...practiceSet, items }
 }
 
+async function readReadyDocument(practiceSet: PracticeSet): Promise<PracticeDocumentRecord | null> {
+  const candidates = await select<Array<{
+    id: string; attempt_id: string; layout_version: string; content_hash: string; file_path: string | null
+    page_count: number; metadata_json: string
+  }>>(`SELECT id, attempt_id, layout_version, content_hash, file_path, page_count, metadata_json
+    FROM practice_documents
+    WHERE practice_set_id=$1 AND document_type='complete' AND status='ready'
+      AND layout_version=$2 AND file_path IS NOT NULL
+    ORDER BY updated_at DESC LIMIT 3`, [practiceSet.id, 'practice-a4-v3'])
+  if (!candidates.length) return null
+  const hydrated = await hydrateDiagramAssets(practiceSet)
+  for (const candidate of candidates) {
+    let metadata: { rendererContract?: string; rendererVersion?: string; byteLength?: number; sectionPageRanges?: CompletePdfRenderResult['sectionPageRanges']; sourceHash?: string }
+    try { metadata = JSON.parse(candidate.metadata_json) as typeof metadata } catch { continue }
+    const document = buildCompletePracticeDocument(hydrated, { attemptId: candidate.attempt_id, generatedAt: practiceSet.createdAt })
+    if (metadata.sourceHash !== sourceHash(document) || metadata.rendererContract !== RENDERER_CONTRACT || !metadata.sectionPageRanges) continue
+    const rows = await select<Array<{
+      page_id: string; page_index: number; page_identity: string; qr_payload: string
+      width_points: number; height_points: number; region_id: string | null; practice_item_id: string | null
+      region_index: number | null; x: number | null; y: number | null; width: number | null; height: number | null
+    }>>(`SELECT page.id AS page_id, page.page_index, page.page_identity, page.qr_payload,
+      page.width_points, page.height_points, region.id AS region_id, region.practice_item_id,
+      region.region_index, region.x, region.y, region.width, region.height
+      FROM practice_document_pages page
+      LEFT JOIN practice_answer_regions region ON region.practice_document_page_id=page.id
+      WHERE page.practice_document_id=$1 ORDER BY page.page_index, region.region_index`, [candidate.id])
+    const grouped = new Map<number, CompletePdfRenderResult['pages'][number]>()
+    for (const row of rows) {
+      const page = grouped.get(Number(row.page_index)) ?? {
+        pageIndex: Number(row.page_index), pageIdentity: row.page_identity, qrPayload: row.qr_payload,
+        widthPoints: Number(row.width_points), heightPoints: Number(row.height_points), answerRegions: [],
+      }
+      if (row.region_id && row.practice_item_id && row.region_index !== null && row.x !== null && row.y !== null && row.width !== null && row.height !== null) {
+        page.answerRegions.push({ id: row.region_id, practiceItemId: row.practice_item_id, regionIndex: Number(row.region_index), x: Number(row.x), y: Number(row.y), width: Number(row.width), height: Number(row.height) })
+      }
+      grouped.set(Number(row.page_index), page)
+    }
+    if (!grouped.size || !candidate.file_path) continue
+    return {
+      documentId: candidate.id, filePath: candidate.file_path, contentHash: candidate.content_hash,
+      rendererVersion: metadata.rendererVersion ?? RENDERER_CONTRACT, pageCount: Number(candidate.page_count),
+      byteLength: Number(metadata.byteLength ?? 0), cacheHit: true,
+      sectionPageRanges: metadata.sectionPageRanges, pages: [...grouped.values()],
+      id: candidate.id, practiceSetId: practiceSet.id, attemptId: candidate.attempt_id,
+      documentType: 'complete', layoutVersion: candidate.layout_version, status: 'ready',
+    }
+  }
+  return null
+}
+
 async function persistDocument(document: CompletePracticeDocument, render: CompletePdfRenderResult): Promise<PracticeDocumentRecord> {
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
@@ -61,6 +122,8 @@ async function persistDocument(document: CompletePracticeDocument, render: Compl
       const metadata = JSON.stringify({
         documentType: 'complete',
         rendererVersion: render.rendererVersion,
+        rendererContract: RENDERER_CONTRACT,
+        sourceHash: sourceHash(document),
         byteLength: render.byteLength,
         sectionPageRanges: render.sectionPageRanges,
       })
@@ -106,10 +169,16 @@ async function persistDocument(document: CompletePracticeDocument, render: Compl
 }
 
 export async function exportPracticePdf(practiceSet: PracticeSet) {
+  const cached = await readReadyDocument(practiceSet)
+  if (cached) return cached
   const attemptId = await exportAttemptId(practiceSet.id)
   const hydrated = await hydrateDiagramAssets(practiceSet)
   const document = buildCompletePracticeDocument(hydrated, { attemptId, generatedAt: practiceSet.createdAt })
   return persistDocument(document, await renderCompletePracticePdf(document))
+}
+
+export async function getLatestReadyPracticeDocument(practiceSet: PracticeSet) {
+  return readReadyDocument(practiceSet)
 }
 
 export async function openExportedPracticePdf(record: PracticeDocumentRecord) {

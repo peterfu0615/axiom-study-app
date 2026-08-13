@@ -9,6 +9,7 @@ import type { PracticeLoop } from '../../domain/practiceLoop'
 import { importImage, mediaAssetUrl, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
 import {
   exportPracticePdf,
+  getLatestReadyPracticeDocument,
   openExportedPracticePdf,
   printExportedPracticePdf,
   saveExportedPracticePdf,
@@ -84,42 +85,43 @@ function ResultItem({ item, response, onChange }: {
   </article>
 }
 
-export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
+export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initialAttempt, initialMode }: {
   practiceSet: PracticeSet
   onBack: () => void
   onOpenPracticeSet?: (practiceSet: PracticeSet) => void
+  initialAttempt?: PracticeAttempt
+  initialMode?: 'ready' | 'results'
 }) {
   const [selectedSection, setSelectedSection] = useState<PracticePdfSection>('exercise')
   const [document, setDocument] = useState<PracticeDocumentRecord | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pagePreview, setPagePreview] = useState<PracticePdfPagePreview | null>(null)
-  const [exporting, setExporting] = useState(true)
-  const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>('ready')
+  const [exporting, setExporting] = useState(false)
+  const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>(initialMode ?? 'ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
-  const [attempt, setAttempt] = useState<PracticeAttempt | null>(null)
+  const [attempt, setAttempt] = useState<PracticeAttempt | null>(initialAttempt ?? null)
   const [loop, setLoop] = useState<PracticeLoop | null>(null)
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
 
   useEffect(() => {
     let cancelled = false
-    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setExporting(true); setMode('ready'); setFeedback(null)
-    void (async () => {
-      try {
-        const completeDocument = await exportPracticePdf(practiceSet)
-        if (!cancelled) setDocument(completeDocument)
-      } catch (reason) {
-        if (!cancelled) setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
-      } finally { if (!cancelled) setExporting(false) }
-    })()
-    void Promise.all([getLatestPracticeAttempt(practiceSet.id), getPracticeLoopForSet(practiceSet.id)])
-      .then(([latest, recoveredLoop]) => {
-        if (cancelled) return
-        setAttempt(latest); setLoop(recoveredLoop)
-        if (latest?.responses.some((response) => response.gradingResult)) setMode('results')
+    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setExporting(false); setFeedback(null)
+    setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready')
+    if (!initialAttempt) {
+      void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
+        if (!cancelled) {
+          setAttempt(latest)
+          if (latest?.responses.some((response) => response.gradingResult)) setMode('results')
+        }
       }).catch(() => null)
+    }
+    // PracticeLoop is supplementary data and must not delay the result render.
+    void getPracticeLoopForSet(practiceSet.id).then((recoveredLoop) => {
+      if (!cancelled) setLoop(recoveredLoop)
+    }).catch(() => null)
     return () => { cancelled = true }
-  }, [practiceSet])
+  }, [initialAttempt, initialMode, practiceSet])
 
   useEffect(() => {
     if (!document) return undefined
@@ -135,11 +137,15 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
     if (document) return document
     setExporting(true); setFeedback(null)
     try {
-      const record = await exportPracticePdf(practiceSet)
+      const record = await getLatestReadyPracticeDocument(practiceSet) ?? await exportPracticePdf(practiceSet)
       setDocument(record)
       return record
     } finally { setExporting(false) }
   }
+  useEffect(() => {
+    if (mode === 'results' || document || exporting) return
+    void ensureDocument().catch((reason) => setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }))
+  }, [mode, document, exporting, practiceSet])
   const chooseSection = (section: PracticePdfSection) => {
     setSelectedSection(section)
     if (document) setCurrentPage(document.sectionPageRanges[section].startPage)

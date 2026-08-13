@@ -4,7 +4,7 @@
 .today-header__date { margin: 0 0 var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .today-header__copy h1 { margin: 0; }
 .today-header__copy .subtitle { margin-top: var(--ax-space-2); }
-.today-header__cta { min-width: 164px; }
+.today-header__cta { width: fit-content; }
 .today-units { display: grid; margin-top: var(--ax-space-5); }
 .today-unit { min-width: 0; display: grid; grid-template-columns: var(--ax-control-md) minmax(0, 1fr) auto; align-items: start; gap: var(--ax-space-5); padding: var(--ax-space-7) 0; border-bottom: 1px solid var(--ax-border-subtle); }
 .today-unit__order { width: var(--ax-control-md); height: var(--ax-control-md); display: grid; place-items: center; border-radius: var(--ax-radius-pill); color: var(--ax-accent-ink); background: var(--ax-color-selected); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); }
