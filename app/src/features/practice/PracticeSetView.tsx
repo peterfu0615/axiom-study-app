@@ -168,7 +168,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet }: {
   const submitAnswer = async () => {
     setFeedback(null)
     await ensureDocument()
-    const selected = await open({ multiple: false })
+    const selected = await open({ directory: false, multiple: false })
     if (typeof selected !== 'string') return
     if (!/\.(?:pdf|jpe?g|png|heic)$/iu.test(selected)) {
       setMode('submit')
