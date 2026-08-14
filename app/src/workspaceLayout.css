@@ -39,7 +39,8 @@
 
 .problem-status,
 .problem-ai-status {
-  font-size: 10px;
+  font-size: var(--ax-type-caption-size);
+  line-height: var(--ax-type-caption-line);
 }
 
 .problem-ai-dot {

@@ -38,19 +38,30 @@ describe('design system foundations', () => {
     expect(tags).not.toMatch(/border-radius:\s*\d/gu)
   })
 
-  it('exposes one semantic typography scale and page-header hierarchy', () => {
+  it('maps product typography to the macOS text-style hierarchy', () => {
     const tokens = readFileSync(new URL('../../index.css', import.meta.url), 'utf8')
     const refinement = readFileSync(new URL('../../uiRefinement.css', import.meta.url), 'utf8')
+    const ui = readFileSync(new URL('./ui.css', import.meta.url), 'utf8')
     const html = renderToStaticMarkup(
       <PageHeader actions={<Button>开始</Button>} eyebrow="学习趋势" summary="复习趋势与掌握变化" title="洞察" />,
     )
 
     for (const token of [
+      '--ax-type-large-title-size: 26px', '--ax-type-title-1-size: 22px',
+      '--ax-type-title-2-size: 17px', '--ax-type-title-3-size: 15px',
+      '--ax-type-headline-size: 13px', '--ax-type-body-size: 13px',
+      '--ax-type-callout-size: 12px', '--ax-type-subheadline-size: 11px',
+      '--ax-type-footnote-size: 10px', '--ax-type-caption-size: 10px',
       '--ax-type-eyebrow-size', '--ax-type-page-size', '--ax-type-section-size',
-      '--ax-type-card-size', '--ax-type-body-size', '--ax-type-body-small-size',
+      '--ax-type-card-size', '--ax-type-body-small-size',
       '--ax-type-control-size', '--ax-type-label-size', '--ax-type-meta-size',
       '--ax-type-caption-size', '--ax-page-eyebrow',
     ]) expect(tokens).toContain(token)
+    expect(tokens).toContain('--ax-type-page-size: var(--ax-type-large-title-size)')
+    expect(tokens).toContain('--ax-type-control-size: var(--ax-type-headline-size)')
+    expect(tokens).toContain('font-optical-sizing: auto')
+    expect(refinement).not.toContain('letter-spacing: -0.035em')
+    expect(ui).not.toMatch(/font-size:\s*(?:[0-9]|1[0-8])px/u)
     expect(html).toContain('ax-page-header__eyebrow')
     expect(html).toContain('ax-page-header__title')
     expect(html).toContain('ax-page-header__summary')
