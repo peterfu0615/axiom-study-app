@@ -175,7 +175,7 @@
 }
 .ax-listbox__option:hover,
 .ax-listbox__option.is-highlighted { background: color-mix(in srgb, var(--brand-wash) 70%, var(--surface)); }
-.ax-listbox__option.is-selected { color: var(--brand-pressed); font-weight: 650; }
+.ax-listbox__option.is-selected { color: var(--brand-pressed); font-weight: 600; }
 .ax-listbox__option:disabled { color: var(--muted); cursor: not-allowed; opacity: .56; }
 .ax-listbox__option-copy { min-width: 0; flex: 1 1 auto; display: grid; gap: 2px; }
 .ax-listbox__option-label,
@@ -189,7 +189,7 @@
 .ax-tabs button { position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; color: var(--muted); background: transparent; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); font-weight: var(--ax-type-control-weight); cursor: pointer; }
 .ax-tabs button:hover:not(:disabled) { color: var(--ink); }
 .ax-tabs button:disabled { opacity: .45; cursor: not-allowed; }
-.ax-tabs button small { display: inline-grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border-radius: 999px; color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); font-size: 10px; }
+.ax-tabs button small { display: inline-grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border-radius: 999px; color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
 .ax-tabs--underline { gap: 22px; min-height: 39px; border-bottom: 1px solid var(--border); }
 .ax-tabs--underline button { min-height: 39px; padding: 0 1px; }
 .ax-tabs--underline button.is-selected { color: var(--ink); }
@@ -218,11 +218,11 @@
 
 .ax-empty-state { display: grid; justify-items: center; align-content: center; min-height: 360px; padding: 42px; border: 1px dashed color-mix(in srgb, var(--border) 82%, var(--brand)); border-radius: var(--panel-radius); text-align: center; background: color-mix(in srgb, var(--surface) 72%, transparent); }
 .ax-empty-state__icon { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 13px; border-radius: 13px; color: var(--brand-ink); background: var(--brand-soft); font-size: 22px; }
-.ax-empty-state h2 { margin: 0; color: var(--ink); font-size: 18px; letter-spacing: -.025em; }
-.ax-empty-state p { max-width: 430px; margin: 9px 0 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.ax-empty-state h2 { margin: 0; color: var(--ink); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); }
+.ax-empty-state p { max-width: 430px; margin: 9px 0 0; color: var(--muted); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .ax-empty-state__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; }
 
-.ax-async-state { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; padding: 26px; color: var(--muted); font-size: 13px; }
+.ax-async-state { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; padding: 26px; color: var(--muted); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .ax-async-state--error { align-items: flex-start; justify-content: flex-start; min-height: auto; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border)); border-radius: var(--panel-radius); color: var(--muted); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 .ax-async-state--error strong { color: var(--danger); }
 
@@ -236,20 +236,20 @@
 .ax-error-state__actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--ax-space-4); }
 
 .ax-progress { display: grid; gap: 8px; }
-.ax-progress > div:first-child { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; }
-.ax-progress strong { color: var(--ink); font-weight: 650; }
+.ax-progress > div:first-child { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: var(--ax-type-meta-size); line-height: var(--ax-type-meta-line); }
+.ax-progress strong { color: var(--ink); font-weight: 600; }
 .ax-progress__track { height: 7px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
 .ax-progress__track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width 180ms ease; }
 
 .ax-dialog-backdrop { position: fixed; z-index: var(--ax-z-dialog); inset: 0; display: grid; place-items: center; padding: var(--ax-space-8); background: color-mix(in srgb, var(--ax-text-primary) 34%, transparent); }
 .ax-dialog { width: min(580px, calc(100vw - 48px)); max-height: min(720px, calc(100vh - 48px)); overflow: auto; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: 0 22px 65px rgb(65 48 0 / 22%); }
 .ax-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
-.ax-dialog h2 { margin: 0; color: var(--ink); font-size: 16px; }
+.ax-dialog h2 { margin: 0; color: var(--ink); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); }
 .ax-dialog__body { padding: 18px; }
 
 .ax-menu { position: relative; display: inline-flex; }
 .ax-menu__popover { position: absolute; z-index: 8; top: calc(100% + 5px); right: 0; min-width: 146px; display: grid; padding: 5px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--card-shadow); }
-.ax-menu__item { min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; color: var(--ink); background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
+.ax-menu__item { min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; color: var(--ink); background: transparent; text-align: left; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); cursor: pointer; }
 .ax-menu__item:hover:not(:disabled) { background: var(--surface-muted); }
 .ax-menu__item:disabled { opacity: .45; cursor: not-allowed; }
 
