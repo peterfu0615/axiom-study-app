@@ -60,7 +60,7 @@
   gap: 8px;
 }
 
-.curriculum-page-header .eyebrow { color: var(--brand-pressed); }
+.curriculum-page-header .eyebrow { color: var(--ax-page-eyebrow); }
 .curriculum-page-header h1 { margin-bottom: 5px; }
 
 .curriculum-filters {

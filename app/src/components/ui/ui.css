@@ -23,12 +23,14 @@
   padding: 0 var(--ax-control-padding-inline);
   border: 1px solid transparent;
   border-radius: var(--control-radius);
-  font-size: var(--ax-type-body-size);
-  font-weight: var(--ax-type-body-strong-weight);
-  line-height: 1;
+  font-size: var(--ax-type-control-size);
+  font-weight: var(--ax-type-control-weight);
+  line-height: var(--ax-type-control-line);
   cursor: pointer;
   transition: background var(--ax-motion-fast) ease, border-color var(--ax-motion-fast) ease, color var(--ax-motion-fast) ease, transform var(--ax-motion-instant) ease;
 }
+.ax-button__content { min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 7px; line-height: inherit; }
+.ax-button__content > .icon { flex: 0 0 auto; }
 
 .ax-button:active:not(:disabled),
 .ax-icon-button:active:not(:disabled) { transform: translateY(1px); }
@@ -100,10 +102,10 @@
 @keyframes ax-spin { to { transform: rotate(360deg); } }
 
 .ax-field-label { color: var(--ax-text-secondary); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); line-height: var(--ax-type-label-line); }
-.ax-field-hint, .ax-field-error { color: var(--ax-text-secondary); font-size: var(--ax-type-label-size); line-height: var(--ax-type-label-line); }
+.ax-field-hint, .ax-field-error { color: var(--ax-text-secondary); font-size: var(--ax-type-meta-size); line-height: var(--ax-type-meta-line); }
 .ax-field-error { color: var(--ax-danger-fg); }
 .ax-input-field { min-width: 0; display: grid; gap: var(--ax-space-2); }
-.ax-input-field input { width: 100%; min-height: var(--ax-control-md); padding: 0 var(--ax-control-padding-inline); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-md); color: var(--ax-text-primary); background: var(--ax-color-surface); font: inherit; font-size: var(--ax-type-body-size); }
+.ax-input-field input { width: 100%; min-height: var(--ax-control-md); padding: 0 var(--ax-control-padding-inline); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-md); color: var(--ax-text-primary); background: var(--ax-color-surface); font: inherit; font-size: var(--ax-type-control-size); }
 .ax-input-field input:hover:not(:disabled) { border-color: var(--ax-border-strong); }
 .ax-input-field input:focus-visible { outline: none; border-color: var(--ax-border-focus); box-shadow: var(--focus-ring); }
 .ax-input-field input:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
@@ -122,7 +124,7 @@
   color: var(--ax-text-primary);
   background: var(--ax-color-surface);
   font: inherit;
-  font-size: var(--ax-type-body-size);
+  font-size: var(--ax-type-control-size);
   text-align: left;
   cursor: pointer;
   transition: border-color var(--ax-motion-fast) ease, background var(--ax-motion-fast) ease, box-shadow var(--ax-motion-fast) ease;
@@ -184,7 +186,7 @@
 @keyframes ax-listbox-enter-above { from { opacity: 0; transform: translateY(calc(-100% + 3px)) scale(.99); } to { opacity: 1; transform: translateY(-100%) scale(1); } }
 
 .ax-tabs { display: flex; min-width: 0; }
-.ax-tabs button { position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; color: var(--muted); background: transparent; font-size: 13px; font-weight: 650; cursor: pointer; }
+.ax-tabs button { position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; color: var(--muted); background: transparent; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); font-weight: var(--ax-type-control-weight); cursor: pointer; }
 .ax-tabs button:hover:not(:disabled) { color: var(--ink); }
 .ax-tabs button:disabled { opacity: .45; cursor: not-allowed; }
 .ax-tabs button small { display: inline-grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border-radius: 999px; color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); font-size: 10px; }

@@ -11,7 +11,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { ListboxSelect } from '../../components/ui'
+import { ListboxSelect, PageHeader, Tabs } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 
@@ -173,63 +173,30 @@ export function AISettings() {
 
   return (
     <main className="workspace settings-workspace">
-      <header className="workspace-header">
-        <div>
-          <h1>设置</h1>
-          <p className="subtitle">AI 服务、外观与应用信息</p>
-        </div>
-        <span className="settings-provider-badge">
+      <PageHeader
+        actions={<span className="settings-provider-badge">
           {enabledVisionCount} 个图片识别服务可用
-        </span>
-      </header>
+        </span>}
+        eyebrow="Axiom"
+        summary="AI 服务、外观与应用信息"
+        title="设置"
+      />
 
       <section className="settings-shell">
-        <nav className="settings-tabs" role="tablist">
-          <button
-            aria-selected={tab === 'maintenance'}
-            className={tab === 'maintenance' ? 'active' : ''}
-            onClick={() => setTab('maintenance')}
-            role="tab"
-            type="button"
-          >
-            数据维护
-          </button>
-          <button
-            aria-selected={tab === 'providers'}
-            className={tab === 'providers' ? 'active' : ''}
-            onClick={() => setTab('providers')}
-            role="tab"
-            type="button"
-          >
-            AI 模型
-          </button>
-          <button
-            aria-selected={tab === 'appearance'}
-            className={tab === 'appearance' ? 'active' : ''}
-            onClick={() => setTab('appearance')}
-            role="tab"
-            type="button"
-          >
-            外观
-          </button>
-          <button
-            aria-selected={tab === 'about'}
-            className={tab === 'about' ? 'active' : ''}
-            onClick={() => setTab('about')}
-            role="tab"
-            type="button"
-          >
-            关于
-          </button>
-          <button
-            aria-selected={tab === 'update'}
-            className={tab === 'update' ? 'active' : ''}
-            onClick={() => setTab('update')}
-            role="tab"
-            type="button"
-          >
-            更新
-          </button>
+        <nav className="settings-tabs">
+          <Tabs
+            ariaLabel="设置分区"
+            onChange={setTab}
+            options={[
+              { value: 'maintenance', label: '数据维护' },
+              { value: 'providers', label: 'AI 模型' },
+              { value: 'appearance', label: '外观' },
+              { value: 'about', label: '关于' },
+              { value: 'update', label: '更新' },
+            ]}
+            value={tab}
+            variant="rail"
+          />
         </nav>
 
         <div className="settings-pane">
@@ -518,7 +485,7 @@ export function AISettings() {
           ) : tab === 'appearance' ? (
             <div className="settings-appearance-pane">
               <header>
-                <p className="eyebrow">外观</p>
+                <p className="eyebrow">显示偏好</p>
                 <h2>外观</h2>
                 <p className="subtitle">Axiom 主题会按系统或你的选择切换明暗外观。</p>
               </header>
@@ -559,7 +526,7 @@ export function AISettings() {
           ) : tab === 'about' ? (
             <div className="settings-about-pane">
               <header>
-                <p className="eyebrow">关于</p>
+                <p className="eyebrow">应用信息</p>
                 <h2>Axiom</h2>
                 <p className="subtitle">智能错题整理工作台</p>
               </header>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AsyncState, Badge, Button, EmptyState, StatusBadge } from '../../components/ui'
+import { AsyncState, Badge, Button, EmptyState, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
 import { getReviewInsights } from '../../platform/insightsDatabase'
@@ -64,13 +64,16 @@ export function InsightsWorkspace() {
   const changeDays = useMemo(() => insights?.trend.filter((day) => day.masteryDelta !== null) ?? [], [insights])
 
   return <main className="workspace insights-workspace">
-    <header className="workspace-header insights-header">
-      <div><h1>洞察</h1><p className="subtitle">复习趋势与掌握变化</p></div>
-      <div className="insights-range" role="group" aria-label="洞察时间范围">
+    <PageHeader
+      actions={<div className="insights-range" role="group" aria-label="洞察时间范围">
         <Button onClick={() => setRange(7)} variant={range === 7 ? 'primary' : 'secondary'}>最近 7 天</Button>
         <Button onClick={() => setRange(30)} variant={range === 30 ? 'primary' : 'secondary'}>最近 30 天</Button>
-      </div>
-    </header>
+      </div>}
+      className="insights-header"
+      eyebrow="学习趋势"
+      summary="复习趋势与掌握变化"
+      title="洞察"
+    />
     <AsyncState error={error} loading={loading} loadingLabel="正在整理学习记录…" onRetry={load}>
       {insights && insights.overview.completedUnits === 0 && !insights.themes.length && masteryCount === 0 ? <EmptyState
         description="完成 Today 复习后，这里会逐步形成趋势、掌握状态和重复错误。已有 SkillState 仍会在掌握情况中显示。"

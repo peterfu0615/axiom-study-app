@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
+import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, PageHeader, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
@@ -20,6 +20,7 @@ import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, over
 import { finalizePracticeAttempt, getPracticeLoopForSet } from '../../platform/practiceLoopDatabase'
 import { getPracticeSet } from '../../platform/practiceDatabase'
 import { practiceErrorMessage } from './productLanguage'
+import { shouldAutoPreparePracticeDocument, type PracticeDocumentState } from './practiceDocumentState'
 import './PracticeSetView.css'
 
 type PracticePdfSection = 'exercise' | 'solution'
@@ -100,7 +101,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [document, setDocument] = useState<PracticeDocumentRecord | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pagePreview, setPagePreview] = useState<PracticePdfPagePreview | null>(null)
-  const [exporting, setExporting] = useState(false)
+  const [documentState, setDocumentState] = useState<PracticeDocumentState>('idle')
   const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>(initialMode ?? 'ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(initialAttempt ?? null)
@@ -108,10 +109,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [attemptLoaded, setAttemptLoaded] = useState(Boolean(initialAttempt))
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
+  const documentRequest = useRef<Promise<PracticeDocumentRecord> | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setExporting(false); setFeedback(null)
+    documentRequest.current = null
+    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null)
     setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt))
     if (!initialAttempt) {
       void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
@@ -140,17 +143,37 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
 
   const ensureDocument = useCallback(async () => {
     if (document) return document
-    setExporting(true); setFeedback(null)
-    try {
-      const record = await getLatestReadyPracticeDocument(practiceSet) ?? await exportPracticePdf(practiceSet)
-      setDocument(record)
-      return record
-    } finally { setExporting(false) }
+    if (documentRequest.current) return documentRequest.current
+    setDocumentState('loading')
+    setFeedback(null)
+    const request = (async () => {
+      try {
+        const record = await getLatestReadyPracticeDocument(practiceSet) ?? await exportPracticePdf(practiceSet)
+        setDocument(record)
+        setDocumentState('ready')
+        return record
+      } catch (reason) {
+        setDocumentState('error')
+        // The stage owns the retry affordance; avoid repeating the same error
+        // in a second global notice above the preview.
+        setFeedback(null)
+        throw reason
+      } finally {
+        documentRequest.current = null
+      }
+    })()
+    documentRequest.current = request
+    return request
   }, [document, practiceSet])
   useEffect(() => {
-    if (!attemptLoaded || mode === 'results' || document || exporting) return
-    void ensureDocument().catch((reason) => setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }))
-  }, [attemptLoaded, mode, document, exporting, ensureDocument])
+    if (!shouldAutoPreparePracticeDocument({ attemptLoaded, mode, hasDocument: Boolean(document), documentState })) return
+    void ensureDocument().catch(() => null)
+  }, [attemptLoaded, mode, document, documentState, ensureDocument])
+  const retryDocument = () => {
+    setDocumentState('idle')
+    setFeedback(null)
+    void ensureDocument().catch(() => null)
+  }
   const chooseSection = (section: PracticePdfSection) => {
     setSelectedSection(section)
     if (document) setCurrentPage(document.sectionPageRanges[section].startPage)
@@ -236,10 +259,13 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   </main>
 
   if (mode === 'results' && attempt) return <main className="workspace practice-workspace">
-    <header className="practice-header practice-header--result">
-      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
-      <div><p className="eyebrow">练习结果</p><h1>本次练习</h1><p>{practiceSet.subject} · {practiceSet.items.length} 题</p></div>
-    </header>
+    <PageHeader
+      className="practice-header practice-header--result"
+      eyebrow="练习结果"
+      leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
+      summary={`${practiceSet.subject} · ${practiceSet.items.length} 题`}
+      title="本次练习"
+    />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     <section className="practice-result-summary">
       <div><span>得分</span><strong>{score}</strong><small>/ 100</small></div>
@@ -267,15 +293,18 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   </main>
 
   return <main className="workspace practice-workspace">
-    <header className="practice-header">
-      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
-      <div className="practice-header__copy"><h1>{practiceSet.subject}练习</h1><p>{practiceSet.items.length} 题 · 已保存</p></div>
-      <div className="practice-header__actions">
-        <Button disabled={!document || exporting} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
-        <Button disabled={!document || exporting} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
+    <PageHeader
+      actions={<div className="practice-header__actions">
+        <Button disabled={!document || documentState === 'loading'} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
+        <Button disabled={!document || documentState === 'loading'} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
         <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
-      </div>
-    </header>
+      </div>}
+      className="practice-header"
+      eyebrow="打印与作答"
+      leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
+      summary={`${practiceSet.items.length} 题 · 已保存`}
+      title={`${practiceSet.subject}练习`}
+    />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
       <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>
@@ -290,7 +319,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
         <SegmentedControl ariaLabel="练习章节" onChange={chooseSection} options={documentTabs} value={selectedSection} />
       </nav>
       <section className="practice-document-stage" aria-label={`${documentTabs.find((tab) => tab.value === selectedSection)?.label} PDF 预览`}>
-        {exporting || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
+        {documentState === 'error' ? <div className="practice-document-error" role="alert">
+          <strong>练习文档暂时无法生成</strong>
+          <span>请重试；如果仍然失败，请重新生成这组练习。</span>
+          <Button onClick={retryDocument} variant="secondary">重新生成</Button>
+        </div> : documentState === 'loading' || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
           <div className="practice-document-page">
             {pagePreview
               ? <img alt={`练习 PDF 第 ${currentPage} 页`} src={mediaAssetUrl(pagePreview.path)} />

@@ -23,6 +23,7 @@ import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorD
 import './components/ui/ui.css'
 import './App.css'
 import './workspaceLayout.css'
+import './uiRefinement.css'
 
 function startWindowDrag(event: MouseEvent<HTMLDivElement>) {
   if (event.button !== 0) return

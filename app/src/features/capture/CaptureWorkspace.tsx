@@ -34,7 +34,7 @@ import {
   saveSourceDocument,
 } from '../../platform/database'
 import { DocumentEditor } from './DocumentEditor'
-import { ListboxSelect } from '../../components/ui'
+import { ListboxSelect, PageHeader, SegmentedControl } from '../../components/ui'
 
 type CaptureMode = 'camera' | 'import'
 
@@ -287,42 +287,28 @@ export function CaptureWorkspace() {
 
   return (
     <main className="workspace capture-workspace">
-      <header className="workspace-header">
-        <div>
-          <h1>添加错题</h1>
-        </div>
-        <div className="runtime-pill">
+      <PageHeader
+        actions={<div className="runtime-pill">
           <span className={`status-dot ${capabilities ? 'online' : ''}`} />
           {capabilities
             ? '图片与题目数据保存在本机'
             : '正在准备采集…'}
-        </div>
-      </header>
+        </div>}
+        eyebrow="快速采集"
+        title="添加错题"
+      />
 
       <section className="capture-layout">
         <div className="capture-card">
-          <div className="mode-tabs" role="tablist">
-            <button
-              aria-selected={mode === 'camera'}
-              className={mode === 'camera' ? 'active' : ''}
-              onClick={() => setMode('camera')}
-              role="tab"
-              type="button"
-            >
-              <Icon name="camera" size={18} />
-              iPhone 相机
-            </button>
-            <button
-              aria-selected={mode === 'import'}
-              className={mode === 'import' ? 'active' : ''}
-              onClick={() => setMode('import')}
-              role="tab"
-              type="button"
-            >
-              <Icon name="image" size={18} />
-              导入图片
-            </button>
-          </div>
+          <SegmentedControl
+            ariaLabel="采集方式"
+            onChange={setMode}
+            options={[
+              { value: 'camera', label: <><Icon name="camera" size={16} /> iPhone 相机</> },
+              { value: 'import', label: <><Icon name="image" size={16} /> 导入图片</> },
+            ]}
+            value={mode}
+          />
 
           {mode === 'camera' ? (
             <div
