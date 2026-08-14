@@ -57,6 +57,7 @@ export function UpdateSettings() {
   const handleCheck = async () => {
     setChecking(true)
     setError(null)
+    setUpdateInfo(null)
     setHasChecked(false)
     try {
       const info = await checkForUpdates()
@@ -97,7 +98,7 @@ export function UpdateSettings() {
     }
   }
 
-  const isLatest = hasChecked && !updateInfo
+  const isLatest = hasChecked && !updateInfo && !error
 
   return (
     <div className="settings-update-pane">
@@ -138,8 +139,7 @@ export function UpdateSettings() {
           <strong>检查更新失败</strong>
           <p>{error}</p>
           <p className="update-hint">
-            如果是首次使用，请确认已在 GitHub 创建
-            <code>axiom-update-pusher</code> 仓库并发布了 Release。
+            请稍后重试；更新源为 Axiom GitHub Release，服务暂时不可用时不会影响本地数据。
           </p>
         </div>
       )}

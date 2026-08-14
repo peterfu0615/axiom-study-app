@@ -474,7 +474,7 @@ pub fn run() {
                             }
                             // 自动恢复失败时才引导用户到下载页，保留手动恢复通道。
                             let _ = std::process::Command::new("open")
-                                .arg("https://github.com/peterfu0615/axiom-update-pusher/releases/latest")
+                                .arg("https://github.com/peterfu0615/axiom-study-app/releases/latest")
                                 .spawn();
                         }
                         // 数据库是全部命令的前置依赖，初始化失败属于启动期致命错误：

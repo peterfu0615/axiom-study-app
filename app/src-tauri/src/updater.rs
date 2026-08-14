@@ -6,13 +6,13 @@
 //!    校验 SHA256，解压，生成 detached 安装脚本，退出当前进程。
 //!    脚本等待进程退出后替换 `.app` 并重新启动。
 //!
-//! 更新源配置：修改下方 `UPDATE_OWNER` 常量为你创建的 GitHub 用户名/组织名。
-//! 仓库 `axiom-update-pusher` 的 Release 需包含以下资产：
+//! 更新源配置：默认读取当前公开 GitHub 仓库的 Release Atom feed，
+//! 不依赖 GitHub REST API 的匿名请求配额。
+//! Release 需包含以下资产：
 //!   - `Axiom_<version>_<arch>.app.zip`   — 打包好的应用
 //!   - `Axiom_<version>_<arch>.app.zip.sha256` — SHA256 校验值（可选但推荐）
 
 use futures_util::StreamExt;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -24,35 +24,27 @@ use uuid::Uuid;
 // 更新源配置
 // ────────────────────────────────────────────────────────────
 
-/// GitHub 仓库 owner。用户创建 `axiom-update-pusher` 仓库后，将此值改为实际用户名。
-/// 也可在编译时通过环境变量 `UPDATE_REPO_OWNER` 覆盖。
+/// GitHub 仓库 owner。也可在编译时通过环境变量 `UPDATE_REPO_OWNER` 覆盖。
 const UPDATE_OWNER: &str = match option_env!("UPDATE_REPO_OWNER") {
     Some(owner) => owner,
     None => "peterfu0615",
 };
 
-/// GitHub 仓库名。
-const UPDATE_REPO: &str = "axiom-update-pusher";
+/// GitHub 仓库名。也可在编译时通过环境变量 `UPDATE_REPO` 覆盖。
+const UPDATE_REPO: &str = match option_env!("UPDATE_REPO") {
+    Some(repo) => repo,
+    None => "axiom-study-app",
+};
 
 // ────────────────────────────────────────────────────────────
 // 类型定义
 // ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct GithubRelease {
+#[derive(Debug, PartialEq, Eq)]
+struct FeedRelease {
     tag_name: String,
-    body: Option<String>,
-    published_at: Option<String>,
-    assets: Vec<GithubAsset>,
-    #[serde(rename = "message")]
-    api_error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-    size: u64,
+    body: String,
+    published_at: String,
 }
 
 /// 检查更新返回的完整信息，前端用于展示版本号、更新日志和下载。
@@ -98,7 +90,7 @@ pub fn get_app_version() -> String {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     let current = env!("CARGO_PKG_VERSION");
-    let url = format!("https://api.github.com/repos/{UPDATE_OWNER}/{UPDATE_REPO}/releases/latest");
+    let url = format!("https://github.com/{UPDATE_OWNER}/{UPDATE_REPO}/releases.atom");
 
     let client = reqwest::Client::builder()
         .user_agent(format!("Axiom/{current} (macOS self-updater)"))
@@ -107,26 +99,24 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
 
     let response = client
         .get(&url)
-        .header("Accept", "application/vnd.github+json")
+        .header("Accept", "application/atom+xml")
         .send()
         .await
-        .map_err(|e| format!("请求 GitHub API 失败：{e}"))?;
+        .map_err(|e| format!("请求 GitHub Release feed 失败：{e}"))?;
 
     let status = response.status();
-    let release: GithubRelease = response
-        .json()
+    let feed = response
+        .text()
         .await
-        .map_err(|e| format!("解析 GitHub release 失败（HTTP {status}）：{e}"))?;
-
-    // GitHub API 返回错误消息（如 404 仓库不存在）
+        .map_err(|e| format!("读取 GitHub Release feed 失败（HTTP {status}）：{e}"))?;
     if !status.is_success() {
-        let msg = release
-            .api_error
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(format!("GitHub API 返回错误：{msg}"));
+        return Err(format!(
+            "GitHub Release feed 请求失败（HTTP {status}）：{}",
+            summarize_remote_error(&feed)
+        ));
     }
 
-    // tag_name 形如 "v0.2.0"，去掉 v 前缀
+    let release = parse_release_feed(&feed)?;
     let latest = release.tag_name.trim_start_matches('v').to_string();
 
     if !is_newer(&latest, current) {
@@ -136,25 +126,22 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
 
     // 根据当前架构选择对应的资产
     let arch = std::env::consts::ARCH; // "aarch64" or "x86_64"
-    let zip_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name.contains(arch) && a.name.ends_with(".app.zip"))
+    let version = latest.trim_start_matches('v');
+    let zip_url = release_asset_url(&release.tag_name, arch, false);
+    let download_size = head_asset(&client, &zip_url)
+        .await?
         .ok_or_else(|| format!("Release 中未找到 {arch} 架构的 .app.zip 资产"))?;
-
-    let sha256_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name.contains(arch) && a.name.ends_with(".sha256"));
+    let sha_url = release_asset_url(&release.tag_name, arch, true);
+    let sha256_url = head_asset(&client, &sha_url).await?.map(|_| sha_url);
 
     let info = UpdateInfo {
-        version: latest,
+        version: version.to_string(),
         current_version: current.to_string(),
-        release_notes: release.body.unwrap_or_default(),
-        published_at: release.published_at.unwrap_or_default(),
-        download_url: zip_asset.browser_download_url.clone(),
-        download_size: zip_asset.size,
-        sha256_url: sha256_asset.map(|a| a.browser_download_url.clone()),
+        release_notes: release.body,
+        published_at: release.published_at,
+        download_url: zip_url,
+        download_size,
+        sha256_url,
     };
 
     log::info!(
@@ -164,6 +151,128 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
         info.download_size
     );
     Ok(Some(info))
+}
+
+fn release_asset_url(tag: &str, arch: &str, sha256: bool) -> String {
+    let version = tag.trim_start_matches('v');
+    let suffix = if sha256 {
+        ".app.zip.sha256"
+    } else {
+        ".app.zip"
+    };
+    format!(
+        "https://github.com/{UPDATE_OWNER}/{UPDATE_REPO}/releases/download/{tag}/Axiom_{version}_{arch}{suffix}"
+    )
+}
+
+async fn head_asset(client: &reqwest::Client, url: &str) -> Result<Option<u64>, String> {
+    let response = client
+        .head(url)
+        .send()
+        .await
+        .map_err(|e| format!("检查更新资产失败：{e}"))?;
+    if response.status().is_success() {
+        return Ok(Some(response.content_length().unwrap_or_default()));
+    }
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    Err(format!("检查更新资产失败：HTTP {}", response.status()))
+}
+
+fn parse_release_feed(feed: &str) -> Result<FeedRelease, String> {
+    let entry_start = feed
+        .find("<entry")
+        .ok_or_else(|| "GitHub Release feed 中没有可用版本".to_string())?;
+    let entry_end = feed[entry_start..]
+        .find("</entry>")
+        .map(|offset| entry_start + offset + "</entry>".len())
+        .ok_or_else(|| "GitHub Release feed 格式不完整".to_string())?;
+    let entry = &feed[entry_start..entry_end];
+
+    let link = xml_attribute(entry, "link", "href")
+        .ok_or_else(|| "GitHub Release feed 缺少版本链接".to_string())?;
+    let tag_name = link
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|tag| !tag.is_empty())
+        .ok_or_else(|| "GitHub Release feed 缺少版本 tag".to_string())?
+        .to_string();
+    let body = xml_text(entry, "content")
+        .map(|content| html_to_text(&content))
+        .unwrap_or_default();
+    let published_at = xml_text(entry, "updated").unwrap_or_default();
+
+    Ok(FeedRelease {
+        tag_name,
+        body,
+        published_at,
+    })
+}
+
+fn xml_text(block: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = block.find(&open)?;
+    let content_start = block[start..].find('>')? + start + 1;
+    let close = format!("</{tag}>");
+    let content_end = block[content_start..].find(&close)? + content_start;
+    Some(decode_xml_entities(&block[content_start..content_end]))
+}
+
+fn xml_attribute(block: &str, element: &str, attribute: &str) -> Option<String> {
+    let open = format!("<{element}");
+    let start = block.find(&open)?;
+    let element_end = block[start..].find('>')? + start;
+    let element_text = &block[start..element_end];
+    let marker = format!(r#"{attribute}=""#);
+    let value_start = element_text.find(&marker)? + marker.len();
+    let value_end = element_text[value_start..].find('"')? + value_start;
+    Some(decode_xml_entities(&element_text[value_start..value_end]))
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn html_to_text(value: &str) -> String {
+    let value = value
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("</p>", "\n\n")
+        .replace("</li>", "\n")
+        .replace("<li>", "- ");
+    let mut text = String::with_capacity(value.len());
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn summarize_remote_error(body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return "远端没有返回错误详情".to_string();
+    }
+    let body = body.replace(['\n', '\r'], " ");
+    body.chars().take(240).collect()
 }
 
 /// 下载并安装更新。下载进度通过 `update://progress` 事件报告。
@@ -717,6 +826,38 @@ mod tests {
         assert!(!is_newer("abc", "0.1.0"));
         assert!(!is_newer("0.2.0", "not-a-version"));
         assert!(!is_newer("1.2", "1.2.0"));
+    }
+
+    #[test]
+    fn parses_github_atom_feed_without_rest_api() {
+        let feed = r#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v0.6.2</id>
+    <updated>2026-08-13T15:02:17Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/peterfu0615/axiom-study-app/releases/tag/v0.6.2"/>
+    <title>Axiom 0.6.2</title>
+    <content type="html">&lt;p&gt;修复更新检查&lt;/p&gt;&lt;ul&gt;&lt;li&gt;不再依赖 REST API&lt;/li&gt;&lt;/ul&gt;</content>
+  </entry>
+</feed>"#;
+
+        let release = parse_release_feed(feed).unwrap();
+        assert_eq!(release.tag_name, "v0.6.2");
+        assert_eq!(release.published_at, "2026-08-13T15:02:17Z");
+        assert!(release.body.contains("修复更新检查"));
+        assert!(release.body.contains("- 不再依赖 REST API"));
+    }
+
+    #[test]
+    fn builds_release_asset_urls_from_feed_tag() {
+        assert_eq!(
+            release_asset_url("v0.6.2", "aarch64", false),
+            "https://github.com/peterfu0615/axiom-study-app/releases/download/v0.6.2/Axiom_0.6.2_aarch64.app.zip"
+        );
+        assert_eq!(
+            release_asset_url("v0.6.2", "aarch64", true),
+            "https://github.com/peterfu0615/axiom-study-app/releases/download/v0.6.2/Axiom_0.6.2_aarch64.app.zip.sha256"
+        );
     }
 
     #[test]
