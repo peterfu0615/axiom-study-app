@@ -39,7 +39,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState, SegmentedControl } from '../../components/ui'
+import { Button, Dialog, ErrorState, PageHeader, SegmentedControl } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -618,18 +618,16 @@ export function ProblemLibrary() {
 
   return (
     <main className="workspace library-workspace">
-      <header className="workspace-header">
-        <div>
-          <p className="eyebrow">知识资产</p>
-          <h1>错题库</h1>
-        </div>
-        <SegmentedControl
+      <PageHeader
+        actions={<SegmentedControl
           ariaLabel="错题库视图"
           onChange={setView}
           options={[{ value: 'active', label: '错题', disabled: editing }, { value: 'archived', label: '已归档', disabled: editing }]}
           value={view}
-        />
-      </header>
+        />}
+        eyebrow="学习记录"
+        title="错题库"
+      />
 
       <section className="library-layout">
         <div className="problem-list-panel">

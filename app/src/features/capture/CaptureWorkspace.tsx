@@ -34,7 +34,7 @@ import {
   saveSourceDocument,
 } from '../../platform/database'
 import { DocumentEditor } from './DocumentEditor'
-import { ListboxSelect, SegmentedControl } from '../../components/ui'
+import { ListboxSelect, PageHeader, SegmentedControl } from '../../components/ui'
 
 type CaptureMode = 'camera' | 'import'
 
@@ -287,17 +287,16 @@ export function CaptureWorkspace() {
 
   return (
     <main className="workspace capture-workspace">
-      <header className="workspace-header">
-        <div>
-          <h1>添加错题</h1>
-        </div>
-        <div className="runtime-pill">
+      <PageHeader
+        actions={<div className="runtime-pill">
           <span className={`status-dot ${capabilities ? 'online' : ''}`} />
           {capabilities
             ? '图片与题目数据保存在本机'
             : '正在准备采集…'}
-        </div>
-      </header>
+        </div>}
+        eyebrow="快速采集"
+        title="添加错题"
+      />
 
       <section className="capture-layout">
         <div className="capture-card">

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, StatusTag } from '../../components/ui'
+import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
@@ -158,10 +158,13 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         ? '查看批改进度'
         : '查看今日练习'
   return <main className="workspace today-workspace">
-    <header className="workspace-header today-header">
-      <div className="today-header__copy"><p className="today-header__date">{todayDate}</p><h1>今日</h1>{plan && <p className="subtitle">{completed} / {actionableUnits.length} · 共预计 {minutes(plan.estimatedDurationSeconds)} 分钟</p>}</div>
-      {plan && plan.units.length > 0 && <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice()} variant="primary">{practiceCta}</Button>}
-    </header>
+    <PageHeader
+      actions={plan && plan.units.length > 0 ? <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice()} variant="primary">{practiceCta}</Button> : undefined}
+      className="today-header"
+      eyebrow={todayDate}
+      summary={plan ? `${completed} / ${actionableUnits.length} · 共预计 ${minutes(plan.estimatedDurationSeconds)} 分钟` : undefined}
+      title="今日"
+    />
     <AsyncState error={error} loading={loading} loadingLabel="正在准备今天的学习内容…" onRetry={load}>
       {plan && plan.units.length === 0 ? <EmptyState
         action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}

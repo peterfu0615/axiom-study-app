@@ -9,6 +9,7 @@ import {
   ListboxSelect,
   Menu,
   MenuItem,
+  PageHeader,
   StatusBadge,
   Surface,
   Tabs,
@@ -397,13 +398,16 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
   return (
     <main className="workspace curriculum-workspace">
-      <header className="workspace-header curriculum-page-header">
-        <div><p className="eyebrow">学习资料</p><h1>课程</h1><p className="subtitle">管理教材、知识结构与当前科目的标签概况。</p></div>
-        <div className="curriculum-page-header__actions">
+      <PageHeader
+        actions={<div className="curriculum-page-header__actions">
           {curriculumJob && <CurriculumAnalysisStatusPill onOpen={() => openProgress(curriculumJob.id)} />}
           <Button onClick={beginNewImport} variant="primary">导入教材</Button>
-        </div>
-      </header>
+        </div>}
+        className="curriculum-page-header"
+        eyebrow="知识结构"
+        summary="管理教材、知识结构与当前科目的标签概况。"
+        title="课程"
+      />
 
       <div className="curriculum-filters">
         <ListboxSelect label="科目" onValueChange={selectSubject} options={subjects.length ? subjects.map((item) => ({ value: item, label: item })) : [{ value: '', label: '暂无课程' }]} value={subject} />

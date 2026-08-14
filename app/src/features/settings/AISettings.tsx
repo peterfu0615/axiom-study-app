@@ -11,7 +11,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { ListboxSelect, Tabs } from '../../components/ui'
+import { ListboxSelect, PageHeader, Tabs } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 
@@ -173,15 +173,14 @@ export function AISettings() {
 
   return (
     <main className="workspace settings-workspace">
-      <header className="workspace-header">
-        <div>
-          <h1>设置</h1>
-          <p className="subtitle">AI 服务、外观与应用信息</p>
-        </div>
-        <span className="settings-provider-badge">
+      <PageHeader
+        actions={<span className="settings-provider-badge">
           {enabledVisionCount} 个图片识别服务可用
-        </span>
-      </header>
+        </span>}
+        eyebrow="Axiom"
+        summary="AI 服务、外观与应用信息"
+        title="设置"
+      />
 
       <section className="settings-shell">
         <nav className="settings-tabs">
@@ -486,7 +485,7 @@ export function AISettings() {
           ) : tab === 'appearance' ? (
             <div className="settings-appearance-pane">
               <header>
-                <p className="eyebrow">外观</p>
+                <p className="eyebrow">显示偏好</p>
                 <h2>外观</h2>
                 <p className="subtitle">Axiom 主题会按系统或你的选择切换明暗外观。</p>
               </header>
@@ -527,7 +526,7 @@ export function AISettings() {
           ) : tab === 'about' ? (
             <div className="settings-about-pane">
               <header>
-                <p className="eyebrow">关于</p>
+                <p className="eyebrow">应用信息</p>
                 <h2>Axiom</h2>
                 <p className="subtitle">智能错题整理工作台</p>
               </header>

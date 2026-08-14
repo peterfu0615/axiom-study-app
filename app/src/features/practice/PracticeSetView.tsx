@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
+import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, PageHeader, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
@@ -259,10 +259,13 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   </main>
 
   if (mode === 'results' && attempt) return <main className="workspace practice-workspace">
-    <header className="practice-header practice-header--result">
-      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
-      <div><p className="eyebrow">练习结果</p><h1>本次练习</h1><p>{practiceSet.subject} · {practiceSet.items.length} 题</p></div>
-    </header>
+    <PageHeader
+      className="practice-header practice-header--result"
+      eyebrow="练习结果"
+      leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
+      summary={`${practiceSet.subject} · ${practiceSet.items.length} 题`}
+      title="本次练习"
+    />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     <section className="practice-result-summary">
       <div><span>得分</span><strong>{score}</strong><small>/ 100</small></div>
@@ -290,15 +293,18 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   </main>
 
   return <main className="workspace practice-workspace">
-    <header className="practice-header">
-      <IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>
-      <div className="practice-header__copy"><h1>{practiceSet.subject}练习</h1><p>{practiceSet.items.length} 题 · 已保存</p></div>
-      <div className="practice-header__actions">
+    <PageHeader
+      actions={<div className="practice-header__actions">
         <Button disabled={!document || documentState === 'loading'} onClick={() => void saveCurrent()} variant="secondary"><Icon name="download" size={16} /> 保存 PDF</Button>
         <Button disabled={!document || documentState === 'loading'} onClick={() => void printCurrent()} variant="secondary"><Icon name="print" size={16} /> 打印</Button>
         <Button onClick={() => setMode('submit')} variant="primary">提交作答</Button>
-      </div>
-    </header>
+      </div>}
+      className="practice-header"
+      eyebrow="打印与作答"
+      leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
+      summary={`${practiceSet.items.length} 题 · 已保存`}
+      title={`${practiceSet.subject}练习`}
+    />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
       <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>

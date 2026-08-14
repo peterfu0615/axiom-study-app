@@ -1,9 +1,8 @@
 .today-workspace { width: 100%; }
 .today-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: clamp(var(--ax-space-5), 3vw, var(--ax-space-9)); padding-bottom: var(--ax-space-7); border-bottom: 1px solid var(--ax-border-default); }
-.today-header__copy { min-width: 0; }
-.today-header__date { margin: 0 0 var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
-.today-header__copy h1 { margin: 0; }
-.today-header__copy .subtitle { margin-top: var(--ax-space-2); }
+.today-header .ax-page-header__copy { min-width: 0; }
+.today-header .ax-page-header__title { margin: 0; }
+.today-header .ax-page-header__summary { margin-top: var(--ax-space-2); }
 .today-header__cta { width: fit-content; }
 .today-units { display: grid; margin-top: var(--ax-space-5); }
 .today-unit { min-width: 0; display: grid; grid-template-columns: var(--ax-control-md) minmax(0, 1fr) auto; align-items: start; gap: var(--ax-space-5); padding: var(--ax-space-7) 0; border-bottom: 1px solid var(--ax-border-subtle); }
