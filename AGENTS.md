@@ -107,9 +107,9 @@ Axiom/
 | (待提交) | fix | 修复 `UpdateInfo` 序列化字段名 + 命令参数 `rename_all = "camelCase"` |
 
 **自动更新架构**：
-- **Rust 端**（`updater.rs`）：调用 GitHub API `/repos/{owner}/axiom-update-pusher/releases/latest`，比较版本号，流式下载 `.app.zip`（带进度事件），校验 SHA256，`unzip` 解压，生成 detached bash 脚本（等待进程退出 → 替换 `.app` → 移除 quarantine → 重启），退出当前进程。
+- **Rust 端**（`updater.rs`）：读取 GitHub Releases Atom Feed，比较版本号，流式下载 `.app.zip`（带进度事件），校验 SHA256，`unzip` 解压，生成 detached bash 脚本（等待进程退出 → 替换 `.app` → 移除 quarantine → 重启），退出当前进程。
 - **前端**：启动后台静默检查 + Toast 提示；设置页「更新」Tab 显示当前版本、最新版本、发布日期、下载大小、更新日志（Markdown 渲染）、检查更新按钮、下载进度条、立即更新并重启按钮。
-- **更新源**：`peterfu0615/axiom-update-pusher` 仓库（PUBLIC），Release 资产命名 `Axiom_{version}_{arch}.app.zip` + `.sha256`。
+- **更新源**：`peterfu0615/axiom-study-app` 仓库（PUBLIC），Release 资产命名 `Axiom_{version}_{arch}.app.zip` + `.sha256`。
 - **编译时配置**：`UPDATE_REPO_OWNER` 环境变量覆盖默认 owner。
 
 ---
@@ -258,7 +258,7 @@ option_env! 参数应为环境变量名 "UPDATE_REPO_OWNER"，而非 owner 值�
    - 真实用户签字确认
 
 4. **更新源准备**（如需发布自动更新）
-   - 确认 `axiom-update-pusher` 仓库可访问（PUBLIC）
+   - 确认 `axiom-study-app` 仓库可访问（PUBLIC）
    - 打包 `.app.zip`：`cd bundle/macos && zip -r -y Axiom_{version}_{arch}.app.zip Axiom.app`
    - 生成 `.sha256`：`shasum -a 256 <zip> | awk '{print $1}' > <zip>.sha256`
 
@@ -280,14 +280,14 @@ shasum -a 256 /tmp/Axiom_<version>_aarch64.app.zip | awk '{print $1}' > /tmp/Axi
 
 # 4. 创建 GitHub Release（更新源仓库）
 gh release create v<version> \
-  --repo peterfu0615/axiom-update-pusher \
+  --repo peterfu0615/axiom-study-app \
   --title "Axiom <version>" \
   --notes "<changelog>" \
   /tmp/Axiom_<version>_aarch64.app.zip \
   /tmp/Axiom_<version>_aarch64.app.zip.sha256
 
 # 5. 提交版本 bump
-cd /Users/Peter/Coding/Axiom
+cd /path/to/Axiom
 git add app/package.json app/src-tauri/Cargo.toml app/src-tauri/Cargo.lock app/src-tauri/tauri.conf.json
 git commit -m "chore: bump version to <version>"
 ```
@@ -353,7 +353,7 @@ cd app && node scripts/bump-version.mjs <new-version>
 
 ### 更新源仓库
 
-- 仓库：`peterfu0615/axiom-update-pusher`（PUBLIC）
+- 仓库：`peterfu0615/axiom-study-app`（PUBLIC）
 - 用途：托管自动更新 Release 资产，与主仓库分离
 - Release tag 与主仓库保持一致
 - 资产：`.app.zip` + `.sha256`

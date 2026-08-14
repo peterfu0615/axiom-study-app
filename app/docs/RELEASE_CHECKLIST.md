@@ -43,7 +43,7 @@
 
 ```bash
 # 1. 确认工作区干净
-cd /Users/Peter/Coding/Axiom
+cd /path/to/Axiom
 git status
 
 # 2. 运行完整检查
@@ -51,7 +51,7 @@ cd app && npm run lint && npm run typecheck && npm test
 cd src-tauri && cargo fmt -- --check && cargo clippy -- -D warnings && cargo test --lib
 
 # 3. 构建 Release（arm64）
-cd /Users/Peter/Coding/Axiom/app
+cd /path/to/Axiom/app
 # Beta 本地构建也必须在打包阶段写入完整 ad-hoc bundle 签名。
 APPLE_SIGNING_IDENTITY=- npm run tauri -- build
 # Tauri 会把主 App 权限误用于 externalBin；必须补签沙盒继承权限并重建 DMG。
@@ -68,7 +68,7 @@ codesign -dv src-tauri/target/release/bundle/macos/Axiom.app  # 确认签名身�
 node scripts/bump-version.mjs <new-version>
 
 # 6. 提交并打 tag
-cd /Users/Peter/Coding/Axiom
+cd /path/to/Axiom
 git add -A && git commit -m "chore: bump version to <new-version>"
 git tag v<new-version>
 git push origin main --tags

@@ -900,8 +900,8 @@ mod tests {
     #[test]
     fn shell_quote_preserves_paths_with_single_quotes() {
         assert_eq!(
-            shell_quote("/Applications/Peter's Axiom.app"),
-            "'/Applications/Peter'\"'\"'s Axiom.app'"
+            shell_quote("/Applications/Test's Axiom.app"),
+            "'/Applications/Test'\"'\"'s Axiom.app'"
         );
     }
 

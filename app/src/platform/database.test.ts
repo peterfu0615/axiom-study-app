@@ -271,7 +271,7 @@ describe('parseJSON', () => {
 
 describe('isSameDatabasePath', () => {
   it('treats identical paths as same', () => {
-    const p = '/Users/Peter/Library/Containers/com.axiom.study/Data/axiom.db'
+    const p = '/Users/test/Library/Containers/com.axiom.study/Data/axiom.db'
     expect(isSameDatabasePath(p, p)).toBe(true)
   })
 

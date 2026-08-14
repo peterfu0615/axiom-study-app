@@ -118,7 +118,7 @@ Fixtures/mocks 覆盖 401、403、429、5xx、network、connect/read timeout、m
 
 ## 14. Computer Use scenarios actually tested
 
-真实运行的是当前 workspace 的 debug bundle `/Users/Peter/Coding/Axiom/app/src-tauri/target/debug/bundle/macos/Axiom.app`，不是 `/Applications` 中可能落后的安装版。
+真实运行的是当前 workspace 的 debug bundle `app/src-tauri/target/debug/bundle/macos/Axiom.app`，不是 `/Applications` 中可能落后的安装版。
 
 1. 打开采集工作台与既有 source document，进入“矫正与切题”，确认已保存题块恢复、图像、工具栏、disabled state 和 scroll ownership。
 2. 打开错题库，选择真实错题并执行“重新整理”。分析前保留用户锁定数学教材；Provider 完成真实分析；UI 展示 3 个教材 canonical knowledge tags、3 个 method tags、2 个 unresolved model candidates 和中档 difficulty。
