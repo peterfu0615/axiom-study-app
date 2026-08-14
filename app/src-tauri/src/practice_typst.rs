@@ -1170,6 +1170,7 @@ mod tests {
                 vec![
                     paragraph("答案与解题过程"),
                     formula(r"\because \text{一次函数 } y=(3m+1)x-2 \therefore m>-\frac{1}{3}"),
+                    formula(r"\therefore \begin{cases} -2k + b = 0 \\ b = 4 \end{cases}"),
                     formula(r"x^2+2x+1"),
                 ],
             ),

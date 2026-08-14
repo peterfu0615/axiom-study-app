@@ -122,6 +122,12 @@ export function SegmentedControl<T extends string>({
           disabled={option.disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onChange(option.value)
+            }
+          }}
           role="tab"
           tabIndex={value === option.value ? 0 : -1}
           type="button"
@@ -155,7 +161,14 @@ export function Tabs<T extends string>({
           disabled={option.disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onChange(option.value)
+            }
+          }}
           role="tab"
+          tabIndex={value === option.value ? 0 : -1}
           type="button"
         >
           <span>{option.label}</span>

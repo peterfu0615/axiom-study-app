@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { PracticeSet } from '../../domain/practice'
 import { PracticeSetView } from './PracticeSetView'
+import { shouldAutoPreparePracticeDocument } from './practiceDocumentState'
 
 const practiceSet: PracticeSet = {
   id: 'set-1', subject: '数学', sourceType: 'review_unit', sourceRef: 'module-1',
@@ -19,6 +20,12 @@ const practiceSet: PracticeSet = {
 }
 
 describe('PracticeSetView', () => {
+  it('does not restart document generation after a terminal error or for results', () => {
+    expect(shouldAutoPreparePracticeDocument({ attemptLoaded: true, mode: 'ready', hasDocument: false, documentState: 'idle' })).toBe(true)
+    expect(shouldAutoPreparePracticeDocument({ attemptLoaded: true, mode: 'ready', hasDocument: false, documentState: 'error' })).toBe(false)
+    expect(shouldAutoPreparePracticeDocument({ attemptLoaded: true, mode: 'results', hasDocument: false, documentState: 'idle' })).toBe(false)
+  })
+
   it('presents one document workspace and keeps internal terms out of the interface', () => {
     const html = renderToStaticMarkup(<PracticeSetView onBack={() => {}} practiceSet={practiceSet} />)
     expect(html).toContain('练习文档章节')

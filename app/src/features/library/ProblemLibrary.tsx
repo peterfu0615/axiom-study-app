@@ -39,7 +39,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState } from '../../components/ui'
+import { Button, Dialog, ErrorState, SegmentedControl } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -623,28 +623,12 @@ export function ProblemLibrary() {
           <p className="eyebrow">知识资产</p>
           <h1>错题库</h1>
         </div>
-        <div className="library-view-switch" role="tablist">
-          <button
-            aria-selected={view === 'active'}
-            className={view === 'active' ? 'active' : ''}
-            disabled={editing}
-            onClick={() => setView('active')}
-            role="tab"
-            type="button"
-          >
-            错题
-          </button>
-          <button
-            aria-selected={view === 'archived'}
-            className={view === 'archived' ? 'active' : ''}
-            disabled={editing}
-            onClick={() => setView('archived')}
-            role="tab"
-            type="button"
-          >
-            已归档
-          </button>
-        </div>
+        <SegmentedControl
+          ariaLabel="错题库视图"
+          onChange={setView}
+          options={[{ value: 'active', label: '错题', disabled: editing }, { value: 'archived', label: '已归档', disabled: editing }]}
+          value={view}
+        />
       </header>
 
       <section className="library-layout">
@@ -830,26 +814,12 @@ export function ProblemLibrary() {
                 </div>
               ) : (
                 <>
-                  <div className="problem-detail-tabs" role="tablist">
-                    <button
-                      aria-selected={detailTab === 'content'}
-                      className={detailTab === 'content' ? 'active' : ''}
-                      onClick={() => setDetailTab('content')}
-                      role="tab"
-                      type="button"
-                    >
-                      题目内容
-                    </button>
-                    <button
-                      aria-selected={detailTab === 'info'}
-                      className={detailTab === 'info' ? 'active' : ''}
-                      onClick={() => setDetailTab('info')}
-                      role="tab"
-                      type="button"
-                    >
-                      信息
-                    </button>
-                  </div>
+                  <SegmentedControl
+                    ariaLabel="错题详情视图"
+                    onChange={setDetailTab}
+                    options={[{ value: 'content', label: '题目内容' }, { value: 'info', label: '信息' }]}
+                    value={detailTab}
+                  />
 
                   <div className="problem-detail-content">
                   {detailTab === 'content' ? (
@@ -1043,33 +1013,6 @@ export function ProblemLibrary() {
                         onRetrySolution={() => void retrySolution()}
                       />
 
-                      <section className="problem-learning-next">
-                        <header>
-                          <div>
-                            <p className="eyebrow">继续学习</p>
-                            <h3>围绕这道错题继续整理</h3>
-                          </div>
-                          <span>功能预留</span>
-                        </header>
-                        <div className="problem-learning-actions">
-                          <article>
-                            <span className="learning-action-index">01</span>
-                            <div>
-                              <h4>错因分析</h4>
-                              <p>记录错误步骤与原因</p>
-                            </div>
-                            <small>即将开放</small>
-                          </article>
-                          <article>
-                            <span className="learning-action-index">02</span>
-                            <div>
-                              <h4>加入复习</h4>
-                              <p>在合适的时间再次练习</p>
-                            </div>
-                            <small>即将开放</small>
-                          </article>
-                        </div>
-                      </section>
                     </div>
                   ) : (
                     <div className="problem-information-page">

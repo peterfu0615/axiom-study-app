@@ -2,9 +2,7 @@ use std::iter::Peekable;
 use std::str::Chars;
 
 pub fn latex_to_typst(input: &str) -> Result<String, String> {
-    let mut parser = Parser {
-        chars: input.chars().peekable(),
-    };
+    let mut parser = Parser::new(input);
     let output = parser.parse_until(None)?;
     if output.contains('\0') {
         return Err("公式包含无效字符".to_string());
@@ -32,6 +30,7 @@ fn normalize_identifier_runs(value: &str) -> String {
         "infinity",
         "frac",
         "sqrt",
+        "cases",
         "bold",
         "italic",
         "sans",
@@ -126,6 +125,12 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
+    fn new(input: &str) -> Parser<'_> {
+        Parser {
+            chars: input.chars().peekable(),
+        }
+    }
+
     fn parse_until(&mut self, terminator: Option<char>) -> Result<String, String> {
         let mut output = String::new();
         while let Some(character) = self.chars.next() {
@@ -243,11 +248,76 @@ impl Parser<'_> {
             | "Xi" | "Pi" | "Sigma" | "Upsilon" | "Phi" | "Psi" | "Omega" => {
                 Ok(name.to_ascii_lowercase())
             }
-            "begin" | "end" => Err(format!(
-                "公式暂不支持 LaTeX 环境命令 \\{name}；请使用独立公式行"
-            )),
+            "begin" => {
+                let environment = self.required_raw_group(&name)?;
+                match environment.as_str() {
+                    "cases" => self.parse_cases_environment(),
+                    _ => Err(format!("公式暂不支持 LaTeX 环境 \\begin{{{environment}}}")),
+                }
+            }
+            "end" => Err("公式包含未匹配的 LaTeX 环境结束命令 \\end".to_string()),
             _ => Err(format!("不支持的 LaTeX 命令：\\{name}")),
         }
+    }
+
+    fn parse_cases_environment(&mut self) -> Result<String, String> {
+        let mut body = String::new();
+        let mut brace_depth = 0usize;
+        loop {
+            let Some(character) = self.chars.next() else {
+                return Err("LaTeX cases 环境缺少 \\end{cases}".to_string());
+            };
+
+            match character {
+                '{' => {
+                    brace_depth += 1;
+                    body.push(character);
+                }
+                '}' => {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    body.push(character);
+                }
+                '\\' if brace_depth == 0 => {
+                    let mut command = String::new();
+                    while self
+                        .chars
+                        .peek()
+                        .is_some_and(|value| value.is_ascii_alphabetic())
+                    {
+                        command.push(self.chars.next().expect("peeked character"));
+                    }
+                    if command == "end" {
+                        let closing = self.required_raw_group("end")?;
+                        if closing == "cases" {
+                            return self.render_cases_rows(&body);
+                        }
+                        body.push_str("\\end{");
+                        body.push_str(&closing);
+                        body.push('}');
+                    } else {
+                        body.push('\\');
+                        body.push_str(&command);
+                    }
+                }
+                _ => body.push(character),
+            }
+        }
+    }
+
+    fn render_cases_rows(&self, body: &str) -> Result<String, String> {
+        let rows = body
+            .split("\\\\")
+            .map(str::trim)
+            .filter(|row| !row.is_empty())
+            .map(|row| {
+                let mut parser = Parser::new(row);
+                parser.parse_until(None)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.is_empty() {
+            return Err("LaTeX cases 环境不包含有效行".to_string());
+        }
+        Ok(format!("cases({})", rows.join(", ")))
     }
 
     fn required_group(&mut self, command: &str) -> Result<String, String> {
@@ -331,6 +401,32 @@ mod tests {
             latex_to_typst(r"\because m>-\frac{\sqrt{3}}{2}\therefore \text{成立}").unwrap(),
             r#"because m>-frac(sqrt(3), 2)therefore "成立""#
         );
+    }
+
+    #[test]
+    fn converts_cases_environment_without_leaking_latex_commands() {
+        let converted =
+            latex_to_typst(r"\therefore \begin{cases} -2k + b = 0 \\ b = 4 \end{cases}").unwrap();
+        assert_eq!(converted, "therefore cases(-2k + b = 0, b = 4)");
+        assert!(!converted.contains("begin"));
+        assert!(!converted.contains("end"));
+    }
+
+    #[test]
+    fn parses_math_commands_inside_cases_rows() {
+        assert_eq!(
+            latex_to_typst(r"\begin{cases} x=\frac{1}{2} \\ y=\sqrt{3} \end{cases}").unwrap(),
+            "cases(x=frac(1, 2), y=sqrt(3))"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_unknown_environments_without_plain_text_fallback() {
+        let missing_end = latex_to_typst(r"\begin{cases} x=1").unwrap_err();
+        assert!(missing_end.contains("缺少"));
+        let unknown = latex_to_typst(r"\begin{aligned} x&=1 \end{aligned}").unwrap_err();
+        assert!(unknown.contains("aligned"));
+        assert!(!unknown.contains("typst"));
     }
 
     #[test]

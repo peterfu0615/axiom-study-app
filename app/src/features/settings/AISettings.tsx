@@ -11,7 +11,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { ListboxSelect } from '../../components/ui'
+import { ListboxSelect, Tabs } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 
@@ -184,52 +184,20 @@ export function AISettings() {
       </header>
 
       <section className="settings-shell">
-        <nav className="settings-tabs" role="tablist">
-          <button
-            aria-selected={tab === 'maintenance'}
-            className={tab === 'maintenance' ? 'active' : ''}
-            onClick={() => setTab('maintenance')}
-            role="tab"
-            type="button"
-          >
-            数据维护
-          </button>
-          <button
-            aria-selected={tab === 'providers'}
-            className={tab === 'providers' ? 'active' : ''}
-            onClick={() => setTab('providers')}
-            role="tab"
-            type="button"
-          >
-            AI 模型
-          </button>
-          <button
-            aria-selected={tab === 'appearance'}
-            className={tab === 'appearance' ? 'active' : ''}
-            onClick={() => setTab('appearance')}
-            role="tab"
-            type="button"
-          >
-            外观
-          </button>
-          <button
-            aria-selected={tab === 'about'}
-            className={tab === 'about' ? 'active' : ''}
-            onClick={() => setTab('about')}
-            role="tab"
-            type="button"
-          >
-            关于
-          </button>
-          <button
-            aria-selected={tab === 'update'}
-            className={tab === 'update' ? 'active' : ''}
-            onClick={() => setTab('update')}
-            role="tab"
-            type="button"
-          >
-            更新
-          </button>
+        <nav className="settings-tabs">
+          <Tabs
+            ariaLabel="设置分区"
+            onChange={setTab}
+            options={[
+              { value: 'maintenance', label: '数据维护' },
+              { value: 'providers', label: 'AI 模型' },
+              { value: 'appearance', label: '外观' },
+              { value: 'about', label: '关于' },
+              { value: 'update', label: '更新' },
+            ]}
+            value={tab}
+            variant="rail"
+          />
         </nav>
 
         <div className="settings-pane">

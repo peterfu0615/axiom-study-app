@@ -7,6 +7,7 @@ import {
   onDownloadProgress,
   type UpdateInfo,
 } from '../../platform/native'
+import { Button } from '../../components/ui'
 
 /** 格式化文件大小为人类可读字符串。 */
 function formatSize(bytes: number): string {
@@ -64,7 +65,8 @@ export function UpdateSettings() {
       setUpdateInfo(info)
       setHasChecked(true)
     } catch (e) {
-      setError(String(e))
+      console.error('检查更新失败', e)
+      setError('暂时无法连接更新服务，请稍后重试。')
       setHasChecked(true)
     } finally {
       setChecking(false)
@@ -91,7 +93,8 @@ export function UpdateSettings() {
       )
       // 成功后进程会退出，这里不会执行到
     } catch (e) {
-      setError(`更新失败：${String(e)}`)
+      console.error('安装更新失败', e)
+      setError('更新未能完成，请稍后重试。')
       setDownloading(false)
       unlistenRef.current?.()
       unlistenRef.current = null
@@ -139,7 +142,7 @@ export function UpdateSettings() {
           <strong>检查更新失败</strong>
           <p>{error}</p>
           <p className="update-hint">
-            请稍后重试；更新源为 Axiom GitHub Release，服务暂时不可用时不会影响本地数据。
+            请稍后重试；更新服务不可用时不会影响本地数据。
           </p>
         </div>
       )}
@@ -178,23 +181,14 @@ export function UpdateSettings() {
 
       <div className="update-actions">
         {!downloading && (
-          <button
-            className="secondary-action"
-            disabled={checking}
-            onClick={() => void handleCheck()}
-            type="button"
-          >
-            {checking ? '检查中…' : '检查更新'}
-          </button>
+          <Button disabled={checking} loading={checking} onClick={() => void handleCheck()} variant="secondary">
+            检查更新
+          </Button>
         )}
         {updateInfo && !downloading && (
-          <button
-            className="primary-button"
-            onClick={() => void handleInstall()}
-            type="button"
-          >
+          <Button onClick={() => void handleInstall()} variant="primary">
             立即更新并重启
-          </button>
+          </Button>
         )}
       </div>
     </div>
