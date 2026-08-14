@@ -129,6 +129,7 @@ export function Icon({
     <svg
       aria-hidden="true"
       className="icon"
+      focusable="false"
       fill="none"
       height={size}
       viewBox="0 0 24 24"

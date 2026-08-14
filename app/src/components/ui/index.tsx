@@ -36,8 +36,38 @@ export function Button({
       disabled={loading || props.disabled}
     >
       {loading && <span aria-hidden="true" className="ax-spinner ax-button__spinner" />}
-      <span>{children}</span>
+      <span className="ax-button__content">{children}</span>
     </button>
+  )
+}
+
+export function PageHeader({
+  eyebrow,
+  title,
+  summary,
+  leading,
+  actions,
+  className = '',
+}: {
+  eyebrow: ReactNode
+  title: ReactNode
+  summary?: ReactNode
+  leading?: ReactNode
+  actions?: ReactNode
+  className?: string
+}) {
+  return (
+    <header className={`workspace-header ax-page-header ${className}`.trim()}>
+      <div className="ax-page-header__main">
+        {leading && <div className="ax-page-header__leading">{leading}</div>}
+        <div className="ax-page-header__copy">
+          <p className="eyebrow ax-page-header__eyebrow">{eyebrow}</p>
+          <h1 className="ax-page-header__title">{title}</h1>
+          {summary && <p className="subtitle ax-page-header__summary">{summary}</p>}
+        </div>
+      </div>
+      {actions && <div className="ax-page-header__actions">{actions}</div>}
+    </header>
   )
 }
 
