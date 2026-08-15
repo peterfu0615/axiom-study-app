@@ -97,4 +97,15 @@ describe('design system foundations', () => {
     expect(refinement).toMatch(/\.segmented-control button \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
     expect(refinement).not.toMatch(/\.segmented-control[^}]*translateY/u)
   })
+
+  it('keeps feature headers and compact AI actions on shared primitives', () => {
+    const insights = readFileSync(new URL('../../features/insights/InsightsWorkspace.tsx', import.meta.url), 'utf8')
+    const insightsCss = readFileSync(new URL('../../features/insights/Insights.css', import.meta.url), 'utf8')
+    const library = readFileSync(new URL('../../features/library/ProblemLibrary.tsx', import.meta.url), 'utf8')
+
+    expect(insights).toContain('<PageHeader')
+    expect(insightsCss).not.toContain('.insights-header')
+    expect(library).toContain('<button className="problem-ai-notice__action"')
+    expect(library).not.toMatch(/selectedIsProcessing[\s\S]{0,160}<Button[^>]*variant="ghost"/u)
+  })
 })

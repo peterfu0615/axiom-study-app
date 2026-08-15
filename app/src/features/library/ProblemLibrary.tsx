@@ -838,6 +838,7 @@ export function ProblemLibrary() {
                               selected.aiStatus,
                             ) && (
                               <button
+                                className="problem-ai-notice__action"
                                 disabled={updating}
                                 onClick={() => void retryAI()}
                                 type="button"
@@ -848,9 +849,9 @@ export function ProblemLibrary() {
                               </button>
                             )}
                             {selectedIsProcessing && (
-                              <Button disabled={updating} onClick={() => void cancelAI()} variant="ghost">
+                              <button className="problem-ai-notice__action" disabled={updating} onClick={() => void cancelAI()} type="button">
                                 取消分析
-                              </Button>
+                              </button>
                             )}
                           </div>
                         </header>

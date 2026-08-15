@@ -145,8 +145,7 @@
   padding: 40px var(--ax-page-gutter) 34px;
 }
 
-.today-header,
-.insights-header {
+.today-header {
   max-width: none;
 }
 

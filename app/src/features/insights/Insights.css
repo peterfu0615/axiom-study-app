@@ -1,5 +1,4 @@
 .insights-workspace { width: 100%; }
-.insights-header { align-items: flex-end; }
 .insights-range { display: flex; gap: var(--ax-space-2); }
 .insights-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: var(--ax-space-7) 0; border-block: 1px solid var(--ax-border-default); }
 .insights-overview > div { display: grid; gap: var(--ax-space-2); padding: var(--ax-space-6); border-right: 1px solid var(--ax-border-subtle); }
@@ -40,7 +39,6 @@
 .insights-ranked span, .insights-ranked b { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); font-weight: normal; }
 .insights-ranked strong { min-width: 0; color: var(--ax-text-primary); font-size: var(--ax-type-secondary-size); overflow-wrap: anywhere; }
 @media (max-width: 820px) {
-  .insights-header { align-items: start; flex-direction: column; }
   .insights-overview { grid-template-columns: repeat(2, 1fr); }
   .insights-overview > div:nth-child(2) { border-right: 0; }
   .insights-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--ax-border-subtle); }

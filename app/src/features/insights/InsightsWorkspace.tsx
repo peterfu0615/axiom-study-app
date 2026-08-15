@@ -69,7 +69,6 @@ export function InsightsWorkspace() {
         <Button onClick={() => setRange(7)} variant={range === 7 ? 'primary' : 'secondary'}>最近 7 天</Button>
         <Button onClick={() => setRange(30)} variant={range === 30 ? 'primary' : 'secondary'}>最近 30 天</Button>
       </div>}
-      className="insights-header"
       eyebrow="学习趋势"
       summary="复习趋势与掌握变化"
       title="洞察"

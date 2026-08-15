@@ -1784,6 +1784,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 24px;
   min-height: 24px;
   padding: 0 8px;
   border-radius: 999px;
@@ -1800,7 +1801,11 @@
   color: var(--brand-pressed);
 }
 
-.problem-ai-notice button {
+.problem-ai-notice__action {
+  min-width: 0;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
   padding: 0 0 0 6px;
   border: 0;
   border-left: 1px solid var(--border);
@@ -1810,7 +1815,13 @@
   cursor: pointer;
 }
 
-.problem-ai-notice button:disabled {
+.problem-ai-notice__action:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid color-mix(in srgb, var(--ax-accent) 68%, transparent);
+  outline-offset: 2px;
+}
+
+.problem-ai-notice__action:disabled {
   cursor: default;
   opacity: 0.5;
 }
@@ -2610,7 +2621,7 @@
 
 .comparison-modal-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 15px;
   padding: 18px 20px 14px;
