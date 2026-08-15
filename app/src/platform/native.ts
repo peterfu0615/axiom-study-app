@@ -221,6 +221,7 @@ export interface CompletePdfRenderResult extends PdfRenderResult {
     solution: PracticeSectionPageRange
   }
   pages: RenderedPracticeDocumentPage[]
+  degradedSolutionItemIds?: string[]
 }
 
 export function renderPracticePdf(document: PracticeDocument) {

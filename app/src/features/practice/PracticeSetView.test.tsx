@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
+import { readFileSync } from 'node:fs'
 import type { PracticeSet } from '../../domain/practice'
 import { PracticeSetView } from './PracticeSetView'
 import { shouldAutoPreparePracticeDocument } from './practiceDocumentState'
@@ -38,5 +40,10 @@ describe('PracticeSetView', () => {
     expect(html).toContain('已保存')
     expect(html).not.toContain('x=2')
     expect(html).not.toMatch(/Practice Set|deterministic-v1|Review Unit|SkillState|Practice Loop/)
+  })
+
+  it('allows both selecting an answer file and saving an exported PDF', () => {
+    const capability = JSON.parse(readFileSync(new URL('../../../src-tauri/capabilities/default.json', import.meta.url), 'utf8')) as { permissions: string[] }
+    expect(capability.permissions).toEqual(expect.arrayContaining(['dialog:allow-open', 'dialog:allow-save']))
   })
 })

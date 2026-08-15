@@ -104,6 +104,18 @@ function solutionMarkdown(item: PracticeItem) {
   } catch { return '' }
 }
 
+function solutionContent(item: PracticeItem): PracticeContentBlock[] {
+  const answer = item.canonicalAnswer.trim()
+  const solution = solutionMarkdown(item).trim()
+  if (!answer && !solution) {
+    return [{ kind: 'paragraph', content: [{ kind: 'text', text: '当前题目的答案与解析暂不可用。' }] }]
+  }
+  return [
+    ...(answer ? [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: '答案：' }, ...parsePracticeInlineContent(answer)] }] : []),
+    ...(solution ? parsePracticeMarkdown(solution) : [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: '详细解析暂不可用。' }] }]),
+  ]
+}
+
 function readBalancedGroup(value: string, openIndex: number) {
   if (value[openIndex] !== '{') return { text: '', end: openIndex }
   let depth = 0
@@ -339,10 +351,9 @@ function questionBlock(item: PracticeItem, section: PracticeSectionKind): Practi
       ...parsePracticeMarkdown(item.statementMarkdown),
       ...(item.options?.length ? [{ kind: 'list' as const, ordered: false, items: item.options.map((option, index) => parsePracticeInlineContent(`${String.fromCharCode(65 + index)}. ${option}`)) }] : []),
       ...printableImages(item),
-      ...(section === 'exercise' ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }] : [
-        { kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: '答案：' }, ...parsePracticeInlineContent(item.canonicalAnswer)] },
-        ...parsePracticeMarkdown(solutionMarkdown(item)),
-      ]),
+      ...(section === 'exercise'
+        ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }]
+        : solutionContent(item)),
     ]
   return { kind: 'question', practiceItemId: item.id, displayNumber: item.orderIndex + 1, content }
 }

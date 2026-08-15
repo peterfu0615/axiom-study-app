@@ -116,12 +116,12 @@ jobs:
           # 都具备完整的 CodeResources；不能等 DMG 生成后再补签名。
           APPLE_SIGNING_IDENTITY=- npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
 
-      - name: Finalize sandboxed vision sidecar and DMG
+      - name: Finalize sandboxed sidecars and DMG
         run: |
           base="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle"
           app="$base/macos/Axiom.app"
           dmg="$base/dmg/Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.dmg"
-          bash scripts/finalize-macos-bundle.sh "$PWD/$app" "$PWD/$dmg"
+          bash scripts/finalize-macos-sidecars.sh "$PWD/$app" "$PWD/$dmg"
 
       - name: Verify macOS app bundle signature
         run: |
