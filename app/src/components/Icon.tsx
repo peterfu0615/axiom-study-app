@@ -1,4 +1,4 @@
-type IconName =
+export type IconName =
   | 'today'
   | 'capture'
   | 'library'
@@ -16,6 +16,7 @@ type IconName =
   | 'plus'
   | 'trash'
   | 'alert'
+  | 'info'
   | 'ai'
   | 'sun'
   | 'moon'
@@ -99,6 +100,12 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7.5v5M12 16.5h.01" />
+    </>
+  ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 10v6M12 7.5h.01" />
     </>
   ),
   ai: (

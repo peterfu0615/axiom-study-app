@@ -188,11 +188,11 @@ export function AISettings() {
             ariaLabel="设置分区"
             onChange={setTab}
             options={[
-              { value: 'maintenance', label: '数据维护' },
-              { value: 'providers', label: 'AI 模型' },
-              { value: 'appearance', label: '外观' },
-              { value: 'about', label: '关于' },
-              { value: 'update', label: '更新' },
+              { value: 'maintenance', label: '数据维护', icon: 'refresh' },
+              { value: 'providers', label: 'AI 模型', icon: 'ai' },
+              { value: 'appearance', label: '外观', icon: 'sun' },
+              { value: 'about', label: '关于', icon: 'info' },
+              { value: 'update', label: '更新', icon: 'download' },
             ]}
             value={tab}
             variant="rail"

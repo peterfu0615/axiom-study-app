@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
 import { readFileSync } from 'node:fs'
-import { Badge, Button, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag } from './index'
+import { Badge, Button, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag, Tabs } from './index'
 import { Icon } from '../Icon'
 
 describe('design system foundations', () => {
@@ -96,6 +96,28 @@ describe('design system foundations', () => {
     expect(ui).toMatch(/\.ax-button__content \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
     expect(refinement).toMatch(/\.segmented-control button \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
     expect(refinement).not.toMatch(/\.segmented-control[^}]*translateY/u)
+  })
+
+  it('supports icon-bearing rail tabs for settings navigation', () => {
+    const settings = readFileSync(new URL('../../features/settings/AISettings.tsx', import.meta.url), 'utf8')
+    const ui = readFileSync(new URL('./ui.css', import.meta.url), 'utf8')
+    const html = renderToStaticMarkup(
+      <Tabs
+        ariaLabel="设置分区"
+        onChange={() => undefined}
+        options={[{ value: 'providers', label: 'AI 模型', icon: 'ai' }]}
+        value="providers"
+        variant="rail"
+      />,
+    )
+
+    expect(html).toContain('ax-tabs__content')
+    expect(html).toContain('ax-tabs__icon')
+    expect(html).toContain('class="icon"')
+    expect(ui).toMatch(/\.ax-tabs__content \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
+    for (const icon of ['refresh', 'ai', 'sun', 'info', 'download']) {
+      expect(settings).toContain(`icon: '${icon}'`)
+    }
   })
 
   it('keeps feature headers and compact AI actions on shared primitives', () => {
