@@ -13,6 +13,7 @@
 //!   - `Axiom_<version>_<arch>.app.zip.sha256` — SHA256 校验值（可选但推荐）
 
 use futures_util::StreamExt;
+use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -61,8 +62,8 @@ pub struct UpdateInfo {
     pub published_at: String,
     /// `.app.zip` 下载 URL
     pub download_url: String,
-    /// 下载文件大小（字节）
-    pub download_size: u64,
+    /// 下载文件大小（字节）；部分代理可能不返回长度，此时为 `null`。
+    pub download_size: Option<u64>,
     /// `.sha256` 校验文件 URL（可能为空）
     pub sha256_url: Option<String>,
 }
@@ -71,8 +72,13 @@ pub struct UpdateInfo {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DownloadProgress {
     pub downloaded: u64,
-    pub total: u64,
-    pub percent: f64,
+    pub total: Option<u64>,
+    pub percent: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AssetMetadata {
+    size: Option<u64>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -90,33 +96,39 @@ pub fn get_app_version() -> String {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     let current = env!("CARGO_PKG_VERSION");
+    let arch = std::env::consts::ARCH;
     let url = format!("https://github.com/{UPDATE_OWNER}/{UPDATE_REPO}/releases.atom");
 
     let client = reqwest::Client::builder()
         .user_agent(format!("Axiom/{current} (macOS self-updater)"))
         .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+        .map_err(|_| update_failure("feed", "client_build", None))?;
 
     let response = client
         .get(&url)
         .header("Accept", "application/atom+xml")
         .send()
         .await
-        .map_err(|e| format!("请求 GitHub Release feed 失败：{e}"))?;
+        .map_err(|_| update_failure("feed", "request", None))?;
 
     let status = response.status();
     let feed = response
         .text()
         .await
-        .map_err(|e| format!("读取 GitHub Release feed 失败（HTTP {status}）：{e}"))?;
+        .map_err(|_| update_failure("feed", "read", Some(status)))?;
     if !status.is_success() {
-        return Err(format!(
-            "GitHub Release feed 请求失败（HTTP {status}）：{}",
-            summarize_remote_error(&feed)
-        ));
+        log::warn!(
+            target: "axiom_lib::updater",
+            "更新 feed 返回非成功状态 stage=feed code=http_status version={} arch={} http_status={}",
+            current,
+            arch,
+            status.as_u16()
+        );
+        return Err(update_failure("feed", "http_status", Some(status)));
     }
 
-    let release = parse_release_feed(&feed)?;
+    let release =
+        parse_release_feed(&feed).map_err(|_| update_failure("feed", "parse", Some(status)))?;
     let latest = release.tag_name.trim_start_matches('v').to_string();
 
     if !is_newer(&latest, current) {
@@ -125,14 +137,13 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     }
 
     // 根据当前架构选择对应的资产
-    let arch = std::env::consts::ARCH; // "aarch64" or "x86_64"
     let version = latest.trim_start_matches('v');
     let zip_url = release_asset_url(&release.tag_name, arch, false);
-    let download_size = head_asset(&client, &zip_url)
+    let zip_metadata = probe_asset(&client, &zip_url)
         .await?
-        .ok_or_else(|| format!("Release 中未找到 {arch} 架构的 .app.zip 资产"))?;
+        .ok_or_else(|| update_failure("asset_probe", "zip_missing", None))?;
     let sha_url = release_asset_url(&release.tag_name, arch, true);
-    let sha256_url = head_asset(&client, &sha_url).await?.map(|_| sha_url);
+    let sha256_url = probe_asset(&client, &sha_url).await?.map(|_| sha_url);
 
     let info = UpdateInfo {
         version: version.to_string(),
@@ -140,15 +151,17 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
         release_notes: release.body,
         published_at: release.published_at,
         download_url: zip_url,
-        download_size,
+        download_size: zip_metadata.size,
         sha256_url,
     };
 
     log::info!(
-        "发现新版本：{} → {}（{}bytes）",
+        "发现新版本：{} → {}（{}）",
         info.current_version,
         info.version,
         info.download_size
+            .map(|size| format!("{size}bytes"))
+            .unwrap_or_else(|| "size-unknown".to_string())
     );
     Ok(Some(info))
 }
@@ -165,19 +178,96 @@ fn release_asset_url(tag: &str, arch: &str, sha256: bool) -> String {
     )
 }
 
-async fn head_asset(client: &reqwest::Client, url: &str) -> Result<Option<u64>, String> {
+async fn probe_asset(client: &reqwest::Client, url: &str) -> Result<Option<AssetMetadata>, String> {
     let response = client
         .head(url)
         .send()
         .await
-        .map_err(|e| format!("检查更新资产失败：{e}"))?;
-    if response.status().is_success() {
-        return Ok(Some(response.content_length().unwrap_or_default()));
-    }
-    if response.status().as_u16() == 404 {
+        .map_err(|_| update_failure("asset_probe", "head_request", None))?;
+    let status = response.status();
+    if status.as_u16() == 404 {
         return Ok(None);
     }
-    Err(format!("检查更新资产失败：HTTP {}", response.status()))
+    if status.is_success() {
+        if let Some(size) = header_content_length(response.headers()) {
+            return Ok(Some(AssetMetadata { size: Some(size) }));
+        }
+        return probe_asset_with_range(client, url).await;
+    }
+
+    // 某些代理或对象存储实现不支持 HEAD，但允许带 Range 的 GET。
+    if status.as_u16() == 405 || status.is_redirection() {
+        return probe_asset_with_range(client, url).await;
+    }
+
+    Err(update_failure(
+        "asset_probe",
+        "head_http_status",
+        Some(status),
+    ))
+}
+
+async fn probe_asset_with_range(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Option<AssetMetadata>, String> {
+    let response = client
+        .get(url)
+        .header(RANGE, "bytes=0-0")
+        .send()
+        .await
+        .map_err(|_| update_failure("asset_probe", "range_request", None))?;
+    let status = response.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if status.as_u16() == 206 {
+        let size = content_range_total(response.headers());
+        return Ok(Some(AssetMetadata { size }));
+    }
+    if status.is_success() {
+        return Ok(Some(AssetMetadata {
+            size: header_content_length(response.headers()),
+        }));
+    }
+
+    Err(update_failure(
+        "asset_probe",
+        "range_http_status",
+        Some(status),
+    ))
+}
+
+fn header_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|size| *size > 0)
+}
+
+fn content_range_total(headers: &HeaderMap) -> Option<u64> {
+    let value = headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())?;
+    let total = value.rsplit_once('/')?.1.trim();
+    if total == "*" {
+        return None;
+    }
+    total.parse::<u64>().ok().filter(|size| *size > 0)
+}
+
+fn update_failure(stage: &str, code: &str, status: Option<reqwest::StatusCode>) -> String {
+    log::error!(
+        target: "axiom_lib::updater",
+        "更新失败 stage={} code={} version={} arch={} http_status={}",
+        stage,
+        code,
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH,
+        status.map_or_else(|| "none".to_string(), |value| value.as_u16().to_string())
+    );
+    format!("更新失败（{code}）")
 }
 
 fn parse_release_feed(feed: &str) -> Result<FeedRelease, String> {
@@ -266,15 +356,6 @@ fn html_to_text(value: &str) -> String {
         .join("\n")
 }
 
-fn summarize_remote_error(body: &str) -> String {
-    let body = body.trim();
-    if body.is_empty() {
-        return "远端没有返回错误详情".to_string();
-    }
-    let body = body.replace(['\n', '\r'], " ");
-    body.chars().take(240).collect()
-}
-
 /// 下载并安装更新。下载进度通过 `update://progress` 事件报告。
 /// 完成后退出当前进程，由 detached 脚本完成替换和重启。
 #[tauri::command(rename_all = "camelCase")]
@@ -288,11 +369,11 @@ pub async fn download_and_install_update(
     let client = reqwest::Client::builder()
         .user_agent(format!("Axiom/{current_version} (macOS self-updater)"))
         .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+        .map_err(|_| update_failure("download", "client_build", None))?;
 
     // 每次更新使用独立目录，避免残留安装脚本或并发更新互相删除文件。
     let update_dir = std::env::temp_dir().join(format!("axiom-update-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&update_dir).map_err(|e| format!("无法创建更新临时目录：{e}"))?;
+    std::fs::create_dir_all(&update_dir).map_err(|_| update_failure("temp_dir", "create", None))?;
 
     // 1. 下载 .app.zip（带进度）
     let zip_path = update_dir.join("Axiom.app.zip");
@@ -309,33 +390,36 @@ pub async fn download_and_install_update(
     // 3. 解压 .app.zip → Axiom.app
     let new_app_path = update_dir.join("Axiom.app");
     if new_app_path.exists() {
-        std::fs::remove_dir_all(&new_app_path).map_err(|e| format!("清理旧解压产物失败：{e}"))?;
+        std::fs::remove_dir_all(&new_app_path)
+            .map_err(|_| update_failure("unzip", "cleanup", None))?;
     }
     log::info!("解压更新包...");
-    unzip_app_bundle(&zip_path, &update_dir)?;
+    unzip_app_bundle(&zip_path, &update_dir)
+        .map_err(|_| update_failure("unzip", "extract", None))?;
 
     if !new_app_path.exists() {
-        return Err(format!(
-            "解压后未找到 Axiom.app（在 {}）",
-            update_dir.display()
-        ));
+        return Err(update_failure("unzip", "bundle_missing", None));
     }
-    validate_update_bundle(&new_app_path, &expected_version)?;
+    validate_update_bundle(&new_app_path, &expected_version)
+        .map_err(|_| update_failure("bundle_validate", "invalid_bundle", None))?;
 
     // 4. 定位并预检当前 .app bundle。必须在退出前确认原位置可写，
     // 否则不能让用户先失去正在运行的旧版本。
-    let app_bundle_path = current_app_bundle_path()?;
-    ensure_update_target_is_writable(&app_bundle_path)?;
+    let app_bundle_path = current_app_bundle_path()
+        .map_err(|_| update_failure("target_preflight", "bundle_path", None))?;
+    ensure_update_target_is_writable(&app_bundle_path)
+        .map_err(|_| update_failure("target_preflight", "target_not_writable", None))?;
 
     // 安装脚本会在当前进程退出后继续运行；日志不能放在会被清理的临时目录里。
     let install_log_path = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法定位更新日志目录：{e}"))?
+        .map_err(|_| update_failure("installer", "log_dir", None))?
         .join("logs")
         .join("update-install.log");
     if let Some(parent) = install_log_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建更新日志目录：{e}"))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|_| update_failure("installer", "log_dir_create", None))?;
     }
 
     // 5. 生成并启动 detached 安装脚本
@@ -347,7 +431,8 @@ pub async fn download_and_install_update(
         &update_dir,
         &install_log_path,
         &expected_version,
-    )?;
+    )
+    .map_err(|_| update_failure("installer", "script_write", None))?;
 
     log::info!("启动 detached 安装脚本：{}", script_path.display());
     std::process::Command::new("bash")
@@ -356,7 +441,7 @@ pub async fn download_and_install_update(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("无法启动安装脚本：{e}"))?;
+        .map_err(|_| update_failure("installer", "script_spawn", None))?;
 
     // 给脚本一点时间初始化，然后退出应用
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -380,28 +465,26 @@ async fn download_with_progress(
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("下载请求失败：{e}"))?;
+        .map_err(|_| update_failure("download", "request", None))?;
 
-    if !response.status().is_success() {
-        return Err(format!("下载失败：HTTP {}", response.status()));
+    let status = response.status();
+    if !status.is_success() {
+        return Err(update_failure("download", "http_status", Some(status)));
     }
 
-    let total = response.content_length().unwrap_or(0);
-    let mut file = std::fs::File::create(dest).map_err(|e| format!("创建下载文件失败：{e}"))?;
+    let total = header_content_length(response.headers());
+    let mut file =
+        std::fs::File::create(dest).map_err(|_| update_failure("download", "file_create", None))?;
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("读取下载数据失败：{e}"))?;
+        let chunk = chunk_result.map_err(|_| update_failure("download", "stream_read", None))?;
         file.write_all(&chunk)
-            .map_err(|e| format!("写入下载文件失败：{e}"))?;
+            .map_err(|_| update_failure("download", "file_write", None))?;
         downloaded += chunk.len() as u64;
-        let percent = if total > 0 {
-            downloaded as f64 / total as f64 * 100.0
-        } else {
-            0.0
-        };
+        let percent = total.map(|total| downloaded as f64 / total as f64 * 100.0);
         let _ = app.emit(
             "update://progress",
             DownloadProgress {
@@ -412,7 +495,8 @@ async fn download_with_progress(
         );
     }
 
-    file.flush().map_err(|e| format!("刷新下载文件失败：{e}"))?;
+    file.flush()
+        .map_err(|_| update_failure("download", "file_flush", None))?;
     log::info!("下载完成：{} bytes → {}", downloaded, dest.display());
     Ok(())
 }
@@ -428,32 +512,31 @@ async fn verify_sha256(
         .get(sha_url)
         .send()
         .await
-        .map_err(|e| format!("下载 SHA256 文件失败：{e}"))?;
+        .map_err(|_| update_failure("verify_sha256", "request", None))?;
 
-    if !sha_response.status().is_success() {
-        return Err(format!(
-            "下载 SHA256 文件失败：HTTP {}",
-            sha_response.status()
-        ));
+    let status = sha_response.status();
+    if !status.is_success() {
+        return Err(update_failure("verify_sha256", "http_status", Some(status)));
     }
 
     let sha_content = sha_response
         .text()
         .await
-        .map_err(|e| format!("读取 SHA256 内容失败：{e}"))?;
+        .map_err(|_| update_failure("verify_sha256", "read", Some(status)))?;
 
     // .sha256 文件格式可能为 "<hash>" 或 "<hash>  <filename>"
     let expected = sha_content.split_whitespace().next().unwrap_or("");
     if expected.is_empty() {
-        return Err("SHA256 文件内容为空".to_string());
+        return Err(update_failure("verify_sha256", "empty", Some(status)));
     }
 
     log::info!("计算下载文件的 SHA256...");
-    let data = std::fs::read(zip_path).map_err(|e| format!("读取下载文件失败：{e}"))?;
+    let data =
+        std::fs::read(zip_path).map_err(|_| update_failure("verify_sha256", "zip_read", None))?;
     let actual = format!("{:x}", Sha256::digest(&data));
 
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(format!("SHA256 校验失败：期望 {expected}，实际 {actual}"));
+        return Err(update_failure("verify_sha256", "mismatch", None));
     }
 
     log::info!("SHA256 校验通过");
@@ -764,7 +847,29 @@ fn is_newer(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
+    use std::thread;
+
+    fn test_asset_server(responses: &[&'static str]) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses = responses
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        let handle = thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        (format!("http://{address}/asset"), handle)
+    }
 
     fn create_signed_test_app(path: &Path, version: &str) {
         let contents = path.join("Contents");
@@ -858,6 +963,101 @@ mod tests {
             release_asset_url("v0.6.2", "aarch64", true),
             "https://github.com/peterfu0615/axiom-study-app/releases/download/v0.6.2/Axiom_0.6.2_aarch64.app.zip.sha256"
         );
+    }
+
+    #[test]
+    fn reads_asset_size_from_content_length_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_LENGTH, "33278783".parse().unwrap());
+        assert_eq!(header_content_length(&headers), Some(33_278_783));
+    }
+
+    #[test]
+    fn treats_zero_or_missing_content_length_as_unknown() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(header_content_length(&headers), None);
+        headers.insert(CONTENT_LENGTH, "0".parse().unwrap());
+        assert_eq!(header_content_length(&headers), None);
+    }
+
+    #[test]
+    fn parses_total_from_content_range() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_RANGE, "bytes 0-0/33278783".parse().unwrap());
+        assert_eq!(content_range_total(&headers), Some(33_278_783));
+        headers.insert(CONTENT_RANGE, "bytes 0-0/*".parse().unwrap());
+        assert_eq!(content_range_total(&headers), None);
+    }
+
+    #[test]
+    fn probes_asset_size_from_head_header() {
+        let (url, server) =
+            test_asset_server(&["HTTP/1.1 200 OK\r\nContent-Length: 33278783\r\n\r\n"]);
+        let client = reqwest::Client::builder().build().unwrap();
+        let metadata = tauri::async_runtime::block_on(probe_asset(&client, &url)).unwrap();
+        assert_eq!(
+            metadata,
+            Some(AssetMetadata {
+                size: Some(33_278_783)
+            })
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn falls_back_to_range_probe_when_head_has_no_length() {
+        let (url, server) = test_asset_server(&[
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/33278783\r\n\r\nx",
+        ]);
+        let client = reqwest::Client::builder().build().unwrap();
+        let metadata = tauri::async_runtime::block_on(probe_asset(&client, &url)).unwrap();
+        assert_eq!(
+            metadata,
+            Some(AssetMetadata {
+                size: Some(33_278_783)
+            })
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn preserves_unknown_size_when_range_total_is_unavailable() {
+        let (url, server) = test_asset_server(&[
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/*\r\n\r\nx",
+        ]);
+        let client = reqwest::Client::builder().build().unwrap();
+        let metadata = tauri::async_runtime::block_on(probe_asset(&client, &url)).unwrap();
+        assert_eq!(metadata, Some(AssetMetadata { size: None }));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn treats_missing_asset_as_none() {
+        let (url, server) =
+            test_asset_server(&["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]);
+        let client = reqwest::Client::builder().build().unwrap();
+        let metadata = tauri::async_runtime::block_on(probe_asset(&client, &url)).unwrap();
+        assert_eq!(metadata, None);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn follows_asset_redirect_before_reading_length() {
+        let (url, server) = test_asset_server(&[
+            "HTTP/1.1 302 Found\r\nLocation: /asset\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 33278783\r\n\r\n",
+        ]);
+        let client = reqwest::Client::builder().build().unwrap();
+        let metadata = tauri::async_runtime::block_on(probe_asset(&client, &url)).unwrap();
+        assert_eq!(
+            metadata,
+            Some(AssetMetadata {
+                size: Some(33_278_783)
+            })
+        );
+        server.join().unwrap();
     }
 
     #[test]

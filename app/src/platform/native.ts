@@ -488,8 +488,8 @@ export interface UpdateInfo {
   publishedAt: string
   /** `.app.zip` 下载 URL */
   downloadUrl: string
-  /** 下载文件大小（字节） */
-  downloadSize: number
+  /** 下载文件大小（字节）；无法从远端元数据确定时为 null */
+  downloadSize: number | null
   /** `.sha256` 校验文件 URL（可能为空） */
   sha256Url: string | null
 }
@@ -497,8 +497,8 @@ export interface UpdateInfo {
 /** 下载进度事件 payload。 */
 export interface DownloadProgress {
   downloaded: number
-  total: number
-  percent: number
+  total: number | null
+  percent: number | null
 }
 
 /** 获取当前应用版本号。 */
