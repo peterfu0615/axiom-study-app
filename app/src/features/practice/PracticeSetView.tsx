@@ -8,11 +8,12 @@ import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/pra
 import type { PracticeLoop } from '../../domain/practiceLoop'
 import { importImage, mediaAssetUrl, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
 import {
-  exportPracticePdf,
-  getLatestReadyPracticeDocument,
   openExportedPracticePdf,
+  practiceDocumentDiagnostic,
+  preparePracticeDocument,
   printExportedPracticePdf,
   saveExportedPracticePdf,
+  type PracticeDocumentDiagnostic,
   type PracticeDocumentRecord,
 } from '../../platform/practiceDocumentDatabase'
 import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
@@ -109,12 +110,13 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [attemptLoaded, setAttemptLoaded] = useState(Boolean(initialAttempt))
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
+  const [documentDiagnostic, setDocumentDiagnostic] = useState<PracticeDocumentDiagnostic | null>(null)
   const documentRequest = useRef<Promise<PracticeDocumentRecord> | null>(null)
 
   useEffect(() => {
     let cancelled = false
     documentRequest.current = null
-    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null)
+    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null); setDocumentDiagnostic(null)
     setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt))
     if (!initialAttempt) {
       void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
@@ -148,12 +150,14 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     setFeedback(null)
     const request = (async () => {
       try {
-        const record = await getLatestReadyPracticeDocument(practiceSet) ?? await exportPracticePdf(practiceSet)
+        const record = await preparePracticeDocument(practiceSet)
         setDocument(record)
+        setDocumentDiagnostic(null)
         setDocumentState('ready')
         return record
       } catch (reason) {
         setDocumentState('error')
+        setDocumentDiagnostic(practiceDocumentDiagnostic(reason, practiceSet.id))
         // The stage owns the retry affordance; avoid repeating the same error
         // in a second global notice above the preview.
         setFeedback(null)
@@ -172,6 +176,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const retryDocument = () => {
     setDocumentState('idle')
     setFeedback(null)
+    setDocumentDiagnostic(null)
     void ensureDocument().catch(() => null)
   }
   const chooseSection = (section: PracticePdfSection) => {
@@ -323,6 +328,16 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
           <strong>练习文档暂时无法生成</strong>
           <span>请重试；如果仍然失败，请重新生成这组练习。</span>
           <Button onClick={retryDocument} variant="secondary">重新生成</Button>
+          {documentDiagnostic && <details className="practice-document-diagnostic">
+            <summary>详情</summary>
+            <dl>
+              <div><dt>阶段</dt><dd>{documentDiagnostic.stage}</dd></div>
+              <div><dt>代码</dt><dd>{documentDiagnostic.code}</dd></div>
+              <div><dt>文档契约</dt><dd>{documentDiagnostic.rendererContract}</dd></div>
+              {documentDiagnostic.rendererVersion && <div><dt>排版引擎</dt><dd>{documentDiagnostic.rendererVersion}</dd></div>}
+              <div><dt>练习 ID</dt><dd>{documentDiagnostic.practiceSetId}</dd></div>
+            </dl>
+          </details>}
         </div> : documentState === 'loading' || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
           <div className="practice-document-page">
             {pagePreview

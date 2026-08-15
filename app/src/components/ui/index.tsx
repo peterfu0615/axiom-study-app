@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { AIErrorEnvelope } from '../../domain/aiError'
-import { Icon } from '../Icon'
+import { Icon, type IconName } from '../Icon'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 export { ListboxSelect } from './ListboxSelect'
@@ -128,6 +128,7 @@ export function InlineNotice({
 export interface TabOption<T extends string> {
   value: T
   label: ReactNode
+  icon?: IconName
   count?: number
   disabled?: boolean
 }
@@ -201,7 +202,10 @@ export function Tabs<T extends string>({
           tabIndex={value === option.value ? 0 : -1}
           type="button"
         >
-          <span>{option.label}</span>
+          <span className="ax-tabs__content">
+            {option.icon && <span className="ax-tabs__icon"><Icon name={option.icon} size={20} /></span>}
+            <span>{option.label}</span>
+          </span>
           {option.count !== undefined && <small>{option.count}</small>}
         </button>
       ))}

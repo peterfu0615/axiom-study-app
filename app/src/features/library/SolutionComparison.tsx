@@ -17,6 +17,7 @@ import type {
 } from '../../domain/models'
 import { MathMarkdown } from '../../components/MathMarkdown'
 import { Icon } from '../../components/Icon'
+import { IconButton } from '../../components/ui'
 import { explainSelection, EXPLAIN_STREAM_EVENT } from '../../ai/intelligencePipeline'
 import { sanitizeAIOutputText, extractPartialField } from '../../ai/intelligenceParser'
 import { SOLUTION_STREAM_EVENT } from '../../ai/solutionPipeline'
@@ -786,7 +787,9 @@ export function SolutionComparison({
                 {solution?.status === 'completed' && solution.contentMarkdown && (
                   <button className="secondary-action" onClick={() => void copySolution()} type="button">复制</button>
                 )}
-                <button aria-label="关闭解答窗口" className="icon-button" onClick={() => setModalOpen(false)} type="button">×</button>
+                <IconButton label="关闭解答窗口" onClick={() => setModalOpen(false)}>
+                  <Icon name="close" size={20} />
+                </IconButton>
               </div>
             </header>
             <div className="solution-comparison-modal-body">

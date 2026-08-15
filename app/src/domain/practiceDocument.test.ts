@@ -114,6 +114,22 @@ describe('PracticeDocument', () => {
       .toEqual(practiceSet.items.map((practiceItem) => practiceItem.id))
   })
 
+  it('keeps the exercise section when solution JSON is missing or malformed', () => {
+    const practiceSet = set(2)
+    practiceSet.items[0] = { ...practiceSet.items[0], solutionJson: '{}' }
+    practiceSet.items[1] = { ...practiceSet.items[1], canonicalAnswer: '', solutionJson: 'not-json' }
+    const document = buildCompletePracticeDocument(practiceSet, { attemptId: 'attempt-degraded', generatedAt: 1 })
+    const exercise = document.sections.find((section) => section.kind === 'exercise')
+    const solution = document.sections.find((section) => section.kind === 'solution')
+    const exerciseText = JSON.stringify(exercise)
+    const solutionText = JSON.stringify(solution)
+
+    expect(exercise?.blocks.filter((block) => block.kind === 'question')).toHaveLength(2)
+    expect(exerciseText).toContain('answerSpace')
+    expect(solutionText).toContain('详细解析暂不可用')
+    expect(solutionText).toContain('当前题目的答案与解析暂不可用')
+  })
+
   it('keeps stable A4 question numbering and page identity', () => {
     const left = buildPracticeDocument(set(8), { attemptId: 'attempt-1', documentType: 'questions', generatedAt: 10 })
     const right = buildPracticeDocument(set(8), { attemptId: 'attempt-1', documentType: 'questions', generatedAt: 10 })

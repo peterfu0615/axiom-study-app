@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
+import { readFileSync } from 'node:fs'
 import type { SavedProblem, Solution, StudentAttempt } from '../../domain/models'
 import { SolutionComparison } from './SolutionComparison'
 import { normalizeKeyPoint } from './explanationText'
@@ -69,6 +71,12 @@ describe('SolutionComparison', () => {
     expect(html).toContain('我的解答')
     expect(html).toContain('class="katex"')
     expect(html).toContain('点击查看完整解答')
+  })
+
+  it('uses the shared icon control for the modal close action', () => {
+    const source = readFileSync(new URL('./SolutionComparison.tsx', import.meta.url), 'utf8')
+    expect(source).toMatch(/<IconButton label="关闭解答窗口"[^>]*>[\s\S]*?<Icon name="close" size=\{20\}/u)
+    expect(source).not.toMatch(/aria-label="关闭解答窗口"[^>]*>\s*×\s*<\/button>/u)
   })
 })
 

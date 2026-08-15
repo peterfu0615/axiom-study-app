@@ -174,6 +174,19 @@ pub struct CompletePdfRenderResult {
     cache_hit: bool,
     section_page_ranges: BTreeMap<String, SectionPageRange>,
     pages: Vec<RenderedDocumentPage>,
+    degraded_solution_item_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePdfRenderError {
+    stage: &'static str,
+    code: &'static str,
+    message: &'static str,
+    practice_set_id: String,
+    document_id: String,
+    renderer_contract: &'static str,
+    renderer_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -189,6 +202,7 @@ struct PracticePage {
 struct BuildOutput {
     source: String,
     practice_pages: Vec<PracticePage>,
+    degraded_solution_item_ids: Vec<String>,
 }
 
 struct RenderedMetadata {
@@ -200,6 +214,7 @@ struct RenderedMetadata {
 struct RenderOutput {
     metadata: RenderedMetadata,
     typst_version: String,
+    degraded_solution_item_ids: Vec<String>,
 }
 
 fn typst_string(value: &str) -> String {
@@ -454,6 +469,31 @@ fn question_typst(
     ))
 }
 
+fn unavailable_solution_typst(question: &ContentBlock) -> Result<(String, String), String> {
+    let ContentBlock::Question {
+        practice_item_id,
+        display_number,
+        ..
+    } = question
+    else {
+        return Err("解析章节正文包含非题目块".to_string());
+    };
+    Ok((
+        format!(
+            "#block(width: 100%, breakable: true, below: 14pt)[\n\
+               #grid(columns: (25pt, 1fr), column-gutter: 7pt,\n\
+                 [#text(size: 12pt, weight: \"bold\")[{}.]],\n\
+                 [#text(fill: rgb(\"#77746c\"))[答案与解析暂不可用。练习题仍可正常作答。]]\n\
+               )\n\
+               #v(12pt)\n\
+               #line(length: 100%, stroke: .35pt + rgb(\"#dedbd2\"))\n\
+             ]\n",
+            display_number
+        ),
+        practice_item_id.clone(),
+    ))
+}
+
 fn qr_svg(payload: &str) -> Result<String, String> {
     let code = QrCode::new(payload.as_bytes())
         .map_err(|error| format!("生成答题卡二维码失败：{error}"))?;
@@ -648,6 +688,7 @@ fn build_source(
         typst_string(&document.title)
     );
 
+    let mut degraded_solution_item_ids = Vec::new();
     for (section_index, section) in document.sections.iter().enumerate() {
         if section_index > 0 {
             source.push_str("#pagebreak()\n");
@@ -674,13 +715,26 @@ fn build_source(
                     .iter()
                     .filter(|block| matches!(block, ContentBlock::Question { .. }))
                 {
-                    source.push_str(&question_typst(
+                    match question_typst(
                         question,
                         section.kind,
                         render_directory,
                         &mut assets,
                         None,
-                    )?);
+                    ) {
+                        Ok(rendered) => source.push_str(&rendered),
+                        Err(_) => {
+                            let (fallback, practice_item_id) =
+                                unavailable_solution_typst(question)?;
+                            log::warn!(
+                                "练习解析题降级（document_id={} item_id={} code=solution_content_unsupported）",
+                                document.id,
+                                practice_item_id
+                            );
+                            degraded_solution_item_ids.push(practice_item_id);
+                            source.push_str(&fallback);
+                        }
+                    }
                 }
             }
             SectionKind::Exercise => {
@@ -707,6 +761,7 @@ fn build_source(
     Ok(BuildOutput {
         source,
         practice_pages,
+        degraded_solution_item_ids,
     })
 }
 
@@ -952,7 +1007,7 @@ fn render_to_path(
     let render_directory = std::env::temp_dir().join(format!("axiom-typst-{}", Uuid::new_v4()));
     fs::create_dir_all(&render_directory)
         .map_err(|error| format!("创建 Typst 临时目录失败：{error}"))?;
-    let result = (|| {
+    let result: Result<RenderOutput, String> = (|| {
         let binary = typst_binary()?;
         let version = verify_typst(&binary, &render_directory)?;
         let build = build_source(document, &render_directory)?;
@@ -1004,6 +1059,7 @@ fn render_to_path(
         Ok(RenderOutput {
             metadata,
             typst_version: version,
+            degraded_solution_item_ids: build.degraded_solution_item_ids,
         })
     })();
     let _ = fs::remove_dir_all(&render_directory);
@@ -1014,12 +1070,13 @@ fn render_to_path(
 pub fn render_complete_practice_pdf(
     app: AppHandle,
     document: CompletePracticeDocument,
-) -> Result<CompletePdfRenderResult, String> {
-    let document_id = document.id.clone();
-    let result = (|| {
+) -> Result<CompletePdfRenderResult, Box<PracticePdfRenderError>> {
+    let mut verified_renderer_version = None;
+    let result: Result<CompletePdfRenderResult, String> = (|| {
         let binary = typst_binary()?;
         let probe_directory = std::env::temp_dir();
         let typst_version = verify_typst(&binary, &probe_directory)?;
+        verified_renderer_version = Some(typst_version.clone());
         let hash = content_hash(&document, &typst_version)?;
         let destination = output_path(&app, &document, &hash)?;
         let cache_hit = destination.is_file();
@@ -1027,7 +1084,7 @@ pub fn render_complete_practice_pdf(
         let metadata = fs::metadata(&destination)
             .map_err(|error| format!("读取完整 PDF 产物失败：{error}"))?;
         Ok(CompletePdfRenderResult {
-            document_id: document.id,
+            document_id: document.id.clone(),
             file_path: destination.to_string_lossy().to_string(),
             content_hash: hash,
             renderer_version: format!("{RENDERER_VERSION}+{}", output.typst_version),
@@ -1036,12 +1093,79 @@ pub fn render_complete_practice_pdf(
             cache_hit,
             section_page_ranges: output.metadata.section_page_ranges,
             pages: output.metadata.pages,
+            degraded_solution_item_ids: output.degraded_solution_item_ids,
         })
     })();
-    if let Err(error) = &result {
-        log::error!("完整练习 PDF 排版失败（{document_id}）：{error}");
+    match result {
+        Ok(rendered) => Ok(rendered),
+        Err(raw) => {
+            let error = safe_render_error(&document, &raw, verified_renderer_version);
+            log::error!(
+                "完整练习 PDF 排版失败（document_id={} practice_set_id={} stage={} code={} contract={} renderer={}）",
+                error.document_id,
+                error.practice_set_id,
+                error.stage,
+                error.code,
+                error.renderer_contract,
+                error.renderer_version.as_deref().unwrap_or("unavailable")
+            );
+            Err(Box::new(error))
+        }
     }
-    result
+}
+
+fn safe_render_error(
+    document: &CompletePracticeDocument,
+    raw: &str,
+    renderer_version: Option<String>,
+) -> PracticePdfRenderError {
+    let (stage, code, message) = if raw.contains("缺少离线 Typst")
+        || raw.contains("无法启动 Typst")
+        || raw.contains("Typst 版本不匹配")
+    {
+        (
+            "renderer_runtime",
+            "renderer_unavailable",
+            "离线排版引擎不可用",
+        )
+    } else if raw.contains("layout") || raw.contains("必须按练习、解析组织") {
+        (
+            "document_contract",
+            "document_contract_invalid",
+            "练习文档结构无效",
+        )
+    } else if raw.contains("公式")
+        || raw.contains("LaTeX")
+        || raw.contains("图形")
+        || raw.contains("SVG")
+        || raw.contains("资源")
+    {
+        (
+            "document_content",
+            "document_content_unsupported",
+            "练习内容包含暂不支持的排版元素",
+        )
+    } else if raw.contains("目录")
+        || raw.contains("文件")
+        || raw.contains("写入")
+        || raw.contains("读取")
+        || raw.contains("提交完整 PDF")
+    {
+        ("filesystem", "renderer_io_failed", "无法写入练习 PDF")
+    } else if raw.contains("metadata") || raw.contains("位置") {
+        ("render_result", "render_result_invalid", "排版结果校验失败")
+    } else {
+        ("renderer", "renderer_failed", "练习 PDF 排版失败")
+    };
+    PracticePdfRenderError {
+        stage,
+        code,
+        message,
+        practice_set_id: document.practice_set_id.clone(),
+        document_id: document.id.clone(),
+        renderer_contract: RENDERER_VERSION,
+        renderer_version,
+    }
 }
 
 #[cfg(test)]
@@ -1262,6 +1386,49 @@ mod tests {
                 ..
             } if practice_item_id == "item-ipc"
         ));
+    }
+
+    #[test]
+    fn degrades_only_an_unsupported_solution_question() {
+        let directory =
+            std::env::temp_dir().join(format!("axiom-typst-degrade-{}", Uuid::new_v4()));
+        let mut document = fixture(Path::new("/tmp/unused.png"), Path::new("/tmp/unused.svg"));
+        for section in &mut document.sections {
+            for block in &mut section.blocks {
+                if let ContentBlock::Question { content, .. } = block {
+                    content.retain(|item| {
+                        !matches!(
+                            item,
+                            ContentBlock::Image { .. } | ContentBlock::TikzDiagram { .. }
+                        )
+                    });
+                }
+            }
+        }
+        let ContentBlock::Question { content, .. } = &mut document.sections[1].blocks[2] else {
+            panic!("solution question fixture")
+        };
+        content.push(formula(r"\unsupported"));
+
+        let built = build_source(&document, &directory).expect("exercise remains renderable");
+        assert_eq!(built.degraded_solution_item_ids, vec!["item-1"]);
+        assert!(built.source.contains("答案与解析暂不可用"));
+        assert!(built.source.contains("item-1"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn render_errors_expose_safe_diagnostics_without_user_content() {
+        let document = fixture(Path::new("/tmp/unused.png"), Path::new("/tmp/unused.svg"));
+        let error = safe_render_error(
+            &document,
+            r"无法排版独立公式 `\private-formula`：不支持的 LaTeX 命令",
+            Some("typst 0.14.2".into()),
+        );
+        let serialized = serde_json::to_string(&error).expect("serialize safe error");
+        assert!(serialized.contains("document_content_unsupported"));
+        assert!(serialized.contains("axiom-typst-v2"));
+        assert!(!serialized.contains("private-formula"));
     }
 
     #[test]

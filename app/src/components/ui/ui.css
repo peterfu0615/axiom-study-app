@@ -189,6 +189,9 @@
 .ax-tabs button { position: relative; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; color: var(--muted); background: transparent; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); font-weight: var(--ax-type-control-weight); cursor: pointer; }
 .ax-tabs button:hover:not(:disabled) { color: var(--ink); }
 .ax-tabs button:disabled { opacity: .45; cursor: not-allowed; }
+.ax-tabs__content { min-width: 0; display: inline-flex; align-items: center; gap: 11px; }
+.ax-tabs__icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; }
+.ax-tabs__icon > .icon { display: block; }
 .ax-tabs button small { display: inline-grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border-radius: 999px; color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
 .ax-tabs--underline { gap: 22px; min-height: 39px; border-bottom: 1px solid var(--border); }
 .ax-tabs--underline button { min-height: 39px; padding: 0 1px; }
