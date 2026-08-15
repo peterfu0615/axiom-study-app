@@ -45,10 +45,11 @@
   padding: 8px 10px 24px;
 }
 
-.brand-wordmark {
-  width: 59px;
-  height: auto;
+.brand-icon {
+  width: 42px;
+  height: 42px;
   display: block;
+  object-fit: contain;
 }
 
 .sidebar nav {
@@ -888,7 +889,7 @@
   color: #737c77;
   background: transparent;
   font: inherit;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 620;
   cursor: pointer;
 }
@@ -2584,6 +2585,29 @@
   color: var(--ink);
   font-size: 11px;
   line-height: 17px;
+}
+
+/* 使用公式块：恢复到正文尺寸，避免被父级 11px 字号压制 */
+.solution-insights .solution-formula-list,
+.solution-insights .solution-formula-list p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.solution-insights .solution-formula-list .katex-display {
+  margin: 0.6em 0;
+  max-width: 100%;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-size: 1.05em;
+}
+
+/* 多条公式之间留间距 */
+.solution-insights .solution-formula-list + .solution-formula-list {
+  margin-top: 6px;
 }
 
 .comparison-open-hint {
