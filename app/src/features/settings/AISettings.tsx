@@ -68,17 +68,14 @@ const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description:
 const PROVIDER_TASK_OPTIONS: Array<{ value: AIProviderTaskType; label: string }> = [
   { value: 'problem_understanding', label: '题目理解' },
   { value: 'solution_generation', label: '正解生成' },
-  { value: 'solution_review', label: '正解审校' },
   { value: 'attempt_analysis', label: '作答与错因分析' },
   { value: 'tag_mapping', label: '标签映射' },
-  { value: 'variant_planning', label: '变式计划' },
   { value: 'variant_generation', label: '变式生成' },
   { value: 'variant_verification', label: '变式独立验证' },
   { value: 'submission_grading', label: '练习批改' },
   { value: 'explain_selection', label: '局部解释' },
   { value: 'textbook_recognition', label: '教材识别' },
   { value: 'curriculum_analysis', label: '课程分析' },
-  { value: 'geometry_scene', label: '几何重建' },
 ]
 
 export function AISettings() {
