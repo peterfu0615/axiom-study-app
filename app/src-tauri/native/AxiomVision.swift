@@ -695,7 +695,8 @@ private final class DocumentProcessor {
     func crop(
         inputPath: String,
         outputPath: String,
-        rect: NormalizedRect
+        rect: NormalizedRect,
+        redactions: [NormalizedRect]
     ) throws {
         let inputURL = URL(fileURLWithPath: inputPath)
         let outputURL = URL(fileURLWithPath: outputPath)
@@ -731,7 +732,7 @@ private final class DocumentProcessor {
         guard pixelRect.width >= 2, pixelRect.height >= 2 else {
             throw ProcessorError.invalidCrop
         }
-        let cropped = image
+        var cropped = image
             .cropped(to: pixelRect)
             .transformed(
                 by: CGAffineTransform(
@@ -739,6 +740,39 @@ private final class DocumentProcessor {
                     y: -pixelRect.minY
                 )
             )
+        for redaction in redactions {
+            guard
+                redaction.x.isFinite,
+                redaction.y.isFinite,
+                redaction.width.isFinite,
+                redaction.height.isFinite,
+                redaction.x >= 0,
+                redaction.y >= 0,
+                redaction.width > 0,
+                redaction.height > 0,
+                redaction.maxX <= 1.000_001,
+                redaction.maxY <= 1.000_001
+            else {
+                throw ProcessorError.invalidCrop
+            }
+            let pageRedaction = CGRect(
+                x: extent.minX + redaction.x * extent.width,
+                y: extent.maxY - redaction.maxY * extent.height,
+                width: redaction.width * extent.width,
+                height: redaction.height * extent.height
+            ).intersection(pixelRect).integral
+            guard !pageRedaction.isNull, pageRedaction.width > 0, pageRedaction.height > 0 else {
+                continue
+            }
+            let localRedaction = pageRedaction.offsetBy(
+                dx: -pixelRect.minX,
+                dy: -pixelRect.minY
+            )
+            let opaqueMask = CIImage(
+                color: CIColor(red: 0.10, green: 0.10, blue: 0.10, alpha: 1)
+            ).cropped(to: localRedaction)
+            cropped = opaqueMask.composited(over: cropped)
+        }
         try render(cropped, to: outputURL)
     }
 
@@ -1457,6 +1491,15 @@ private enum AxiomVisionCLI {
                 else {
                     throw ProcessorError.invalidArguments
                 }
+                let redactions: [NormalizedRect]
+                if let encoded = value(after: "--redactions-json") {
+                    guard let data = encoded.data(using: .utf8) else {
+                        throw ProcessorError.invalidArguments
+                    }
+                    redactions = try JSONDecoder().decode([NormalizedRect].self, from: data)
+                } else {
+                    redactions = []
+                }
                 try DocumentProcessor().crop(
                     inputPath: input,
                     outputPath: output,
@@ -1465,7 +1508,8 @@ private enum AxiomVisionCLI {
                         y: y,
                         width: width,
                         height: height
-                    )
+                    ),
+                    redactions: redactions
                 )
                 resultData = try JSONEncoder().encode(["path": output])
             default:

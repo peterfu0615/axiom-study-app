@@ -198,11 +198,13 @@ export async function cropProblemImage(
   problemId: string,
   sourcePath: string,
   rect: NormalizedRect,
+  redactions: NormalizedRect[] = [],
 ) {
   return invoke<PersistedProblemImage>('crop_problem_image', {
     problemId,
     sourcePath,
     rect,
+    redactions,
   })
 }
 

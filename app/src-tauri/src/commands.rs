@@ -1110,8 +1110,12 @@ pub fn crop_problem_image(
     problem_id: String,
     source_path: String,
     rect: NormalizedRect,
+    redactions: Vec<NormalizedRect>,
 ) -> Result<PersistedProblemImage, String> {
     validate_normalized_rect(&rect)?;
+    for redaction in &redactions {
+        validate_normalized_rect(redaction)?;
+    }
 
     // problem_id 仅用作输出文件名前缀，不需要是合法 UUID；
     // 但仍需校验路径安全，防止目录穿越或非法字符。
@@ -1152,6 +1156,11 @@ pub fn crop_problem_image(
         .arg(rect.width.to_string())
         .arg("--height")
         .arg(rect.height.to_string())
+        .arg("--redactions-json")
+        .arg(
+            serde_json::to_string(&redactions)
+                .map_err(|error| format!("无法序列化隐私遮挡区域：{error}"))?,
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1222,6 +1231,7 @@ pub fn crop_problem_image(
     _problem_id: String,
     _source_path: String,
     _rect: NormalizedRect,
+    _redactions: Vec<NormalizedRect>,
 ) -> Result<PersistedProblemImage, String> {
     Err("题块裁剪目前仅支持 macOS".to_string())
 }

@@ -55,6 +55,7 @@ import {
 } from '../../ai/intelligencePipeline'
 import { ProblemTags } from './ProblemTags'
 import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../platform/problemHistoryDatabase'
+import { getProblemUnderstandingUploadDisclosure } from '../../ai/provider'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
@@ -233,6 +234,7 @@ export function ProblemLibrary() {
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
   const [subjectChangeConfirming, setSubjectChangeConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
+  const [aiUploadConfirming, setAIUploadConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss } = useToast()
   // Event listeners must not be re-armed on every selection change, so they
@@ -587,8 +589,14 @@ export function ProblemLibrary() {
     finally { setUpdating(false) }
   }
 
-  const retryAI = async () => {
+  const retryAI = async (uploadConfirmed = false) => {
     if (!selected) return
+    const disclosure = getProblemUnderstandingUploadDisclosure()
+    if (disclosure.sendsImagesExternally && !uploadConfirmed) {
+      setAIUploadConfirming(true)
+      return
+    }
+    setAIUploadConfirming(false)
     setUpdating(true)
     dismiss()
     try {
@@ -1346,6 +1354,23 @@ export function ProblemLibrary() {
           <div className="curriculum-dialog-actions">
             <Button onClick={() => setSubjectChangeConfirming(false)} variant="ghost">取消</Button>
             <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续更改</Button>
+          </div>
+        </div>
+      </Dialog>
+      <Dialog
+        onClose={() => { if (!updating) setAIUploadConfirming(false) }}
+        open={aiUploadConfirming}
+        title="确认发送题目图片"
+      >
+        <div className="image-upload-confirmation">
+          <p>
+            Axiom 将把当前题块图片发送到 Provider
+            <strong>{getProblemUnderstandingUploadDisclosure().providerId}</strong>
+            （模型 {getProblemUnderstandingUploadDisclosure().model}）进行整理，不会发送完整原始页面。
+          </p>
+          <div className="image-upload-confirmation__actions">
+            <Button disabled={updating} onClick={() => setAIUploadConfirming(false)}>取消</Button>
+            <Button loading={updating} onClick={() => void retryAI(true)} variant="primary">确认发送</Button>
           </div>
         </div>
       </Dialog>

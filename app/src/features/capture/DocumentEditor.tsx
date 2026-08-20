@@ -27,13 +27,39 @@ import {
 } from '../../platform/database'
 import { runProblemAIWorker } from '../../ai/pipeline'
 import { processDocument } from '../../platform/native'
-import { SegmentedControl } from '../../components/ui'
+import { getProblemUnderstandingUploadDisclosure } from '../../ai/provider'
+import { Button, Dialog, SegmentedControl } from '../../components/ui'
 
 type EnhancementMode = 'color' | 'grayscale'
 type PreviewMode = 'corrected' | 'original'
 type RegionSelection = {
   answer: NormalizedRect | null
   diagram: NormalizedRect | null
+}
+type PrivacyRedactionKind = 'name' | 'school' | 'exam_number'
+type PrivacyRedaction = {
+  id: string
+  kind: PrivacyRedactionKind
+  label: string
+  rect: NormalizedRect
+}
+
+const privacyRedactionDefaults: Record<
+  PrivacyRedactionKind,
+  Omit<PrivacyRedaction, 'id' | 'kind'>
+> = {
+  name: {
+    label: '姓名',
+    rect: { x: 0.08, y: 0.035, width: 0.24, height: 0.055 },
+  },
+  school: {
+    label: '学校',
+    rect: { x: 0.36, y: 0.035, width: 0.28, height: 0.055 },
+  },
+  exam_number: {
+    label: '考号',
+    rect: { x: 0.68, y: 0.035, width: 0.24, height: 0.055 },
+  },
 }
 
 const processingStageCopy: Record<DocumentProcessingProgress['stage'], string> = {
@@ -95,6 +121,8 @@ export function DocumentEditor({
   >({})
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
+  const [privacyRedactions, setPrivacyRedactions] = useState<PrivacyRedaction[]>([])
+  const [uploadConfirmationOpen, setUploadConfirmationOpen] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [pageDetected, setPageDetected] = useState<boolean | null>(null)
   const [durationMs, setDurationMs] = useState<number | null>(null)
@@ -251,6 +279,14 @@ export function DocumentEditor({
   }
 
   const updateCanvasRect = (id: string, rect: NormalizedRect) => {
+    if (id.startsWith('privacy-')) {
+      setPrivacyRedactions((current) =>
+        current.map((redaction) =>
+          redaction.id === id ? { ...redaction, rect } : redaction,
+        ),
+      )
+      return
+    }
     const suffix = id.endsWith('-answer')
       ? 'answer'
       : id.endsWith('-diagram')
@@ -273,6 +309,7 @@ export function DocumentEditor({
 
   const activateCanvasRegion = (id: string) => {
     setActiveRegionId(id)
+    if (id.startsWith('privacy-')) return
     const blockId = id.endsWith('-answer')
       ? id.slice(0, -'-answer'.length)
       : id.endsWith('-diagram')
@@ -434,8 +471,31 @@ export function DocumentEditor({
     setActiveRegionId(null)
   }
 
-  const saveBlocks = async () => {
+  const togglePrivacyRedaction = (kind: PrivacyRedactionKind) => {
+    const existing = privacyRedactions.find(
+      (redaction) => redaction.kind === kind,
+    )
+    if (existing) {
+      setPrivacyRedactions((current) =>
+        current.filter((redaction) => redaction.id !== existing.id),
+      )
+      if (activeRegionId === existing.id) setActiveRegionId(null)
+      return
+    }
+    const preset = privacyRedactionDefaults[kind]
+    const added: PrivacyRedaction = {
+      id: `privacy-${kind}-${createId()}`,
+      kind,
+      label: preset.label,
+      rect: { ...preset.rect },
+    }
+    setPrivacyRedactions((current) => [...current, added])
+    setActiveRegionId(added.id)
+  }
+
+  const saveBlocks = async (queueAI: boolean) => {
     setSaving(true)
+    setUploadConfirmationOpen(false)
     dismiss()
     try {
       const problems = await saveProblems(
@@ -444,8 +504,12 @@ export function DocumentEditor({
         blocks,
         saveSelectedBlocks.map((block) => block.id),
         regionSelections,
+        {
+          queueAI,
+          redactions: privacyRedactions.map((redaction) => redaction.rect),
+        },
       )
-      void runProblemAIWorker()
+      if (queueAI) void runProblemAIWorker()
       const savedIds = new Set(problems.map((problem) => problem.id))
       const remainingBlocks = blocks.filter(
         (block) => !savedIds.has(block.id),
@@ -479,7 +543,9 @@ export function DocumentEditor({
         return
       }
       notify(
-        `保存成功：${problems.length} 道错题已写入本地错题库`,
+        queueAI
+          ? `保存成功：${problems.length} 道错题已写入本地错题库，正在发送题块到 Provider`
+          : `保存成功：${problems.length} 道错题仅保存在本地，可稍后从错题详情开始整理`,
         'success',
       )
     } catch (error) {
@@ -487,6 +553,15 @@ export function DocumentEditor({
     } finally {
       setSaving(false)
     }
+  }
+
+  const uploadDisclosure = getProblemUnderstandingUploadDisclosure()
+  const requestSave = () => {
+    if (uploadDisclosure.sendsImagesExternally) {
+      setUploadConfirmationOpen(true)
+      return
+    }
+    void saveBlocks(true)
   }
 
   const displayedPath =
@@ -522,7 +597,7 @@ export function DocumentEditor({
               !correctedPath ||
               saveSelectedBlocks.length === 0
             }
-            onClick={() => void saveBlocks()}
+            onClick={requestSave}
             type="button"
           >
             {saving
@@ -559,47 +634,57 @@ export function DocumentEditor({
             onRectChange={updateCanvasRect}
             regions={
               previewMode === 'corrected' && !processing
-                ? blocks.flatMap((block, index) => {
-                    const selection = regionSelections[block.id]
-                    const overlays: Array<{
-                      id: string
-                      rect: NormalizedRect
-                      label: string
-                      active: boolean
-                      selected: boolean
-                      tone: 'question' | 'answer' | 'diagram'
-                    }> = [
-                      {
-                        id: block.id,
-                        rect: block.rect,
-                        label: String(index + 1),
-                        active: activeRegionId === block.id,
-                        selected: selectedIds.has(block.id),
-                        tone: 'question' as const,
-                      },
-                    ]
-                    if (selection?.answer) {
-                      overlays.push({
-                        id: `${block.id}-answer`,
-                        rect: selection.answer,
-                        label: '作答',
-                        active: activeRegionId === `${block.id}-answer`,
-                        selected: true,
-                        tone: 'answer' as const,
-                      })
-                    }
-                    if (selection?.diagram) {
-                      overlays.push({
-                        id: `${block.id}-diagram`,
-                        rect: selection.diagram,
-                        label: '图形',
-                        active: activeRegionId === `${block.id}-diagram`,
-                        selected: true,
-                        tone: 'diagram' as const,
-                      })
-                    }
-                    return overlays
-                  }).sort(
+                ? [
+                    ...blocks.flatMap((block, index) => {
+                      const selection = regionSelections[block.id]
+                      const overlays: Array<{
+                        id: string
+                        rect: NormalizedRect
+                        label: string
+                        active: boolean
+                        selected: boolean
+                        tone: 'question' | 'answer' | 'diagram'
+                      }> = [
+                        {
+                          id: block.id,
+                          rect: block.rect,
+                          label: String(index + 1),
+                          active: activeRegionId === block.id,
+                          selected: selectedIds.has(block.id),
+                          tone: 'question' as const,
+                        },
+                      ]
+                      if (selection?.answer) {
+                        overlays.push({
+                          id: `${block.id}-answer`,
+                          rect: selection.answer,
+                          label: '作答',
+                          active: activeRegionId === `${block.id}-answer`,
+                          selected: true,
+                          tone: 'answer' as const,
+                        })
+                      }
+                      if (selection?.diagram) {
+                        overlays.push({
+                          id: `${block.id}-diagram`,
+                          rect: selection.diagram,
+                          label: '图形',
+                          active: activeRegionId === `${block.id}-diagram`,
+                          selected: true,
+                          tone: 'diagram' as const,
+                        })
+                      }
+                      return overlays
+                    }),
+                    ...privacyRedactions.map((redaction) => ({
+                      id: redaction.id,
+                      rect: redaction.rect,
+                      label: `遮挡·${redaction.label}`,
+                      active: activeRegionId === redaction.id,
+                      selected: true,
+                      tone: 'annotation' as const,
+                    })),
+                  ].sort(
                     (left, right) => Number(left.active) - Number(right.active),
                   )
                 : []
@@ -675,6 +760,33 @@ export function DocumentEditor({
               全不选
             </button>
           </div>
+
+          <section className="privacy-redaction-panel" aria-label="图片隐私遮挡">
+            <div>
+              <strong>上传前遮挡</strong>
+              <small>遮挡会写入题块像素；原始页面仍只保存在本机。</small>
+            </div>
+            <div className="privacy-redaction-actions">
+              {(['name', 'school', 'exam_number'] as const).map((kind) => {
+                const preset = privacyRedactionDefaults[kind]
+                const enabled = privacyRedactions.some(
+                  (redaction) => redaction.kind === kind,
+                )
+                return (
+                  <button
+                    aria-pressed={enabled}
+                    className={enabled ? 'active' : ''}
+                    disabled={processing || saving}
+                    key={kind}
+                    onClick={() => togglePrivacyRedaction(kind)}
+                    type="button"
+                  >
+                    {enabled ? `移除${preset.label}遮挡` : `遮挡${preset.label}`}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
 
           <div className="block-list">
             {blocks.map((block, index) => (
@@ -754,6 +866,35 @@ export function DocumentEditor({
           )}
         </aside>
       </section>
+
+      <Dialog
+        onClose={() => setUploadConfirmationOpen(false)}
+        open={uploadConfirmationOpen}
+        title="确认发送题目图片"
+      >
+        <div className="image-upload-confirmation">
+          <p>
+            Axiom 将只发送所选题块和作答/图形区域到 Provider
+            <strong>{uploadDisclosure.providerId}</strong>（模型 {uploadDisclosure.model}），
+            不会发送完整原始页面。
+          </p>
+          <p>
+            已添加的姓名、学校、考号遮挡会先写入导出题块的实际像素，再交给 Provider。
+          </p>
+          <div className="image-upload-confirmation__actions">
+            <Button disabled={saving} onClick={() => void saveBlocks(false)}>
+              仅保存本地
+            </Button>
+            <Button
+              disabled={saving}
+              onClick={() => void saveBlocks(true)}
+              variant="primary"
+            >
+              保存并发送
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       <Toast toast={toast} />
     </main>

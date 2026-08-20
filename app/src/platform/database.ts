@@ -957,6 +957,10 @@ export async function saveProblems(
       diagram: Problem['cropRect'] | null
     }
   > = {},
+  options: {
+    redactions?: Problem['cropRect'][]
+    queueAI?: boolean
+  } = {},
 ): Promise<SavedProblem[]> {
   if (!isDesktopRuntime()) {
     throw new Error('错题保存需要在 Axiom 桌面 App 中运行')
@@ -976,6 +980,11 @@ export async function saveProblems(
   if (selectedBlocks.length !== selectedIds.length) {
     throw new Error('部分所选题目块已不存在，请重新选择后再试')
   }
+  const redactions = options.redactions ?? []
+  if (redactions.some((rect) => !isValidNormalizedRect(rect))) {
+    throw new Error('隐私遮挡区域边界无效')
+  }
+  const queueAI = options.queueAI ?? true
 
   await saveCandidateBlocks(sourceDocumentId, blocks)
   const db = await database()
@@ -1035,6 +1044,7 @@ export async function saveProblems(
         block.id,
         correctedImagePath,
         block.rect,
+        redactions,
       )
       images.push(questionImage)
       questionImages.push(questionImage)
@@ -1064,6 +1074,7 @@ export async function saveProblems(
           `${block.id}-${type}`,
           correctedImagePath,
           regionRect,
+          redactions,
         )
         images.push(regionImage)
         regionRows.push({
@@ -1082,14 +1093,16 @@ export async function saveProblems(
     throw new Error(`生成题块图片失败：${String(error)}`)
   }
 
-  const queuedRuns = selectedBlocks.map((block, index) =>
-    createAIModelRun({
-      id: block.id,
-      cropImagePath: questionImages[index].path,
-      correctedImagePath,
-      cropRect: block.rect,
-    }),
-  )
+  const queuedRuns = queueAI
+    ? selectedBlocks.map((block, index) =>
+        createAIModelRun({
+          id: block.id,
+          cropImagePath: questionImages[index].path,
+          correctedImagePath,
+          cropRect: block.rect,
+        }),
+      )
+    : []
 
   try {
     const values: unknown[] = []
@@ -1098,11 +1111,18 @@ export async function saveProblems(
       const pathParameter = values.push(image.path)
       return `WHEN $${idParameter} THEN $${pathParameter}`
     })
-    const runCases = queuedRuns.map((run) => {
-      const idParameter = values.push(run.problemId)
-      const runParameter = values.push(run.id)
-      return `WHEN $${idParameter} THEN $${runParameter}`
-    })
+    const aiAssignments = queueAI
+      ? (() => {
+          const runCases = queuedRuns.map((run) => {
+            const idParameter = values.push(run.problemId)
+            const runParameter = values.push(run.id)
+            return `WHEN $${idParameter} THEN $${runParameter}`
+          })
+          return `ai_status = 'pending',
+               ai_active_model_run_id = CASE id ${runCases.join(' ')} END,`
+        })()
+      : `ai_status = 'not_started',
+               ai_active_model_run_id = NULL,`
     const updatedAtParameter = values.push(Date.now())
     const eligibleSourceParameter = values.push(sourceDocumentId)
     const eligibleIds = selectedBlocks.map((block) => {
@@ -1123,8 +1143,7 @@ export async function saveProblems(
            UPDATE problems
            SET crop_image_path = CASE id ${cases.join(' ')} END,
                status = 'saved',
-               ai_status = 'pending',
-               ai_active_model_run_id = CASE id ${runCases.join(' ')} END,
+               ${aiAssignments}
                updated_at = $${updatedAtParameter}
            WHERE id IN (SELECT id FROM eligible)
              AND (SELECT COUNT(*) FROM eligible) = ${selectedBlocks.length}`,
@@ -1157,8 +1176,9 @@ export async function saveProblems(
             ],
           )
         }
-        // 关键：model_runs 必须与 problem 状态更新在同一事务内提交，
+        // 选择发送到 Provider 时，model_runs 必须与 problem 状态更新在同一事务内提交，
         // 避免「problem.ai_status='pending' + ai_active_model_run_id 指向不存在的 run」的孤儿状态。
+        // 仅保存本地时不创建 ModelRun，后续由用户在错题详情明确启动。
         // 事务回滚后已生成的图片文件由外层 catch 中的 cleanupCreatedProblemImages 清理。
         await insertAIModelRuns(db, queuedRuns)
         await db.execute('COMMIT')

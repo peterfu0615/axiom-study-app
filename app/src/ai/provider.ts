@@ -203,6 +203,7 @@ export interface AIProvider {
   readonly model: string
   readonly supportsVision: boolean
   readonly supportsText: boolean
+  readonly imageDataBoundary?: 'local' | 'provider'
   analyzeProblemImage(input: AIProblemInput): Promise<AIProviderResult>
   analyzeProblem?: (input: ProblemAnalysisInput) => Promise<AIProviderResult>
   extractStudentAttempt?: (
@@ -245,6 +246,7 @@ export class MockAIProvider implements AIProvider {
   readonly model = 'mock-vision-v1'
   readonly supportsVision = true
   readonly supportsText = true
+  readonly imageDataBoundary = 'local' as const
   private readonly delayMs: number
 
   constructor(delayMs = 850, id = 'mock-default') {
@@ -425,6 +427,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   readonly model: string
   readonly supportsVision: boolean
   readonly supportsText: boolean
+  readonly imageDataBoundary = 'provider' as const
   private readonly profile: AIProviderProfile
 
   constructor(profile: AIProviderProfile) {
@@ -755,6 +758,7 @@ export class AntigravityCLIProvider implements AIProvider {
   readonly model: string
   readonly supportsVision: boolean
   readonly supportsText: boolean
+  readonly imageDataBoundary = 'provider' as const
   private readonly profile: AIProviderProfile
 
   constructor(profile: AIProviderProfile) {
@@ -1276,11 +1280,27 @@ export function getAIProvider() {
       model: 'none',
       supportsVision: false,
       supportsText: false,
+      imageDataBoundary: 'local' as const,
       analyzeProblemImage: async () => {
         throw new Error(VISION_MODEL_REQUIRED)
       },
     }
   )
+}
+
+export interface ImageUploadDisclosure {
+  providerId: string
+  model: string
+  sendsImagesExternally: boolean
+}
+
+export function getProblemUnderstandingUploadDisclosure(): ImageUploadDisclosure {
+  const provider = getAIProvider()
+  return {
+    providerId: provider.id,
+    model: provider.model,
+    sendsImagesExternally: provider.imageDataBoundary !== 'local',
+  }
 }
 
 export function setAIProviderForTests(provider: AIProvider) {
