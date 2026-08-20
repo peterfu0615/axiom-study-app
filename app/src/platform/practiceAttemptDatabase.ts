@@ -34,7 +34,7 @@ export function groupScanLayouts(rows: LayoutRow[]): PracticeScanLayout[] {
   const grouped = new Map<string, PracticeScanLayout>()
   for (const row of rows) {
     const layout = grouped.get(row.page_id) ?? {
-      pageId: row.page_id, pageIdentity: row.page_identity, qrPayload: row.qr_payload,
+      pageId: row.page_id, pageIndex: Number(row.page_index), pageIdentity: row.page_identity, qrPayload: row.qr_payload,
       widthPoints: Number(row.width_points), heightPoints: Number(row.height_points), regions: [],
     }
     if (row.region_id && row.practice_item_id && row.region_index !== null
@@ -59,6 +59,13 @@ export interface PracticeSubmissionPageOption {
 export interface PracticeAnswerSubmission {
   sourcePath: string
   practiceDocumentPageId?: string
+  submissionGroupId?: string
+  sourceKind?: 'image' | 'annotated_pdf' | 'camera_scan'
+  originalAssetPath?: string
+  sourcePageIndex?: number
+  pageCount?: number
+  annotationsPreserved?: boolean
+  liveDetectionConfidence?: number
 }
 
 export class PracticeSubmissionMatchError extends Error {
@@ -104,7 +111,31 @@ async function captureContext(practiceSetId: string) {
   }
 }
 
-async function persistCapture(practiceSetId: string, scan: PracticeScanResult): Promise<PracticeAttempt> {
+export async function getPracticeSubmissionLayouts(practiceSetId: string) {
+  const context = await captureContext(practiceSetId)
+  return { layouts: context.layouts, pageOptions: context.pageOptions }
+}
+
+async function ensureSubmissionAsset(practiceAttemptId: string, submission: PracticeAnswerSubmission) {
+  if (!submission.submissionGroupId || !submission.sourceKind) return null
+  const now = Date.now()
+  await execute(`INSERT INTO practice_submission_assets(
+    id,practice_attempt_id,source_kind,original_asset_path,page_count,
+    annotations_preserved,metadata_json,status,created_at,updated_at
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,'processing',$8,$8)
+  ON CONFLICT(id) DO UPDATE SET status='processing',updated_at=excluded.updated_at`, [
+    submission.submissionGroupId, practiceAttemptId, submission.sourceKind,
+    submission.originalAssetPath ?? submission.sourcePath, submission.pageCount ?? 1,
+    Number(submission.annotationsPreserved ?? false), JSON.stringify({ importedBy: 'practice_submission_v2' }), now,
+  ])
+  return submission.submissionGroupId
+}
+
+async function persistCapture(
+  practiceSetId: string,
+  scan: PracticeScanResult,
+  submission: PracticeAnswerSubmission,
+): Promise<PracticeAttempt> {
   const now = Date.now()
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
@@ -113,23 +144,28 @@ async function persistCapture(practiceSetId: string, scan: PracticeScanResult): 
         VALUES($1,$2,'captured',$3,$3,$3,$3)
         ON CONFLICT(id) DO UPDATE SET status='captured', submitted_at=$3, error_message=NULL, updated_at=$3`,
       [scan.practiceAttemptId, practiceSetId, now])
+      const submissionAssetId = await ensureSubmissionAsset(scan.practiceAttemptId, submission)
       const existingPage = (await select<Array<{ id: string }>>(`SELECT id FROM practice_attempt_pages
         WHERE practice_attempt_id=$1 AND practice_document_page_id=$2 LIMIT 1`,
       [scan.practiceAttemptId, scan.practiceDocumentPageId]))[0]
       const pageId = existingPage?.id ?? crypto.randomUUID()
       if (existingPage) {
         await execute(`UPDATE practice_attempt_pages SET source_asset_path=$1, corrected_asset_path=$2,
-          qr_payload=$3, orientation_degrees=$4, geometry_json=$5, status='captured', created_at=$6 WHERE id=$7`, [
+          qr_payload=$3, orientation_degrees=$4, geometry_json=$5, status='captured', created_at=$6,
+          submission_asset_id=$8,source_page_index=$9,live_detection_confidence=$10 WHERE id=$7`, [
           scan.sourceAssetPath, scan.correctedAssetPath, scan.qrPayload, scan.orientationDegrees,
           JSON.stringify({ pageDetected: scan.pageDetected, corners: scan.corners, stages: scan.stages }), now, pageId,
+          submissionAssetId, submission.sourcePageIndex ?? null, submission.liveDetectionConfidence ?? scan.detectionConfidence,
         ])
       } else {
         await execute(`INSERT INTO practice_attempt_pages(id, practice_attempt_id, practice_document_page_id,
-          source_asset_path, corrected_asset_path, qr_payload, orientation_degrees, geometry_json, status, created_at)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,'captured',$9)`, [
+          source_asset_path, corrected_asset_path, qr_payload, orientation_degrees, geometry_json, status, created_at,
+          submission_asset_id,source_page_index,live_detection_confidence)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,'captured',$9,$10,$11,$12)`, [
           pageId, scan.practiceAttemptId, scan.practiceDocumentPageId, scan.sourceAssetPath,
           scan.correctedAssetPath, scan.qrPayload, scan.orientationDegrees,
           JSON.stringify({ pageDetected: scan.pageDetected, corners: scan.corners, stages: scan.stages }), now,
+          submissionAssetId, submission.sourcePageIndex ?? null, submission.liveDetectionConfidence ?? scan.detectionConfidence,
         ])
       }
       const persistedResponses = []
@@ -180,9 +216,15 @@ export async function capturePracticeAnswerPages(
             submission.practiceDocumentPageId,
           )
           : await processPracticeScan(submission.sourcePath, context.attemptId, context.layouts)
-        await persistCapture(practiceSetId, scan)
+        await persistCapture(practiceSetId, scan, submission)
+        if (submission.submissionGroupId) {
+          await execute("UPDATE practice_submission_assets SET status='completed',updated_at=$1 WHERE id=$2", [Date.now(), submission.submissionGroupId])
+        }
         context.capturedPageIds.add(scan.practiceDocumentPageId)
       } catch (reason) {
+        if (submission.submissionGroupId) {
+          await execute("UPDATE practice_submission_assets SET status='failed',updated_at=$1 WHERE id=$2", [Date.now(), submission.submissionGroupId]).catch(() => undefined)
+        }
         const remainingOptions = context.pageOptions.filter(
           (option) => !context.capturedPageIds.has(option.pageId),
         )
@@ -223,6 +265,11 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
     WHERE attempt.practice_set_id=$1 ORDER BY attempt.updated_at DESC, page.created_at DESC LIMIT 1`, [practiceSetId])
   const attempt = attempts[0]
   if (!attempt) return null
+  const submissionAssets = await select<Array<{
+    id: string; source_kind: 'image' | 'annotated_pdf' | 'camera_scan'; original_asset_path: string
+    page_count: number; annotations_preserved: number
+  }>>(`SELECT id,source_kind,original_asset_path,page_count,annotations_preserved
+    FROM practice_submission_assets WHERE practice_attempt_id=$1 ORDER BY created_at,id`, [attempt.id])
   const responses = await select<Array<{
     id: string; practice_item_id: string; answer_asset_path: string
     effective_answer_json: string | null; effective_grading_json: string | null
@@ -235,6 +282,10 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
     id: attempt.id, practiceSetId, status: attempt.status, startedAt: Number(attempt.started_at),
     submittedAt: attempt.submitted_at === null ? null : Number(attempt.submitted_at),
     correctedAssetPath: attempt.corrected_asset_path, orientationDegrees: Number(attempt.orientation_degrees),
+    submissionAssets: submissionAssets.map((asset) => ({
+      id: asset.id, sourceKind: asset.source_kind, originalAssetPath: asset.original_asset_path,
+      pageCount: Number(asset.page_count), annotationsPreserved: Boolean(asset.annotations_preserved),
+    })),
     responses: responses.map((response, index) => ({
       regionId: response.id, practiceItemId: response.practice_item_id, regionIndex: index,
       answerAssetPath: response.answer_asset_path, pixelWidth: 0, pixelHeight: 0,

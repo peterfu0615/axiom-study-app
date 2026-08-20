@@ -428,6 +428,18 @@ private struct PDFPagePreview: Codable {
     let pixelHeight: Int
 }
 
+private struct PDFDocumentInfo: Codable {
+    let pageCount: Int
+}
+
+private func readPDFInfo(inputPath: String) throws -> PDFDocumentInfo {
+    guard let document = CGPDFDocument(URL(fileURLWithPath: inputPath) as CFURL),
+          document.numberOfPages > 0 else {
+        throw ProcessorError.unreadableImage
+    }
+    return PDFDocumentInfo(pageCount: document.numberOfPages)
+}
+
 private func renderPDFPage(
     inputPath: String,
     outputPath: String,
@@ -1446,6 +1458,11 @@ private enum AxiomVisionCLI {
                     pageNumber: page,
                     pixelWidth: width
                 ))
+            case "pdf-info":
+                guard let input = value(after: "--input") else {
+                    throw ProcessorError.invalidArguments
+                }
+                resultData = try JSONEncoder().encode(readPDFInfo(inputPath: input))
             case "extract-textbook":
                 guard let input = value(after: "--input") else {
                     throw ProcessorError.invalidArguments

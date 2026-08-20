@@ -17,6 +17,7 @@ import { AISettings } from './features/settings/AISettings'
 import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
 import { DiagramPreview } from './features/diagram/DiagramPreview'
+import { PracticeSubmissionPreview } from './features/practice/PracticeSubmissionPreview'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
 import { checkForUpdates } from './platform/native'
 import { useToast, type ToastState } from './platform/useToast'
@@ -146,6 +147,7 @@ function App() {
     return <CurriculumPreview state={previewParams?.get('state') ?? 'populated'} />
   }
   if (preview === 'diagrams') return <DiagramPreview />
+  if (preview === 'submission') return <PracticeSubmissionPreview />
   return <AppRuntime />
 }
 

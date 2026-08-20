@@ -381,6 +381,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0056_planner.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 57,
+            description: "advanced_practice_submission",
+            sql: include_str!("../migrations/0057_advanced_practice_submission.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -456,7 +462,9 @@ pub fn run() {
             practice_pdf::print_practice_pdf,
             practice_capture::process_practice_scan,
             practice_capture::process_practice_scan_for_page,
+            practice_capture::preview_practice_scan,
             practice_capture::prepare_practice_submission,
+            practice_capture::open_practice_submission,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,
             ai::persist_ai_provider_profiles,

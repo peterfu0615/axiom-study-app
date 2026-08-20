@@ -14,7 +14,17 @@ describe('groupScanLayouts', () => {
       { ...base, region_id: 'r-2', practice_item_id: 'item-2', region_index: 0, x: .1, y: .4, width: .8, height: .1 },
     ])
     expect(layouts).toHaveLength(1)
+    expect(layouts[0].pageIndex).toBe(0)
     expect(layouts[0].regions.map((region) => region.practiceItemId)).toEqual(['item-1', 'item-2'])
+  })
+
+  it('persists submission provenance without replacing immutable grading evidence', () => {
+    const source = readFileSync(new URL('./practiceAttemptDatabase.ts', import.meta.url), 'utf8')
+    expect(source).toContain('practice_submission_assets')
+    expect(source).toContain('annotations_preserved')
+    expect(source).toContain('source_page_index')
+    expect(source).toContain('live_detection_confidence')
+    expect(source).not.toContain('DELETE FROM practice_evidences')
   })
 
   it('preserves the failed and remaining pages for manual recovery', () => {

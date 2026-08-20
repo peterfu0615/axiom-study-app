@@ -1,10 +1,14 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use image::{DynamicImage, GrayImage, ImageBuffer, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
+use wait_timeout::ChildExt;
 
 const CORRECTED_WIDTH: u32 = 1190;
 const CORRECTED_HEIGHT: u32 = 1684;
@@ -12,6 +16,9 @@ const MARKER_LEFT_X: f64 = 29.5 / 595.28;
 const MARKER_RIGHT_X: f64 = 565.78 / 595.28;
 const MARKER_TOP_Y: f64 = 29.5 / 841.89;
 const MARKER_BOTTOM_Y: f64 = 812.39 / 841.89;
+const SUBMISSION_PDF_LIMIT_BYTES: u64 = 250 * 1024 * 1024;
+const SUBMISSION_RENDER_TIMEOUT: Duration = Duration::from_secs(45);
+const LIVE_PREVIEW_LIMIT_BYTES: usize = 6 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +36,7 @@ pub struct ScanRegion {
 #[serde(rename_all = "camelCase")]
 pub struct ScanLayout {
     page_id: String,
+    page_index: usize,
     page_identity: String,
     qr_payload: String,
     width_points: f64,
@@ -69,9 +77,47 @@ pub struct PracticeScanResult {
     corrected_height: u32,
     orientation_degrees: u16,
     page_detected: bool,
+    detection_confidence: f64,
     corners: Vec<ImagePoint>,
     stages: Vec<String>,
     responses: Vec<CapturedResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeScanPreview {
+    matched: bool,
+    message: String,
+    practice_document_page_id: Option<String>,
+    page_index: Option<usize>,
+    orientation_degrees: u16,
+    confidence: f64,
+    corners: Vec<ImagePoint>,
+    answer_regions: Vec<Vec<ImagePoint>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedSubmissionPage {
+    source_path: String,
+    page_index: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedPracticeSubmission {
+    submission_group_id: String,
+    source_kind: String,
+    original_asset_path: String,
+    page_count: usize,
+    annotations_preserved: bool,
+    pages: Vec<PreparedSubmissionPage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfDocumentInfo {
+    page_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -313,6 +359,141 @@ fn solve_homography(
     Ok(std::array::from_fn(|index| matrix[index][8]))
 }
 
+fn project_point(homography: &[f64; 8], point: ImagePoint) -> Option<ImagePoint> {
+    let denominator = homography[6] * point.x + homography[7] * point.y + 1.0;
+    if denominator.abs() < 1e-9 {
+        return None;
+    }
+    Some(ImagePoint {
+        x: (homography[0] * point.x + homography[1] * point.y + homography[2]) / denominator,
+        y: (homography[3] * point.x + homography[4] * point.y + homography[5]) / denominator,
+    })
+}
+
+fn preview_scan(image: &DynamicImage, layouts: &[ScanLayout]) -> PracticeScanPreview {
+    let Ok((oriented, orientation_degrees, payload)) = recognize_identity(image) else {
+        return PracticeScanPreview {
+            matched: false,
+            message: "请将整张答题纸和右上角二维码放入取景框".to_string(),
+            practice_document_page_id: None,
+            page_index: None,
+            orientation_degrees: 0,
+            confidence: 0.0,
+            corners: Vec::new(),
+            answer_regions: Vec::new(),
+        };
+    };
+    let Some(layout) = layouts
+        .iter()
+        .find(|candidate| candidate.qr_payload == payload)
+    else {
+        return PracticeScanPreview {
+            matched: false,
+            message: "检测到其他练习的页面，请更换答题纸".to_string(),
+            practice_document_page_id: None,
+            page_index: None,
+            orientation_degrees,
+            confidence: 0.35,
+            corners: Vec::new(),
+            answer_regions: Vec::new(),
+        };
+    };
+    let Ok(markers) = detect_markers(&oriented) else {
+        return PracticeScanPreview {
+            matched: false,
+            message: format!(
+                "已识别第 {} 页，请露出纸张四角定位标记",
+                layout.page_index + 1
+            ),
+            practice_document_page_id: Some(layout.page_id.clone()),
+            page_index: Some(layout.page_index),
+            orientation_degrees,
+            confidence: 0.6,
+            corners: Vec::new(),
+            answer_regions: Vec::new(),
+        };
+    };
+    let destination = [
+        ImagePoint {
+            x: MARKER_LEFT_X * f64::from(CORRECTED_WIDTH),
+            y: MARKER_TOP_Y * f64::from(CORRECTED_HEIGHT),
+        },
+        ImagePoint {
+            x: MARKER_RIGHT_X * f64::from(CORRECTED_WIDTH),
+            y: MARKER_TOP_Y * f64::from(CORRECTED_HEIGHT),
+        },
+        ImagePoint {
+            x: MARKER_RIGHT_X * f64::from(CORRECTED_WIDTH),
+            y: MARKER_BOTTOM_Y * f64::from(CORRECTED_HEIGHT),
+        },
+        ImagePoint {
+            x: MARKER_LEFT_X * f64::from(CORRECTED_WIDTH),
+            y: MARKER_BOTTOM_Y * f64::from(CORRECTED_HEIGHT),
+        },
+    ];
+    let Ok(homography) = solve_homography(destination, markers) else {
+        return PracticeScanPreview {
+            matched: false,
+            message: "纸张倾斜过大，请调整角度".to_string(),
+            practice_document_page_id: Some(layout.page_id.clone()),
+            page_index: Some(layout.page_index),
+            orientation_degrees,
+            confidence: 0.55,
+            corners: markers.into_iter().collect(),
+            answer_regions: Vec::new(),
+        };
+    };
+    let source_width = f64::from(oriented.width());
+    let source_height = f64::from(oriented.height());
+    let answer_regions = layout
+        .regions
+        .iter()
+        .filter_map(|region| {
+            let x = region.x * f64::from(CORRECTED_WIDTH);
+            let y = region.y * f64::from(CORRECTED_HEIGHT);
+            let width = region.width * f64::from(CORRECTED_WIDTH);
+            let height = region.height * f64::from(CORRECTED_HEIGHT);
+            [
+                ImagePoint { x, y },
+                ImagePoint { x: x + width, y },
+                ImagePoint {
+                    x: x + width,
+                    y: y + height,
+                },
+                ImagePoint { x, y: y + height },
+            ]
+            .into_iter()
+            .map(|point| project_point(&homography, point))
+            .collect::<Option<Vec<_>>>()
+            .map(|points| {
+                points
+                    .into_iter()
+                    .map(|point| ImagePoint {
+                        x: point.x / source_width,
+                        y: point.y / source_height,
+                    })
+                    .collect()
+            })
+        })
+        .collect();
+    PracticeScanPreview {
+        matched: true,
+        message: format!("第 {} 页已对齐，可以拍摄", layout.page_index + 1),
+        practice_document_page_id: Some(layout.page_id.clone()),
+        page_index: Some(layout.page_index),
+        orientation_degrees,
+        confidence: 1.0,
+        corners: markers
+            .into_iter()
+            .map(|point| ImagePoint {
+                x: point.x / source_width,
+                y: point.y / source_height,
+            })
+            .collect(),
+        answer_regions,
+    }
+}
+
 fn sample_bilinear(image: &RgbImage, x: f64, y: f64) -> Rgb<u8> {
     if x < 0.0 || y < 0.0 || x >= f64::from(image.width() - 1) || y >= f64::from(image.height() - 1)
     {
@@ -510,6 +691,7 @@ fn run_capture_with_layout(
         corrected_height: corrected.height(),
         orientation_degrees,
         page_detected: true,
+        detection_confidence: 1.0,
         corners: markers.into_iter().collect(),
         stages: [
             "page_detection",
@@ -583,7 +765,141 @@ pub async fn process_practice_scan_for_page(
 }
 
 #[tauri::command]
-pub fn prepare_practice_submission(app: AppHandle, source_path: String) -> Result<String, String> {
+pub async fn preview_practice_scan(
+    data_url: String,
+    layouts: Vec<ScanLayout>,
+) -> Result<PracticeScanPreview, String> {
+    if layouts.is_empty() {
+        return Err("没有可识别的练习页面布局".to_string());
+    }
+    let encoded = data_url
+        .strip_prefix("data:image/jpeg;base64,")
+        .or_else(|| data_url.strip_prefix("data:image/png;base64,"))
+        .ok_or_else(|| "实时取景帧格式无效".to_string())?;
+    if encoded.len() > LIVE_PREVIEW_LIMIT_BYTES * 4 / 3 + 16 {
+        return Err("实时取景帧过大".to_string());
+    }
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| "实时取景帧无法解码".to_string())?;
+    if bytes.len() > LIVE_PREVIEW_LIMIT_BYTES {
+        return Err("实时取景帧超过安全限制".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let image =
+            image::load_from_memory(&bytes).map_err(|_| "实时取景帧不是有效图片".to_string())?;
+        Ok(preview_scan(&image, &layouts))
+    })
+    .await
+    .map_err(|error| format!("实时页面识别任务异常结束：{error}"))?
+}
+
+fn run_helper_json(helper: &Path, arguments: &[&str]) -> Result<Vec<u8>, String> {
+    let mut child = Command::new(helper)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("无法启动 PDF 页面读取器：{error}"))?;
+    match child.wait_timeout(SUBMISSION_RENDER_TIMEOUT) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("PDF 页面读取超时".to_string());
+        }
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("等待 PDF 页面读取器失败：{error}"));
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("读取 PDF 页面结果失败：{error}"))?;
+    if !output.status.success() {
+        return Err("PDF 页面读取失败，请确认文件未加密且可以正常打开".to_string());
+    }
+    Ok(output.stdout)
+}
+
+fn prepare_pdf_submission(
+    helper: &Path,
+    source: &Path,
+    practice_directory: &Path,
+) -> Result<PreparedPracticeSubmission, String> {
+    let metadata = fs::metadata(source).map_err(|error| format!("无法读取作答 PDF：{error}"))?;
+    if metadata.len() == 0 || metadata.len() > SUBMISSION_PDF_LIMIT_BYTES {
+        return Err("作答 PDF 为空或超过 250 MB 限制".to_string());
+    }
+    let submission_group_id = Uuid::new_v4().to_string();
+    let directory = practice_directory.join(format!("submission-{submission_group_id}"));
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建作业回传目录：{error}"))?;
+    let original = directory.join("original.pdf");
+    if let Err(error) = fs::copy(source, &original) {
+        let _ = fs::remove_dir_all(&directory);
+        return Err(format!("无法保存原始批注 PDF：{error}"));
+    }
+    let info_output = run_helper_json(
+        helper,
+        &["pdf-info", "--input", original.to_string_lossy().as_ref()],
+    );
+    let info: PdfDocumentInfo = match info_output.and_then(|output| {
+        serde_json::from_slice::<PdfDocumentInfo>(&output)
+            .map_err(|_| "PDF 页数结果无效".to_string())
+    }) {
+        Ok(info) if info.page_count > 0 && info.page_count <= 200 => info,
+        Ok(_) => {
+            let _ = fs::remove_dir_all(&directory);
+            return Err("作答 PDF 页数必须在 1–200 页之间".to_string());
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&directory);
+            return Err(error);
+        }
+    };
+    let mut pages = Vec::with_capacity(info.page_count);
+    for page_index in 0..info.page_count {
+        let output = directory.join(format!("page-{}.png", page_index + 1));
+        let result = run_helper_json(
+            helper,
+            &[
+                "render-pdf-page",
+                "--input",
+                original.to_string_lossy().as_ref(),
+                "--output",
+                output.to_string_lossy().as_ref(),
+                "--page",
+                &(page_index + 1).to_string(),
+                "--width",
+                "1800",
+            ],
+        );
+        if result.is_err() || !output.is_file() {
+            let _ = fs::remove_dir_all(&directory);
+            return Err(format!("作答 PDF 第 {} 页转换失败", page_index + 1));
+        }
+        pages.push(PreparedSubmissionPage {
+            source_path: output.to_string_lossy().to_string(),
+            page_index,
+        });
+    }
+    Ok(PreparedPracticeSubmission {
+        submission_group_id,
+        source_kind: "annotated_pdf".to_string(),
+        original_asset_path: original.to_string_lossy().to_string(),
+        page_count: info.page_count,
+        annotations_preserved: true,
+        pages,
+    })
+}
+
+#[tauri::command]
+pub async fn prepare_practice_submission(
+    app: AppHandle,
+    source_path: String,
+) -> Result<PreparedPracticeSubmission, String> {
     let source = PathBuf::from(&source_path)
         .canonicalize()
         .map_err(|error| format!("无法读取作答文件：{error}"))?;
@@ -599,19 +915,33 @@ pub fn prepare_practice_submission(app: AppHandle, source_path: String) -> Resul
     {
         return Err("只有 PDF 需要转换后提交".to_string());
     }
-    let destination =
-        practice_media_directory(&app)?.join(format!("submission-{}.png", Uuid::new_v4()));
-    let output = std::process::Command::new("/usr/bin/sips")
-        .args(["-s", "format", "png"])
-        .arg(&source)
-        .arg("--out")
-        .arg(&destination)
-        .output()
-        .map_err(|error| format!("无法转换 PDF 作答文件：{error}"))?;
-    if !output.status.success() || !destination.is_file() {
-        return Err("PDF 转换失败，请改为上传清晰的 JPG 或 PNG 图片".to_string());
+    let helper = crate::commands::vision_helper_path(&app)?;
+    let directory = practice_media_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_pdf_submission(&helper, &source, &directory)
+    })
+    .await
+    .map_err(|error| format!("PDF 作答导入任务异常结束：{error}"))?
+}
+
+#[tauri::command]
+pub fn open_practice_submission(app: AppHandle, path: String) -> Result<(), String> {
+    let root = practice_media_directory(&app)?
+        .canonicalize()
+        .map_err(|error| format!("无法读取练习回传目录：{error}"))?;
+    let source = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("无法读取原始作答 PDF：{error}"))?;
+    if !source.starts_with(root)
+        || source.extension().and_then(|value| value.to_str()) != Some("pdf")
+    {
+        return Err("只能打开 Axiom 管理的原始作答 PDF".to_string());
     }
-    Ok(destination.to_string_lossy().to_string())
+    Command::new("open")
+        .arg(source)
+        .spawn()
+        .map_err(|error| format!("无法打开原始作答 PDF：{error}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -679,6 +1009,7 @@ mod tests {
     fn layout(payload: &str) -> ScanLayout {
         ScanLayout {
             page_id: "page-1".into(),
+            page_index: 0,
             page_identity: "identity-1".into(),
             qr_payload: payload.into(),
             width_points: 595.28,
@@ -772,6 +1103,63 @@ mod tests {
         assert_eq!(result.page_identity, "identity-1");
         assert_eq!(result.responses.len(), 1);
         assert!(Path::new(&result.responses[0].answer_asset_path).is_file());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn live_preview_identifies_the_page_and_projects_answer_regions() {
+        let payload = "AXIOM|v=3|page=live-preview-fixture";
+        let preview = preview_scan(
+            &DynamicImage::ImageRgb8(fixture(payload)),
+            &[layout(payload)],
+        );
+        assert!(preview.matched);
+        assert_eq!(preview.practice_document_page_id.as_deref(), Some("page-1"));
+        assert_eq!(preview.page_index, Some(0));
+        assert_eq!(preview.answer_regions.len(), 1);
+        assert!(preview.answer_regions[0]
+            .iter()
+            .all(|point| point.x >= 0.0 && point.x <= 1.0 && point.y >= 0.0 && point.y <= 1.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn annotated_pdf_import_preserves_original_and_renders_every_page() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("axiom-submission-pdf-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temporary submission directory");
+        let source = directory.join("annotated.pdf");
+        let original_bytes = b"annotated-pdf-fixture";
+        fs::write(&source, original_bytes).expect("pdf fixture");
+        let fixture_png = directory.join("fixture.png");
+        RgbImage::from_pixel(80, 120, Rgb([255, 255, 255]))
+            .save(&fixture_png)
+            .expect("png fixture");
+        let helper = directory.join("helper.sh");
+        fs::write(
+            &helper,
+            "#!/bin/sh\nif [ \"$1\" = \"pdf-info\" ]; then printf '{\"pageCount\":2}'; exit 0; fi\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --output) output=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp \"$(dirname \"$0\")/fixture.png\" \"$output\"\nprintf '{\"path\":\"ok\",\"pixelWidth\":80,\"pixelHeight\":120}'\n",
+        )
+        .expect("helper fixture");
+        let mut permissions = fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&helper, permissions).unwrap();
+
+        let prepared = prepare_pdf_submission(&helper, &source, &directory)
+            .expect("multi-page PDF should prepare");
+        assert_eq!(prepared.page_count, 2);
+        assert_eq!(prepared.pages.len(), 2);
+        assert!(prepared.annotations_preserved);
+        assert_eq!(
+            fs::read(&prepared.original_asset_path).unwrap(),
+            original_bytes
+        );
+        assert!(prepared
+            .pages
+            .iter()
+            .all(|page| Path::new(&page.source_path).is_file()));
         let _ = fs::remove_dir_all(directory);
     }
 

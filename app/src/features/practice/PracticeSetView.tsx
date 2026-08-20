@@ -6,7 +6,7 @@ import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, PageHeader
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
-import { importImage, mediaAssetUrl, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
+import { importImage, mediaAssetUrl, openPracticeSubmission, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
 import {
   openExportedPracticePdf,
   practiceDocumentDiagnostic,
@@ -28,6 +28,7 @@ import { finalizePracticeAttempt, getPracticeLoopForSet } from '../../platform/p
 import { getPracticeSet } from '../../platform/practiceDatabase'
 import { practiceErrorMessage } from './productLanguage'
 import { shouldAutoPreparePracticeDocument, type PracticeDocumentState } from './practiceDocumentState'
+import { PracticeSubmissionScanner } from './PracticeSubmissionScanner'
 import './PracticeSetView.css'
 
 type PracticePdfSection = 'exercise' | 'answer_sheet' | 'solution'
@@ -117,14 +118,14 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   onBack: () => void
   onOpenPracticeSet?: (practiceSet: PracticeSet) => void
   initialAttempt?: PracticeAttempt
-  initialMode?: 'ready' | 'results'
+  initialMode?: 'ready' | 'submit' | 'results'
 }) {
   const [selectedSection, setSelectedSection] = useState<PracticePdfSection>('exercise')
   const [document, setDocument] = useState<PracticeDocumentRecord | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pagePreview, setPagePreview] = useState<PracticePdfPagePreview | null>(null)
   const [documentState, setDocumentState] = useState<PracticeDocumentState>('idle')
-  const [mode, setMode] = useState<'ready' | 'submit' | 'manual_match' | 'processing' | 'results'>(initialMode ?? 'ready')
+  const [mode, setMode] = useState<'ready' | 'submit' | 'scanner' | 'manual_match' | 'processing' | 'results'>(initialMode ?? 'ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(initialAttempt ?? null)
   const [loop, setLoop] = useState<PracticeLoop | null>(null)
@@ -287,11 +288,29 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     try {
       const submissions: PracticeAnswerSubmission[] = []
       for (const path of selectedPaths) {
-        submissions.push({
-          sourcePath: path.toLowerCase().endsWith('.pdf')
-            ? await preparePracticeSubmission(path)
-            : (await importImage(path)).path,
-        })
+        if (path.toLowerCase().endsWith('.pdf')) {
+          const prepared = await preparePracticeSubmission(path)
+          submissions.push(...prepared.pages.map((page) => ({
+            sourcePath: page.sourcePath,
+            submissionGroupId: prepared.submissionGroupId,
+            sourceKind: prepared.sourceKind,
+            originalAssetPath: prepared.originalAssetPath,
+            sourcePageIndex: page.pageIndex,
+            pageCount: prepared.pageCount,
+            annotationsPreserved: prepared.annotationsPreserved,
+          })))
+        } else {
+          const media = await importImage(path)
+          submissions.push({
+            sourcePath: media.path,
+            submissionGroupId: crypto.randomUUID(),
+            sourceKind: 'image',
+            originalAssetPath: media.path,
+            sourcePageIndex: 0,
+            pageCount: 1,
+            annotationsPreserved: false,
+          })
+        }
       }
       await processSubmissions(submissions)
     } catch (reason) {
@@ -339,6 +358,21 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     </FlowingTaskSurface>
   </main>
 
+  if (mode === 'scanner') return <main className="workspace practice-workspace">
+    <PageHeader
+      className="practice-header"
+      eyebrow="连续扫描"
+      leading={<IconButton appearance="plain" label="返回提交作答" onClick={() => setMode('submit')}><Icon name="chevron" size={20} /></IconButton>}
+      summary="实时识别页面身份、纸张四角和当前作答区域"
+      title="拍摄作答页"
+    />
+    <PracticeSubmissionScanner
+      onCancel={() => setMode('submit')}
+      onSubmit={(submissions) => void processSubmissions(submissions)}
+      practiceSetId={practiceSet.id}
+    />
+  </main>
+
   if (mode === 'manual_match' && manualMatch) return <main className="workspace practice-workspace">
     <PageHeader
       className="practice-header"
@@ -380,6 +414,10 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       <div><span>答对</span><strong>{correct}</strong><small>/ {results.length}</small></div>
       <div><span>需要巩固</span><strong>{needsWork}</strong><small>题</small></div>
     </section>
+    {attempt.submissionAssets?.some((asset) => asset.annotationsPreserved) && <section className="practice-submission-provenance">
+      <div><strong>原始批注 PDF 已保留</strong><span>逐页识别不会改写平板批注或原文件。</span></div>
+      {attempt.submissionAssets.filter((asset) => asset.annotationsPreserved).map((asset) => <Button key={asset.id} onClick={() => void openPracticeSubmission(asset.originalAssetPath)} variant="ghost">打开原文件 · {asset.pageCount} 页</Button>)}
+    </section>}
     <section className="practice-results" aria-label="逐题结果">
       {attempt.responses.map((response) => {
         const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
@@ -415,12 +453,19 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
-      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持单个 PDF 或多张 JPG、PNG、HEIC。请按页码顺序选择，Axiom 会逐页识别；二维码不可读时可以手动指定页面。</p></div>
-      <button className="practice-submit__dropzone" onClick={() => void submitAnswer()} type="button">
-        <Icon name="image" size={28} />
-        <strong>选择一个或多个作答文件</strong>
-        <span>PDF 或按顺序选择多张照片</span>
-      </button>
+      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传或连续扫描作答页</h2><p>带批注 PDF 会完整保留原文件并逐页读取；也可以按页码导入多张照片，或用 iPhone 相机实时识别页面与作答区域。</p></div>
+      <div className="practice-submit__methods">
+        <button className="practice-submit__dropzone" onClick={() => void submitAnswer()} type="button">
+          <Icon name="image" size={28} />
+          <strong>选择作答文件</strong>
+          <span>多页 PDF、JPG、PNG 或 HEIC</span>
+        </button>
+        <button className="practice-submit__dropzone" onClick={() => setMode('scanner')} type="button">
+          <Icon name="camera" size={28} />
+          <strong>连续扫描多页</strong>
+          <span>实时确认页面身份与作答区域</span>
+        </button>
+      </div>
       <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
     </section> : <>
       <nav className="practice-section-nav" aria-label="练习文档章节">

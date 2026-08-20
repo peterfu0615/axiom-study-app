@@ -13,7 +13,7 @@ import type {
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 import type { DiagramValidationContract, TikzRenderResult } from '../domain/diagram'
 import type { CompletePracticeDocument, PracticeDocument } from '../domain/practiceDocument'
-import type { PracticeScanResult } from '../domain/practiceAttempt'
+import type { PracticeScanPreview, PracticeScanResult } from '../domain/practiceAttempt'
 
 export interface PersistedProblemImage {
   path: string
@@ -318,11 +318,21 @@ export function printPracticePdf(path: string) {
 
 export interface PracticeScanLayout {
   pageId: string
+  pageIndex: number
   pageIdentity: string
   qrPayload: string
   widthPoints: number
   heightPoints: number
   regions: Array<{ id: string; practiceItemId: string; regionIndex: number; x: number; y: number; width: number; height: number }>
+}
+
+export interface PreparedPracticeSubmission {
+  submissionGroupId: string
+  sourceKind: 'annotated_pdf'
+  originalAssetPath: string
+  pageCount: number
+  annotationsPreserved: boolean
+  pages: Array<{ sourcePath: string; pageIndex: number }>
 }
 
 export function processPracticeScan(sourcePath: string, practiceAttemptId: string, layouts: PracticeScanLayout[]) {
@@ -343,8 +353,16 @@ export function processPracticeScanForPage(
   })
 }
 
+export function previewPracticeScan(dataUrl: string, layouts: PracticeScanLayout[]) {
+  return invoke<PracticeScanPreview>('preview_practice_scan', { dataUrl, layouts })
+}
+
 export function preparePracticeSubmission(sourcePath: string) {
-  return invoke<string>('prepare_practice_submission', { sourcePath })
+  return invoke<PreparedPracticeSubmission>('prepare_practice_submission', { sourcePath })
+}
+
+export function openPracticeSubmission(path: string) {
+  return invoke<void>('open_practice_submission', { path })
 }
 
 export interface MediaEntry {
