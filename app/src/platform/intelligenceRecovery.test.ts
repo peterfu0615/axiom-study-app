@@ -171,12 +171,12 @@ function runSelect(sql: string, params: unknown[]): unknown[] {
     const row = [...state.analyses.values()].find((analysis) => analysis.problem_id === String(params[0]))
     return row ? [row] : []
   }
-  if (sql.includes('FROM problem_solutions')) {
-    return []
-  }
   if (sql.includes('FROM problems p') && sql.includes('WHERE p.id = $1')) {
     const row = state.problems.get(String(params[0]))
     return row ? [row] : []
+  }
+  if (sql.includes('FROM problem_solutions')) {
+    return []
   }
   return []
 }

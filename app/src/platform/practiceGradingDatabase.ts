@@ -45,33 +45,36 @@ function safeGradingErrorCode(reason: unknown) {
 async function grade(responseId: string, item: PracticeItem, answer: StructuredStudentAnswer) {
   const deterministic = gradePracticeAnswer(item, answer)
   if (!deterministic.requiresReview) return deterministic
-  const provider = getSubjectivePracticeGradingProviders()[0]
-  if (!provider) return deterministic
+  const providers = getSubjectivePracticeGradingProviders()
   const input: SubjectivePracticeGradingInput = {
     subject: item.subject, statementMarkdown: item.statementMarkdown, canonicalAnswer: item.canonicalAnswer,
     canonicalSolution: canonicalSolution(item), rubric: item.gradingRubric, studentAnswer: answer,
     targetTags: item.targetTags, skillBundleId: item.targetSkillBundleId, difficulty: item.difficulty,
     sourceType: item.sourceType, usedHint: false,
   }
-  const runId = crypto.randomUUID()
-  const startedAt = Date.now()
-  await execute(`INSERT INTO practice_grading_model_runs(
-    id,practice_response_id,provider,model,prompt_version,schema_version,input_hash,status,started_at
-  ) VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8)`, [
-    runId, responseId, provider.id, provider.model, SUBJECTIVE_PRACTICE_GRADING_PROMPT_VERSION,
-    SUBJECTIVE_PRACTICE_GRADING_SCHEMA_VERSION, operationKey('grading_input', JSON.stringify(input)), startedAt,
-  ])
-  try {
-    const grading = { ...(await provider.gradeSubjectivePractice(input)).grading, modelRunId: runId }
-    grading.requiresReview = gradingRequiresReview(grading)
-    await execute(`UPDATE practice_grading_model_runs SET status='succeeded',result_json=$1,completed_at=$2
-      WHERE id=$3 AND status='running'`, [JSON.stringify(grading), Date.now(), runId])
-    return grading
-  } catch (reason) {
-    await execute(`UPDATE practice_grading_model_runs SET status='failed',safe_error_code=$1,completed_at=$2
-      WHERE id=$3 AND status='running'`, [safeGradingErrorCode(reason), Date.now(), runId])
-    throw reason
+  let lastFailure: unknown = new Error('没有可用的练习批改 Provider')
+  for (const provider of providers) {
+    const runId = crypto.randomUUID()
+    const startedAt = Date.now()
+    await execute(`INSERT INTO practice_grading_model_runs(
+      id,practice_response_id,provider,model,prompt_version,schema_version,input_hash,status,started_at
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8)`, [
+      runId, responseId, provider.id, provider.model, SUBJECTIVE_PRACTICE_GRADING_PROMPT_VERSION,
+      SUBJECTIVE_PRACTICE_GRADING_SCHEMA_VERSION, operationKey('grading_input', JSON.stringify(input)), startedAt,
+    ])
+    try {
+      const grading = { ...(await provider.gradeSubjectivePractice(input)).grading, modelRunId: runId }
+      grading.requiresReview = gradingRequiresReview(grading)
+      await execute(`UPDATE practice_grading_model_runs SET status='succeeded',result_json=$1,completed_at=$2
+        WHERE id=$3 AND status='running'`, [JSON.stringify(grading), Date.now(), runId])
+      return grading
+    } catch (reason) {
+      lastFailure = reason
+      await execute(`UPDATE practice_grading_model_runs SET status='failed',safe_error_code=$1,completed_at=$2
+        WHERE id=$3 AND status='running'`, [safeGradingErrorCode(reason), Date.now(), runId])
+    }
   }
+  throw lastFailure
 }
 
 async function persistAIExtraction(responseId: string, answer: StructuredStudentAnswer, result: PracticeGradingResult) {

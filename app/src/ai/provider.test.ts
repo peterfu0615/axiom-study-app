@@ -11,7 +11,11 @@ vi.mock('../platform/native', () => ({
 import {
   AntigravityCLIProvider,
   configureAIProviders,
+  getAIProvider,
+  getPracticeVariantGenerationProviders,
+  getPracticeVariantVerificationProviders,
   getSolutionProvidersForRun,
+  getSubjectivePracticeGradingProviders,
   getVisionProvidersForRun,
   MockAIProvider,
   OpenAICompatibleProvider,
@@ -303,6 +307,43 @@ describe('MockAIProvider', () => {
 })
 
 describe('Provider routing', () => {
+  it('keeps task-specific providers isolated while preserving ordered fallback within a task', () => {
+    const profile = (id: string, sortOrder: number, taskTypes: NonNullable<import('../domain/models').AIProviderProfile['taskTypes']>) => ({
+      id,
+      name: id,
+      provider: 'openai_compatible' as const,
+      baseUrl: 'https://example.com/v1',
+      apiKey: '',
+      hasApiKey: true,
+      apiKeySuffix: 'test',
+      credentialRef: id,
+      commandPath: '',
+      model: 'test-model',
+      supportsVision: true,
+      supportsText: true,
+      taskTypes,
+      enabled: true,
+      sortOrder,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    configureAIProviders([
+      profile('understanding', 0, ['problem_understanding']),
+      profile('solution-primary', 1, ['solution_generation']),
+      profile('solution-fallback', 2, ['solution_generation']),
+      profile('grader', 3, ['submission_grading']),
+      profile('generator', 4, ['variant_generation']),
+      profile('verifier', 5, ['variant_verification']),
+    ])
+
+    expect(getAIProvider().id).toBe('understanding')
+    expect(getSolutionProvidersForRun('solution-fallback', 'test-model').map(({ id }) => id))
+      .toEqual(['solution-fallback', 'solution-primary'])
+    expect(getSubjectivePracticeGradingProviders().map(({ id }) => id)).toEqual(['grader'])
+    expect(getPracticeVariantGenerationProviders().map(({ id }) => id)).toEqual(['generator'])
+    expect(getPracticeVariantVerificationProviders().map(({ id }) => id)).toEqual(['verifier'])
+  })
+
   it('uses only enabled VLM profiles and preserves fallback order', () => {
     const base = {
       provider: 'openai_compatible' as const,

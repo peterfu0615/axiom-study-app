@@ -3440,6 +3440,7 @@ const defaultAIProviderProfiles: AIProviderProfile[] = [{
   model: 'mock-vision-v1',
   supportsVision: true,
   supportsText: true,
+  taskTypes: [],
   enabled: true,
   sortOrder: 0,
   createdAt: 0,
@@ -3469,6 +3470,11 @@ function rowToAIProviderProfile(
     model: String(row.model || ''),
     supportsVision: parseSQLiteBoolean(row.supports_vision),
     supportsText: parseSQLiteBoolean(row.supports_text),
+    taskTypes: parseJSON<AIProviderProfile['taskTypes']>(
+      row.task_types_json,
+      [],
+      `ai_provider_profiles.task_types_json#${String(row.id)}`,
+    ),
     enabled: parseSQLiteBoolean(row.enabled),
     sortOrder: Number(row.sort_order || 0),
     createdAt: Number(row.created_at || 0),
@@ -3480,7 +3486,7 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   if (!isDesktopRuntime()) return defaultAIProviderProfiles
   const rows = await (await database()).select<Record<string, unknown>[]>(
     `SELECT id, name, provider, base_url, credential_ref, command_path, model,
-       supports_vision, supports_text, enabled, sort_order, created_at, updated_at,
+       supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at,
        CAST(CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS INTEGER) AS has_api_key,
        CASE
          WHEN length(trim(api_key)) > 4 THEN substr(trim(api_key), -4)
@@ -3559,6 +3565,7 @@ export async function saveAIProviderProfiles(
       profile.provider === 'mock'
         ? 'mock-vision-v1'
         : profile.model.trim(),
+    taskTypes: [...new Set(profile.taskTypes ?? [])],
     sortOrder,
     createdAt: profile.createdAt || now,
     updatedAt: now,

@@ -562,6 +562,21 @@ export type AIProviderKind =
   | 'openai_compatible'
   | 'antigravity_cli'
 
+export type AIProviderTaskType =
+  | 'problem_understanding'
+  | 'solution_generation'
+  | 'solution_review'
+  | 'attempt_analysis'
+  | 'tag_mapping'
+  | 'variant_planning'
+  | 'variant_generation'
+  | 'variant_verification'
+  | 'submission_grading'
+  | 'explain_selection'
+  | 'textbook_recognition'
+  | 'curriculum_analysis'
+  | 'geometry_scene'
+
 export interface AIProviderProfile {
   id: string
   name: string
@@ -580,6 +595,8 @@ export interface AIProviderProfile {
   model: string
   supportsVision: boolean
   supportsText: boolean
+  /** Empty/omitted keeps backward-compatible capability-based routing. */
+  taskTypes?: AIProviderTaskType[]
   enabled: boolean
   sortOrder: number
   createdAt: number

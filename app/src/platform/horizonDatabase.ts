@@ -1176,7 +1176,11 @@ async function runTagStage(
     const subject = job.recognition.subject.value?.trim()
     if (!subject) throw new Error('请先识别并确认教材科目')
     const existing = await listTagDefinitions(subject)
-    const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
+    const provider = getCurriculumAnalysisProvider(
+      job.provider ?? undefined,
+      job.model ?? undefined,
+      'tag_mapping',
+    )
     const existingTags = existing.map((tag) => ({
       id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
     }))

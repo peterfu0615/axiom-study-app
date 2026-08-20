@@ -4034,6 +4034,45 @@
   accent-color: var(--brand);
 }
 
+.provider-task-routing {
+  margin: 18px 0 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.provider-task-routing legend {
+  padding: 0 5px;
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.provider-task-routing p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.provider-task-routing__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.provider-task-routing__grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 8px;
+}
+
+.provider-task-routing__grid input {
+  accent-color: var(--brand);
+}
+
 .settings-form input,
 .settings-form select {
   width: 100%;

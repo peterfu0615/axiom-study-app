@@ -351,6 +351,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0051_review_preferences.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 52,
+            description: "ai_provider_task_routing",
+            sql: include_str!("../migrations/0052_ai_provider_task_routing.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

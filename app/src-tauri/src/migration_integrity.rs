@@ -6,8 +6,8 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 51，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 51；
+//!   1. 全新库一路跑到 52，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 52；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
 //!      校验并推进到 51；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 51（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 52（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_51_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_52_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(51);
+            let migrations = migrations_up_to(52);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 51（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 51);
+                .expect("全新库必须能完整迁移到 52（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 52);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 51);
+            assert_eq!(max_applied_version(&mut conn).await, 52);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=51 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=52 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_51_exactly() {
+    fn migration_list_covers_versions_1_through_52_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=51).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=51");
+        let expected: Vec<i64> = (1..=52).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=52");
     }
 
     #[test]
@@ -261,6 +261,33 @@ mod tests {
             assert!(conn
                 .execute(
                     "UPDATE review_preferences SET preferred_mode='unknown' WHERE id='default'"
+                )
+                .await
+                .is_err());
+        });
+    }
+
+    #[test]
+    fn provider_task_routes_are_backward_compatible_and_json_bounded() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("provider-task-routing");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(52))
+                .await
+                .expect("Provider task route schema must migrate");
+            let routes: String = sqlx::query_scalar(
+                "SELECT task_types_json FROM ai_provider_profiles WHERE id='mock-default'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("existing provider must receive the all-tasks default");
+            assert_eq!(routes, "[]");
+            conn.execute("UPDATE ai_provider_profiles SET task_types_json='[\"solution_generation\"]' WHERE id='mock-default'")
+                .await
+                .expect("valid route arrays must persist");
+            assert!(conn
+                .execute(
+                    "UPDATE ai_provider_profiles SET task_types_json='{}' WHERE id='mock-default'"
                 )
                 .await
                 .is_err());

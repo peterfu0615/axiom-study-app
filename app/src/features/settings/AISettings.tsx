@@ -5,6 +5,7 @@ import { getAppVersion } from '../../platform/native'
 import type {
   AIProviderKind,
   AIProviderProfile,
+  AIProviderTaskType,
 } from '../../domain/models'
 import {
   deleteAIProviderProfileApiKey,
@@ -44,6 +45,7 @@ function newProvider(index: number): AIProviderProfile {
     model: '',
     supportsVision: true,
     supportsText: true,
+    taskTypes: [],
     enabled: false,
     sortOrder: index,
     createdAt: now,
@@ -61,6 +63,22 @@ const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description:
   { value: 'light', label: '浅色', description: '始终使用浅色外观' },
   { value: 'dark', label: '深色', description: '始终使用深色外观' },
   { value: 'system', label: '跟随系统', description: '随系统设置自动切换' },
+]
+
+const PROVIDER_TASK_OPTIONS: Array<{ value: AIProviderTaskType; label: string }> = [
+  { value: 'problem_understanding', label: '题目理解' },
+  { value: 'solution_generation', label: '正解生成' },
+  { value: 'solution_review', label: '正解审校' },
+  { value: 'attempt_analysis', label: '作答与错因分析' },
+  { value: 'tag_mapping', label: '标签映射' },
+  { value: 'variant_planning', label: '变式计划' },
+  { value: 'variant_generation', label: '变式生成' },
+  { value: 'variant_verification', label: '变式独立验证' },
+  { value: 'submission_grading', label: '练习批改' },
+  { value: 'explain_selection', label: '局部解释' },
+  { value: 'textbook_recognition', label: '教材识别' },
+  { value: 'curriculum_analysis', label: '课程分析' },
+  { value: 'geometry_scene', label: '几何重建' },
 ]
 
 export function AISettings() {
@@ -171,6 +189,15 @@ export function AISettings() {
     () => profiles.find((profile) => profile.id === selectedProviderId) ?? null,
     [profiles, selectedProviderId],
   )
+
+  const toggleProviderTask = (profile: AIProviderProfile, taskType: AIProviderTaskType) => {
+    const current = profile.taskTypes ?? []
+    update(profile.id, {
+      taskTypes: current.includes(taskType)
+        ? current.filter((candidate) => candidate !== taskType)
+        : [...current, taskType],
+    })
+  }
 
   return (
     <main className="workspace settings-workspace">
@@ -472,6 +499,23 @@ export function AISettings() {
                           支持文本与推理
                         </label>
                       </div>
+                      <fieldset className="provider-task-routing">
+                        <legend>任务路由</legend>
+                        <p>不勾选表示承担所有能力兼容的任务；勾选后只承担选中的任务，失败时按服务顺序回退。</p>
+                        <div className="provider-task-routing__grid">
+                          {PROVIDER_TASK_OPTIONS.map((option) => (
+                            <label key={option.value}>
+                              <input
+                                checked={(selectedProfile.taskTypes ?? []).includes(option.value)}
+                                disabled={saving}
+                                onChange={() => toggleProviderTask(selectedProfile, option.value)}
+                                type="checkbox"
+                              />
+                              {option.label}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
                     </div>
                   </>
                 ) : (

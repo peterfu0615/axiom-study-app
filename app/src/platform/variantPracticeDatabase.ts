@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
-import { getPracticeVariantProviders } from '../ai/provider'
+import {
+  getPracticeVariantGenerationProviders,
+  getPracticeVariantVerificationProviders,
+} from '../ai/provider'
 import { classifyAIError } from '../domain/aiError'
 import type { DifficultyLevel } from '../domain/models'
 import type { PracticeProblemCandidate } from '../domain/practice'
@@ -118,15 +121,20 @@ export async function generateVerifiedPracticeVariant(input: {
     await updatePlan(plan.id, 'rejected', { failureCode: fallbackCode })
     return { planId: plan.id, variant: null, fallbackCode }
   }
-  const providers = getPracticeVariantProviders()
-  if (!providers.length) {
+  const generationProviders = getPracticeVariantGenerationProviders()
+  const verificationProviders = getPracticeVariantVerificationProviders()
+  if (!generationProviders.length) {
     await updatePlan(plan.id, 'rejected', { failureCode: 'no_variant_provider' })
     return { planId: plan.id, variant: null, fallbackCode: 'no_variant_provider' }
+  }
+  if (!verificationProviders.length) {
+    await updatePlan(plan.id, 'rejected', { failureCode: 'no_variant_verification_provider' })
+    return { planId: plan.id, variant: null, fallbackCode: 'no_variant_verification_provider' }
   }
   await updatePlan(plan.id, 'generating')
   let lastFailureCode = 'provider_exhausted'
   let hadValidationRejection = false
-  for (const [providerIndex, provider] of providers.entries()) {
+  for (const provider of generationProviders) {
     const generationRun = await beginRun(plan, 'generation', provider.id, provider.model)
     let candidate: PracticeVariantCandidate
     try {
@@ -147,7 +155,10 @@ export async function generateVerifiedPracticeVariant(input: {
       continue
     }
     const candidateId = await insertCandidate(plan.id, generationRun.id, candidate)
-    const verifiers = [...providers.slice(providerIndex + 1), ...providers.slice(0, providerIndex + 1)]
+    const verifiers = [
+      ...verificationProviders.filter((candidateProvider) => candidateProvider.id !== provider.id),
+      ...verificationProviders.filter((candidateProvider) => candidateProvider.id === provider.id),
+    ]
     let verificationFailureCode = 'verification_provider_exhausted'
     for (const verifier of verifiers) {
       const verificationRun = await beginRun(plan, 'verification', verifier.id, verifier.model)

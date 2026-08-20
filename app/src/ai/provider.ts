@@ -1,5 +1,6 @@
 import type {
   AIProviderProfile,
+  AIProviderTaskType,
   AIProblemAnalysis,
   AIProblemInput,
   ExplainProviderResult,
@@ -1072,13 +1073,20 @@ export async function resolveTextbookCandidateWithProvider(
 }
 
 let activeProviders: AIProvider[] = [new MockAIProvider()]
+let activeProviderTaskRoutes = new Map<string, ReadonlySet<AIProviderTaskType>>()
+
+function providerSupportsTask(provider: AIProvider, taskType: AIProviderTaskType) {
+  const routes = activeProviderTaskRoutes.get(provider.id)
+  return !routes?.size || routes.has(taskType)
+}
 
 export function getVisionProvidersForRun(
   providerId: string,
   model: string,
 ) {
   const visionProviders = activeProviders.filter(
-    (provider) => provider.supportsVision,
+    (provider) => provider.supportsVision
+      && providerSupportsTask(provider, 'problem_understanding'),
   )
   if (!visionProviders.length) throw new Error(VISION_PROVIDER_REQUIRED)
   const matchingIndex = visionProviders.findIndex(
@@ -1101,6 +1109,7 @@ export function getSolutionProvidersForRun(
   const providers = activeProviders.filter(
     (provider): provider is SolutionCapableProvider =>
       provider.supportsText &&
+      providerSupportsTask(provider, 'solution_generation') &&
       typeof provider.generateSolution === 'function',
   )
   if (!providers.length) throw new Error(SOLUTION_PROVIDER_REQUIRED)
@@ -1119,6 +1128,7 @@ export function getSolutionProvider() {
   const provider = activeProviders.find(
     (candidate): candidate is SolutionCapableProvider =>
       candidate.supportsText &&
+      providerSupportsTask(candidate, 'solution_generation') &&
       typeof candidate.generateSolution === 'function',
   )
   if (!provider) throw new Error(SOLUTION_PROVIDER_REQUIRED)
@@ -1129,17 +1139,25 @@ export function getTextbookRecognitionProvider() {
   const provider = activeProviders.find(
     (candidate): candidate is AIProvider & {
       recognizeTextbook: NonNullable<AIProvider['recognizeTextbook']>
-    } => candidate.supportsText && typeof candidate.recognizeTextbook === 'function',
+    } => candidate.supportsText
+      && providerSupportsTask(candidate, 'textbook_recognition')
+      && typeof candidate.recognizeTextbook === 'function',
   )
   if (!provider) throw new Error(TEXT_MODEL_REQUIRED)
   return provider
 }
 
-export function getCurriculumAnalysisProvider(providerId?: string, model?: string) {
+export function getCurriculumAnalysisProvider(
+  providerId?: string,
+  model?: string,
+  taskType: 'curriculum_analysis' | 'tag_mapping' = 'curriculum_analysis',
+) {
   const providers = activeProviders.filter(
     (candidate): candidate is AIProvider & {
       analyzeCurriculumStage: NonNullable<AIProvider['analyzeCurriculumStage']>
-    } => candidate.supportsText && typeof candidate.analyzeCurriculumStage === 'function',
+    } => candidate.supportsText
+      && providerSupportsTask(candidate, taskType)
+      && typeof candidate.analyzeCurriculumStage === 'function',
   )
   if (!providers.length) throw new Error(TEXT_MODEL_REQUIRED)
   if (!providerId || !model) return providers[0]
@@ -1170,6 +1188,7 @@ export function getStudentAttemptProvidersForRun(
       extractStudentAttempt: NonNullable<AIProvider['extractStudentAttempt']>
     } =>
       provider.supportsVision &&
+      providerSupportsTask(provider, 'attempt_analysis') &&
       typeof provider.extractStudentAttempt === 'function',
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
@@ -1180,21 +1199,39 @@ export function getSubjectivePracticeGradingProviders() {
   const providers = activeProviders.filter(
     (provider): provider is AIProvider & {
       gradeSubjectivePractice: NonNullable<AIProvider['gradeSubjectivePractice']>
-    } => provider.supportsText && typeof provider.gradeSubjectivePractice === 'function',
+    } => provider.supportsText
+      && providerSupportsTask(provider, 'submission_grading')
+      && typeof provider.gradeSubjectivePractice === 'function',
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
   return providers
 }
 
-export function getPracticeVariantProviders() {
+export function getPracticeVariantGenerationProviders() {
   return activeProviders.filter(
     (provider): provider is AIProvider & {
       generatePracticeVariant: NonNullable<AIProvider['generatePracticeVariant']>
       verifyPracticeVariant: NonNullable<AIProvider['verifyPracticeVariant']>
     } => provider.supportsText
+      && providerSupportsTask(provider, 'variant_generation')
       && typeof provider.generatePracticeVariant === 'function'
       && typeof provider.verifyPracticeVariant === 'function',
   )
+}
+
+export function getPracticeVariantVerificationProviders() {
+  return activeProviders.filter(
+    (provider): provider is AIProvider & {
+      verifyPracticeVariant: NonNullable<AIProvider['verifyPracticeVariant']>
+    } => provider.supportsText
+      && providerSupportsTask(provider, 'variant_verification')
+      && typeof provider.verifyPracticeVariant === 'function',
+  )
+}
+
+/** @deprecated Prefer the task-specific generation/verification selectors. */
+export function getPracticeVariantProviders() {
+  return getPracticeVariantGenerationProviders()
 }
 
 export function getReasoningProvidersForRun(
@@ -1206,6 +1243,7 @@ export function getReasoningProvidersForRun(
       analyzeStudentReasoning: NonNullable<AIProvider['analyzeStudentReasoning']>
     } =>
       provider.supportsText &&
+      providerSupportsTask(provider, 'attempt_analysis') &&
       typeof provider.analyzeStudentReasoning === 'function',
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
@@ -1219,8 +1257,9 @@ export function getExplainProvidersForRun(
   const providers = activeProviders.filter(
     (provider): provider is AIProvider & {
       explainSelection: NonNullable<AIProvider['explainSelection']>
-    } =>
-      provider.supportsText && typeof provider.explainSelection === 'function',
+    } => provider.supportsText
+      && providerSupportsTask(provider, 'explain_selection')
+      && typeof provider.explainSelection === 'function',
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
   return orderMatchingProviders(providers, providerId, model)
@@ -1228,7 +1267,8 @@ export function getExplainProvidersForRun(
 
 export function getAIProvider() {
   const provider = activeProviders.find(
-    (candidate) => candidate.supportsVision,
+    (candidate) => candidate.supportsVision
+      && providerSupportsTask(candidate, 'problem_understanding'),
   )
   return (
     provider ?? {
@@ -1245,9 +1285,15 @@ export function getAIProvider() {
 
 export function setAIProviderForTests(provider: AIProvider) {
   activeProviders = [provider]
+  activeProviderTaskRoutes = new Map()
 }
 
 export function configureAIProviders(profiles: AIProviderProfile[]) {
+  activeProviderTaskRoutes = new Map(
+    profiles
+      .filter((profile) => profile.enabled)
+      .map((profile) => [profile.id, new Set(profile.taskTypes ?? [])]),
+  )
   activeProviders = profiles
     .filter((profile) => profile.enabled)
     .sort((left, right) => left.sortOrder - right.sortOrder)

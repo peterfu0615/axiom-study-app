@@ -79,11 +79,29 @@ pub struct PersistedAIProviderProfile {
     model: String,
     supports_vision: bool,
     supports_text: bool,
+    #[serde(default)]
+    task_types: Vec<String>,
     enabled: bool,
     sort_order: i64,
     created_at: i64,
     updated_at: i64,
 }
+
+const AI_PROVIDER_TASK_TYPES: &[&str] = &[
+    "problem_understanding",
+    "solution_generation",
+    "solution_review",
+    "attempt_analysis",
+    "tag_mapping",
+    "variant_planning",
+    "variant_generation",
+    "variant_verification",
+    "submission_grading",
+    "explain_selection",
+    "textbook_recognition",
+    "curriculum_analysis",
+    "geometry_scene",
+];
 
 /// Safe post-commit status returned to the frontend.  The full API Key never
 /// leaves SQLite; only a boolean and the final four characters are exposed.
@@ -121,6 +139,15 @@ fn provider_profile_error(profile: &PersistedAIProviderProfile) -> Result<(), St
     {
         return Err(format!("“{}”启用前请填写 CLI 路径和 Model", profile.name));
     }
+    let mut task_types = std::collections::HashSet::new();
+    for task_type in &profile.task_types {
+        if !AI_PROVIDER_TASK_TYPES.contains(&task_type.as_str()) {
+            return Err(format!("“{}”包含不支持的任务路由", profile.name));
+        }
+        if !task_types.insert(task_type) {
+            return Err(format!("“{}”的任务路由不能重复", profile.name));
+        }
+    }
     Ok(())
 }
 
@@ -128,11 +155,13 @@ async fn upsert_ai_provider_profile(
     conn: &mut sqlx::SqliteConnection,
     profile: &PersistedAIProviderProfile,
 ) -> Result<(), String> {
+    let task_types_json = serde_json::to_string(&profile.task_types)
+        .map_err(|error| format!("序列化 Provider 任务路由失败：{error}"))?;
     sqlx::query(
         "INSERT INTO ai_provider_profiles (
            id, name, provider, base_url, api_key, credential_ref, command_path, model,
-           supports_vision, supports_text, enabled, sort_order, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            provider = excluded.provider,
@@ -150,6 +179,7 @@ async fn upsert_ai_provider_profile(
            model = excluded.model,
            supports_vision = excluded.supports_vision,
            supports_text = excluded.supports_text,
+           task_types_json = excluded.task_types_json,
            enabled = excluded.enabled,
            sort_order = excluded.sort_order,
            updated_at = excluded.updated_at",
@@ -164,6 +194,7 @@ async fn upsert_ai_provider_profile(
     .bind(profile.model.trim())
     .bind(profile.supports_vision)
     .bind(profile.supports_text)
+    .bind(task_types_json)
     .bind(profile.enabled)
     .bind(profile.sort_order)
     .bind(profile.created_at)
@@ -1382,6 +1413,7 @@ mod tests {
                    model TEXT NOT NULL,
                    supports_vision INTEGER NOT NULL,
                    supports_text INTEGER NOT NULL,
+                   task_types_json TEXT NOT NULL DEFAULT '[]',
                    enabled INTEGER NOT NULL,
                    sort_order INTEGER NOT NULL,
                    created_at INTEGER NOT NULL,
@@ -1430,6 +1462,7 @@ mod tests {
                    model TEXT NOT NULL,
                    supports_vision INTEGER NOT NULL,
                    supports_text INTEGER NOT NULL,
+                   task_types_json TEXT NOT NULL DEFAULT '[]',
                    enabled INTEGER NOT NULL,
                    sort_order INTEGER NOT NULL,
                    created_at INTEGER NOT NULL,
@@ -1449,6 +1482,7 @@ mod tests {
                 model: "model-a".to_string(),
                 supports_vision: true,
                 supports_text: true,
+                task_types: vec!["problem_understanding".to_string()],
                 enabled: true,
                 sort_order: 0,
                 created_at: 1,
