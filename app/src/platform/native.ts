@@ -287,8 +287,12 @@ export interface PracticePdfPagePreview {
   pixelHeight: number
 }
 
-export function renderPracticePdfPage(path: string, pageNumber: number) {
-  return invoke<PracticePdfPagePreview>('render_practice_pdf_page', { path, pageNumber })
+export function renderPracticePdfPage(path: string, pageNumber: number, practiceSetId?: string) {
+  return invoke<PracticePdfPagePreview>('render_practice_pdf_page', {
+    path,
+    pageNumber,
+    practiceSetId,
+  })
 }
 
 export function practicePdfExists(path: string) {
