@@ -5,7 +5,7 @@ import { buildReviewInsights, type InsightRangeDays, type ReviewInsightRecord } 
 const now = new Date(2026, 8, 2, 10).getTime()
 const tag = (type: ReviewTag['type'], name: string): ReviewTag => ({ id: `${type}-${name}`, name, type, role: 'primary' })
 const record = (id: string, date: string, rating: ReviewInsightRecord['rating'] = 'good', overrides: Partial<ReviewInsightRecord> = {}): ReviewInsightRecord => ({
-  moduleId: id, sessionDate: date, status: 'completed', completedAt: now,
+  moduleId: id, subject: '数学', sessionDate: date, status: 'completed', completedAt: now,
   sourceProblemId: id, rating,
   tags: [tag('knowledge', '函数'), tag('method', '数形结合'), tag('model', '图像交点')],
   errorCategories: [tag('error', '漏条件')], ...overrides,
@@ -34,10 +34,10 @@ describe('review insights', () => {
 
   it('aggregates snapshot knowledge, method, model and errors with long names', () => {
     const long = '这是一个很长但仍应完整保留并在界面换行的解题方法标签'
-    const result = build([record('a', '2026-09-02', 'again', { tags: [tag('knowledge', '函数'), tag('method', long), tag('model', '参数模型')] }), record('b', '2026-09-02', 'good')])
+    const result = build([record('a', '2026-09-02', 'again', { tags: [tag('knowledge', '函数'), tag('method', long), tag('model', '参数模型')] }), record('b', '2026-09-02', 'good'), record('c', '2026-09-02', 'good')])
     expect(result.themes.map((item) => item.type)).toEqual(expect.arrayContaining(['knowledge', 'method', 'model']))
     expect(result.themes.some((item) => item.name === long)).toBe(true)
-    expect(result.recurringErrors[0]).toMatchObject({ name: '漏条件', count: 2, difficultCount: 1 })
+    expect(result.recurringErrors[0]).toMatchObject({ name: '漏条件', count: 3, difficultCount: 1 })
   })
 
   it('uses historical snapshots even when a problem is soft deleted or current tags change', () => {
@@ -48,14 +48,31 @@ describe('review insights', () => {
   it('groups current mastery without inventing historical trends', () => {
     const base = initialReviewSkillState()
     const result = buildReviewInsights({ records: [], rangeDays: 7, now, changes: [], skills: [
-      { subject: '数学', tagId: 'stable', name: '稳定', type: 'knowledge', state: { ...base, masteryEstimate: .8, retrievability: .8, uncertainty: .4 } },
-      { subject: '数学', tagId: 'working', name: '巩固', type: 'method', state: { ...base, masteryEstimate: .6, retrievability: .6 } },
-      { subject: '数学', tagId: 'attention', name: '关注', type: 'model', state: { ...base, masteryEstimate: .3 } },
+      { subject: '数学', tagId: 'stable', name: '稳定', type: 'knowledge', state: { ...base, evidenceCount: 3, masteryEstimate: .8, retrievability: .8, uncertainty: .4 } },
+      { subject: '数学', tagId: 'working', name: '巩固', type: 'method', state: { ...base, evidenceCount: 3, masteryEstimate: .6, retrievability: .6 } },
+      { subject: '数学', tagId: 'attention', name: '关注', type: 'model', state: { ...base, evidenceCount: 3, masteryEstimate: .3 } },
+      { subject: '数学', tagId: 'new', name: '新证据', type: 'knowledge', state: { ...base, evidenceCount: 1, masteryEstimate: .1 } },
     ] })
     expect(result.mastery.stable).toHaveLength(1)
     expect(result.mastery.consolidating).toHaveLength(1)
     expect(result.mastery.attention).toHaveLength(1)
+    expect(result.mastery.insufficient).toHaveLength(1)
     expect(result.trend.every((day) => day.masteryDelta === null)).toBe(true)
+  })
+
+  it('isolates mastery and trends by subject', () => {
+    const base = { ...initialReviewSkillState(), evidenceCount: 3 }
+    const result = buildReviewInsights({
+      records: [record('math', '2026-09-02'), record('physics', '2026-09-02', 'again', { subject: '物理' })],
+      rangeDays: 7, now, changes: [], subject: '数学',
+      skills: [
+        { subject: '数学', tagId: 'math', name: '函数', type: 'knowledge', state: base },
+        { subject: '物理', tagId: 'physics', name: '受力', type: 'knowledge', state: base },
+      ],
+    })
+    expect(result.subjects).toEqual(['数学', '物理'])
+    expect(result.overview.completedUnits).toBe(1)
+    expect(Object.values(result.mastery).flat().map((skill) => skill.subject)).toEqual(['数学'])
   })
 
   it('aggregates thousands of historical snapshots without per-record queries', () => {

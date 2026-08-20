@@ -14,8 +14,9 @@ import {
 import { ListboxSelect, PageHeader, Tabs } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
+import { ReviewSettings } from './ReviewSettings'
 
-type SettingsTab = 'providers' | 'appearance' | 'maintenance' | 'about' | 'update'
+type SettingsTab = 'providers' | 'review' | 'appearance' | 'maintenance' | 'about' | 'update'
 type SettingsMessage = { text: string; tone: 'success' | 'error' }
 
 function readableError(error: unknown): string {
@@ -190,6 +191,7 @@ export function AISettings() {
             options={[
               { value: 'maintenance', label: '数据维护', icon: 'refresh' },
               { value: 'providers', label: 'AI 模型', icon: 'ai' },
+              { value: 'review', label: '复习设置', icon: 'today' },
               { value: 'appearance', label: '外观', icon: 'sun' },
               { value: 'about', label: '关于', icon: 'info' },
               { value: 'update', label: '更新', icon: 'download' },
@@ -480,6 +482,8 @@ export function AISettings() {
                 )}
               </article>
             </div>
+          ) : tab === 'review' ? (
+            <ReviewSettings />
           ) : tab === 'appearance' ? (
             <div className="settings-appearance-pane">
               <header>

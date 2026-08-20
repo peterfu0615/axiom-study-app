@@ -185,4 +185,14 @@ describe('Horizon review scheduler', () => {
       maxDurationSeconds: 1200, includeAnswerSheet: true, showSourceLabels: false,
     })
   })
+
+  it('caps the generated Today plan by both module count and time budget', () => {
+    const candidates = [
+      candidate('budget-a', { tags: [tag('knowledge', '函数'), tag('method', '待定系数法')] }),
+      candidate('budget-b', { tags: [tag('knowledge', '全等'), tag('method', '倍长中线')] }),
+      candidate('budget-c', { tags: [tag('knowledge', '圆'), tag('method', '辅助线')] }),
+    ]
+    expect(buildTodayReviewUnits(candidates, { now, maxModules: 1, maxDurationSeconds: 3_600 })).toHaveLength(1)
+    expect(buildTodayReviewUnits(candidates, { now, maxModules: 3, maxDurationSeconds: 500 })).toHaveLength(1)
+  })
 })

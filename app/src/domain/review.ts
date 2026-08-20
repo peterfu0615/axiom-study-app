@@ -112,6 +112,7 @@ export interface ReviewUnitDraft {
 export interface ReviewPlanOptions {
   now: number
   maxModules?: number
+  maxDurationSeconds?: number
 }
 
 const DAY_MS = 86_400_000
@@ -322,13 +323,18 @@ export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: Re
   const available = buildReviewUnitPool(candidates, options.now)
   const selected: ReviewUnitDraft[] = []
   const maxModules = options.maxModules ?? 2
+  const maxDurationSeconds = Math.max(60, options.maxDurationSeconds ?? Number.POSITIVE_INFINITY)
+  let selectedDuration = 0
   while (available.length && selected.length < maxModules) {
     available.sort((left, right) => {
       const leftPenalty = selected.length ? Math.max(...selected.map((item) => unitSimilarity(left, item))) * 24 : 0
       const rightPenalty = selected.length ? Math.max(...selected.map((item) => unitSimilarity(right, item))) * 24 : 0
       return (right.priorityScore - rightPenalty) - (left.priorityScore - leftPenalty) || left.canonicalKey.localeCompare(right.canonicalKey)
     })
-    selected.push(available.shift()!)
+    const next = available.shift()!
+    if (selected.length > 0 && selectedDuration + next.estimatedDurationSeconds > maxDurationSeconds) continue
+    selected.push(next)
+    selectedDuration += next.estimatedDurationSeconds
   }
   return selected
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AsyncState, Badge, Button, EmptyState, PageHeader, StatusBadge } from '../../components/ui'
+import { AsyncState, Badge, Button, EmptyState, ListboxSelect, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
 import { getReviewInsights } from '../../platform/insightsDatabase'
@@ -32,6 +32,7 @@ function Mastery({ insights }: { insights: ReviewInsights }) {
     { key: 'stable' as const, label: '掌握较稳定', tone: 'success' as const },
     { key: 'consolidating' as const, label: '正在巩固', tone: 'brand' as const },
     { key: 'attention' as const, label: '需要关注', tone: 'warning' as const },
+    { key: 'insufficient' as const, label: '证据不足', tone: 'neutral' as const },
   ]
   return <section className="insights-section">
     <header><div><p className="eyebrow">当前状态</p><h2>掌握情况</h2></div><span>知识、方法与题型模型</span></header>
@@ -39,7 +40,7 @@ function Mastery({ insights }: { insights: ReviewInsights }) {
       {groups.map((group) => <article key={group.key}>
         <div><StatusBadge tone={group.tone}>{group.label}</StatusBadge><strong>{insights.mastery[group.key].length}</strong></div>
         <div className="insights-tag-list">
-          {insights.mastery[group.key].slice(0, 6).map((skill) => <Badge key={`${skill.subject}:${skill.tagId}`}>{skill.name}</Badge>)}
+          {insights.mastery[group.key].slice(0, 6).map((skill) => <Badge key={`${skill.subject}:${skill.tagId}`}>{insights.subject ? skill.name : `${skill.subject} · ${skill.name}`}</Badge>)}
           {!insights.mastery[group.key].length && <span>暂无</span>}
         </div>
       </article>)}
@@ -49,15 +50,16 @@ function Mastery({ insights }: { insights: ReviewInsights }) {
 
 export function InsightsWorkspace() {
   const [range, setRange] = useState<InsightRangeDays>(7)
+  const [subject, setSubject] = useState<string | null>(null)
   const [insights, setInsights] = useState<ReviewInsights | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const load = useCallback(async () => {
     setLoading(true); setError(null)
-    try { setInsights(await getReviewInsights(range)) }
+    try { setInsights(await getReviewInsights(range, Date.now(), subject)) }
     catch (reason) { setError(String(reason)) }
     finally { setLoading(false) }
-  }, [range])
+  }, [range, subject])
   useEffect(() => { void load() }, [load])
   const totalRatings = useMemo(() => insights ? Object.values(insights.ratings).reduce((sum, count) => sum + count, 0) : 0, [insights])
   const masteryCount = useMemo(() => insights ? Object.values(insights.mastery).reduce((sum, items) => sum + items.length, 0) : 0, [insights])
@@ -66,6 +68,12 @@ export function InsightsWorkspace() {
   return <main className="workspace insights-workspace">
     <PageHeader
       actions={<div className="insights-range" role="group" aria-label="洞察时间范围">
+        <ListboxSelect
+          ariaLabel="洞察科目"
+          onValueChange={(value) => setSubject(value === 'all' ? null : value)}
+          options={[{ value: 'all', label: '全部科目' }, ...(insights?.subjects ?? []).map((value) => ({ value, label: value }))]}
+          value={subject ?? 'all'}
+        />
         <Button onClick={() => setRange(7)} variant={range === 7 ? 'primary' : 'secondary'}>最近 7 天</Button>
         <Button onClick={() => setRange(30)} variant={range === 30 ? 'primary' : 'secondary'}>最近 30 天</Button>
       </div>}
@@ -83,6 +91,8 @@ export function InsightsWorkspace() {
           <div><span>复习题目</span><strong>{insights.overview.completedProblems}</strong></div>
           <div><span>完成率</span><strong>{percent(insights.overview.completionRate)}</strong></div>
           <div><span>已暂缓</span><strong>{insights.overview.deferredUnits}</strong></div>
+          <div><span>未来 7 天到期</span><strong>{insights.overview.futureDueSkills}</strong></div>
+          <div><span>当前已逾期</span><strong>{insights.overview.overdueSkills}</strong></div>
         </section>
         <Trend insights={insights} />
         <section className="insights-split">
@@ -104,7 +114,7 @@ export function InsightsWorkspace() {
           </article>
           <article className="insights-section insights-section--compact">
             <header><div><p className="eyebrow">重复错误</p><h2>最近错误模式</h2></div></header>
-            <div className="insights-ranked">{insights.recurringErrors.length ? insights.recurringErrors.map((item) => <div key={item.name}><span>错因</span><strong>{item.name}</strong><b>{item.count} 次{item.difficultCount ? ` · ${item.difficultCount} 次较难` : ''}</b></div>) : <p>暂无错误类型记录</p>}</div>
+            <div className="insights-ranked">{insights.recurringErrors.length ? insights.recurringErrors.map((item) => <div key={item.name}><span>错因</span><strong>{item.name}</strong><b>{item.count} 次{item.difficultCount ? ` · ${item.difficultCount} 次较难` : ''}</b></div>) : <p>至少需要 3 次有效证据后才显示重复错误结论</p>}</div>
           </article>
         </section>
       </>}

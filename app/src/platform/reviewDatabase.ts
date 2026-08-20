@@ -15,6 +15,7 @@ import {
 } from '../domain/review'
 import type { DifficultyLevel, HorizonTagType } from '../domain/models'
 import { buildSevenDayReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
+import { DEFAULT_REVIEW_PREFERENCES, getReviewPreferences, type ReviewPreferences } from './reviewPreferencesDatabase'
 import { withTransactionLock } from './transactionLock'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
@@ -243,6 +244,7 @@ export interface TodayReviewPlan {
   createdAt: number
   completedAt: number | null
   estimatedDurationSeconds: number
+  preferences: ReviewPreferences
   units: TodayReviewUnit[]
 }
 
@@ -253,6 +255,7 @@ interface SessionRow {
   estimated_duration_seconds: number
   created_at: number
   completed_at: number | null
+  settings_json: string
 }
 
 interface UnitRow {
@@ -315,6 +318,10 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
     createdAt: number(session.created_at),
     completedAt: nullableNumber(session.completed_at),
     estimatedDurationSeconds: number(session.estimated_duration_seconds),
+    preferences: {
+      ...DEFAULT_REVIEW_PREFERENCES,
+      ...parseJSON<Partial<ReviewPreferences>>(session.settings_json, {}),
+    },
     units: rows.map((row) => {
       const snapshot = parseJSON<{
         title?: string
@@ -360,7 +367,7 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
 
 async function findTodaySession(sessionDate: string) {
   return (await select<SessionRow[]>(`
-    SELECT id, session_date, status, estimated_duration_seconds, created_at, completed_at
+    SELECT id, session_date, status, estimated_duration_seconds, created_at, completed_at, settings_json
     FROM review_sessions WHERE session_date = $1 AND session_kind = 'today' AND mode = 'standard' LIMIT 1
   `, [sessionDate]))[0] ?? null
 }
@@ -446,8 +453,12 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
   const sessionDate = localReviewDate(timestamp)
   const existing = await findTodaySession(sessionDate)
   if (existing) return readTodayPlanBySession(existing)
-  const candidates = await listReviewCandidates()
-  const units = buildTodayReviewUnits(candidates, { now: timestamp })
+  const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
+  const units = buildTodayReviewUnits(candidates, {
+    now: timestamp,
+    maxModules: preferences.maxModules,
+    maxDurationSeconds: preferences.maxDailyMinutes * 60,
+  })
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
@@ -460,9 +471,10 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
       const estimated = units.reduce((total, unit) => total + unit.estimatedDurationSeconds, 0)
       await execute(`INSERT INTO review_sessions (
         id, session_date, status, mode, planned_problem_count,
-        estimated_duration_seconds, created_at
-      ) VALUES ($1,$2,$3,'standard',$4,$5,$6)`, [
-        sessionId, sessionDate, units.length ? 'generated' : 'empty', units.length, estimated, timestamp,
+        estimated_duration_seconds, settings_json, created_at
+      ) VALUES ($1,$2,$3,'standard',$4,$5,$6,$7)`, [
+        sessionId, sessionDate, units.length ? 'generated' : 'empty', units.length, estimated,
+        JSON.stringify(preferences), timestamp,
       ])
       for (const [index, unit] of units.entries()) await persistUnit(sessionId, unit, index, timestamp)
       await execute('COMMIT')

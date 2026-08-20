@@ -1421,6 +1421,38 @@
   font-size: 9px;
 }
 
+.problem-list-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, .42fr);
+  gap: 8px;
+  padding-bottom: 12px;
+}
+
+.problem-list-filters input,
+.problem-list-filters select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+}
+
+.problem-list-filters details { grid-column: 1 / -1; }
+.problem-list-filters summary { width: max-content; color: var(--muted); font-size: 10px; cursor: pointer; }
+.problem-list-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding-top: 8px; }
+
+.problem-list-filters .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .problem-card-list {
   min-height: 0;
   display: grid;
@@ -2985,6 +3017,13 @@
   background: var(--surface);
   object-fit: contain;
 }
+
+.problem-source-variants { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.problem-source-variants figure { min-width: 0; margin: 0; }
+.problem-source-variants figcaption { padding-top: 5px; color: var(--muted); font-size: 8px; text-align: center; }
+.problem-review-history__answer { max-height: 150px; margin-top: 8px; }
+.problem-review-history__evidence { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.problem-review-history__evidence span { padding: 3px 6px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); font-size: 8px; }
 
 .ai-tag-list {
   display: flex;

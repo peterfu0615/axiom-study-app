@@ -444,6 +444,16 @@ function rowToSavedProblem(row: Record<string, unknown>): SavedProblem {
     correctedImagePath: row.corrected_image_path
       ? String(row.corrected_image_path)
       : null,
+    searchText: String(row.library_search_text ?? [problem.title, problem.subject, problem.stemMarkdown, ...problem.knowledgePoints].filter(Boolean).join(' ')),
+    libraryMetadata: {
+      difficulty: nullableString(row.library_difficulty) as SavedProblem['libraryMetadata']['difficulty'],
+      textbookTitle: nullableString(row.library_textbook_title),
+      chapters: String(row.library_chapters ?? '').split(' · ').map((value) => value.trim()).filter(Boolean),
+      tags: parseJSON<SavedProblem['libraryMetadata']['tags']>(row.library_tags_json, [], `library_tags_json#${problem.id}`),
+      masteryEstimate: nullableNumber(row.library_mastery_estimate),
+      nextReviewAt: nullableNumber(row.library_next_review_at),
+      confirmed: problem.verificationStatus === 'verified',
+    },
   }
 }
 
@@ -888,13 +898,42 @@ async function insertIntelligenceModelRun(
   )
 }
 
+const SAVED_PROBLEM_LIBRARY_COLUMNS = `p.*, d.original_image_path, d.corrected_image_path,
+       trim(COALESCE((SELECT group_concat(COALESCE(definition.canonical_name, tag.candidate_name, '') || ' ' || COALESCE(tag.evidence, ''), ' ')
+         FROM problem_tags tag LEFT JOIN tag_definitions definition ON definition.id=tag.tag_id
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.mapping_status!='rejected'), '') || ' ' ||
+       COALESCE((SELECT solution.content_markdown FROM problem_solutions solution
+         WHERE solution.problem_id=p.id AND solution.status='completed' ORDER BY solution.updated_at DESC LIMIT 1), '') || ' ' ||
+       COALESCE(p.user_title,p.ai_title,p.title,'') || ' ' ||
+       COALESCE(p.user_subject,p.ai_subject,p.subject,'') || ' ' ||
+       COALESCE(p.user_stem_markdown,p.ai_stem_markdown,p.stem_markdown,'')) AS library_search_text,
+       (SELECT difficulty.level FROM problem_difficulties difficulty
+         WHERE difficulty.problem_id=p.id AND difficulty.superseded_at IS NULL LIMIT 1) AS library_difficulty,
+       (SELECT textbook.title FROM textbooks textbook WHERE textbook.id=p.matched_textbook_id LIMIT 1) AS library_textbook_title,
+       (SELECT group_concat(DISTINCT chapter.canonical_name)
+         FROM problem_tags tag
+         JOIN tag_definitions definition ON definition.id=tag.tag_id
+         JOIN knowledge_nodes node ON node.id=definition.knowledge_node_id
+         JOIN knowledge_nodes chapter ON chapter.id=COALESCE(node.parent_id,node.id) AND chapter.node_type='chapter'
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL) AS library_chapters,
+       COALESCE((SELECT json_group_array(json_object(
+          'id',tag.tag_id,'name',COALESCE(definition.canonical_name,tag.candidate_name,'未命名标签'),'type',tag.tag_type))
+         FROM problem_tags tag LEFT JOIN tag_definitions definition ON definition.id=tag.tag_id
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.mapping_status!='rejected'), '[]') AS library_tags_json,
+       (SELECT AVG(state.mastery_estimate) FROM problem_tags tag JOIN skill_states state
+         ON state.tag_id=tag.tag_id AND state.subject=COALESCE(NULLIF(p.user_subject,''),NULLIF(p.ai_subject,''),p.subject)
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.tag_type!='error') AS library_mastery_estimate,
+       (SELECT MIN(state.next_review_at) FROM problem_tags tag JOIN skill_states state
+         ON state.tag_id=tag.tag_id AND state.subject=COALESCE(NULLIF(p.user_subject,''),NULLIF(p.ai_subject,''),p.subject)
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.tag_type!='error') AS library_next_review_at`
+
 async function selectSavedProblemsByIds(
   db: DatabaseLike,
   ids: string[],
 ): Promise<SavedProblem[]> {
   const placeholders = ids.map((_, index) => `$${index + 1}`).join(', ')
   const rows = await db.select<Record<string, unknown>[]>(
-    `SELECT p.*, d.original_image_path, d.corrected_image_path
+    `SELECT ${SAVED_PROBLEM_LIBRARY_COLUMNS}
      FROM problems p
      JOIN source_documents d ON d.id = p.source_document_id
      WHERE p.id IN (${placeholders})
@@ -1150,16 +1189,17 @@ export async function saveProblems(
 
 export async function listSavedProblems(
   archived = false,
+  deleted = false,
 ): Promise<SavedProblem[]> {
   if (!isDesktopRuntime()) return []
   const rows = await (await database()).select<Record<string, unknown>[]>(
-    `SELECT p.*, d.original_image_path, d.corrected_image_path
+    `SELECT ${SAVED_PROBLEM_LIBRARY_COLUMNS}
      FROM problems p
      JOIN source_documents d ON d.id = p.source_document_id
      WHERE p.status = 'saved'
        AND p.crop_image_path IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.archived_at IS ${archived ? 'NOT NULL' : 'NULL'}
+       AND p.deleted_at IS ${deleted ? 'NOT NULL' : 'NULL'}
+       ${deleted ? '' : `AND p.archived_at IS ${archived ? 'NOT NULL' : 'NULL'}`}
      ORDER BY p.created_at DESC`,
   )
   return rows.map(rowToSavedProblem)
@@ -1170,7 +1210,7 @@ export async function getSavedProblem(
 ): Promise<SavedProblem | null> {
   if (!isDesktopRuntime()) return null
   const rows = await (await database()).select<Record<string, unknown>[]>(
-    `SELECT p.*, d.original_image_path, d.corrected_image_path
+    `SELECT ${SAVED_PROBLEM_LIBRARY_COLUMNS}
      FROM problems p
      JOIN source_documents d ON d.id = p.source_document_id
      WHERE p.id = $1
@@ -3557,81 +3597,20 @@ export async function deleteAIProviderProfileApiKey(
   return profiles
 }
 
-/**
- * 硬删除一道已保存的错题：清理所有关联的图片文件，并删除数据库记录。
- * 由外键 ON DELETE CASCADE 自动级联清理：problem_regions、problem_solutions、
- * student_attempts、reasoning_analyses、model_runs。
- *
- * 注意：source_documents 不在此处级联删除——一张原页可能同时被多道题引用。
- * 如需清理孤立的原页/校正页，调用 pruneOrphanedMedia。
- */
+/** 将错题移入可恢复的回收站。ReviewLog、Evidence、模型运行和媒体均保留。 */
 export async function deleteProblem(problemId: string): Promise<void> {
   if (!isDesktopRuntime()) {
     throw new Error('错题删除需要在 Axiom 桌面 App 中运行')
   }
   const db = await database()
-  const problem = await getSavedProblem(problemId)
-  if (!problem) return // 已不存在视为成功删除，保持幂等
+  await db.execute(`UPDATE problems SET deleted_at=$1,archived_at=NULL,updated_at=$1
+    WHERE id=$2 AND status='saved' AND deleted_at IS NULL`, [Date.now(), problemId])
+}
 
-  // 收集所有需要删除的图片路径（先于数据库事务，避免事务内 IO）
-  const regions = await getProblemRegions(problemId)
-  const imagePathsToDelete: string[] = []
-  if (problem.cropImagePath) imagePathsToDelete.push(problem.cropImagePath)
-  for (const region of regions) {
-    if (region.imagePath && !imagePathsToDelete.includes(region.imagePath)) {
-      imagePathsToDelete.push(region.imagePath)
-    }
-  }
-  if (problem.aiDiagramImagePath) {
-    imagePathsToDelete.push(problem.aiDiagramImagePath)
-  }
-
-  await withTransactionLock(async () => {
-    await db.execute('BEGIN')
-    try {
-      // 先把 problem 的 AI run 置空，避免外键级联时与 ai_active_model_run_id 产生竞争
-      await db.execute(
-        `UPDATE problems
-         SET ai_active_model_run_id = NULL,
-             ai_diagram_image_path = NULL,
-             updated_at = $1
-         WHERE id = $2 AND status = 'saved' AND deleted_at IS NULL`,
-        [Date.now(), problemId],
-      )
-      await db.execute(
-        `DELETE FROM problems WHERE id = $1 AND status = 'saved'`,
-        [problemId],
-      )
-      await db.execute('COMMIT')
-    } catch (error) {
-      try {
-        await db.execute('ROLLBACK')
-      } catch {
-        try {
-          await db.execute('ROLLBACK')
-        } catch {
-          /* preserve original error */
-        }
-      }
-      throw error
-    }
-  })
-
-  // 数据库提交后再删除图片文件；失败只记录日志，不影响删除结果。
-  // 若文件已不存在（如曾被手动清理），removeProblemImage 也会返回成功。
-  await Promise.allSettled(
-    imagePathsToDelete.map(async (path) => {
-      try {
-        if (path.includes('/diagrams/')) {
-          await removeProblemImage(path) // removeProblemDiagram 内部也会校验目录
-        } else {
-          await removeProblemImage(path)
-        }
-      } catch (error) {
-        console.error(`[database] 删除图片失败：${path}`, error)
-      }
-    }),
-  )
+export async function restoreProblem(problemId: string): Promise<void> {
+  if (!isDesktopRuntime()) throw new Error('错题恢复需要在 Axiom 桌面 App 中运行')
+  await (await database()).execute(`UPDATE problems SET deleted_at=NULL,updated_at=$1
+    WHERE id=$2 AND status='saved' AND deleted_at IS NOT NULL`, [Date.now(), problemId])
 }
 
 /**

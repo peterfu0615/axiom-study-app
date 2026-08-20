@@ -538,6 +538,16 @@ export interface SavedProblem extends Problem {
   cropImagePath: string
   originalImagePath: string
   correctedImagePath: string | null
+  searchText: string
+  libraryMetadata: {
+    difficulty: DifficultyLevel | null
+    textbookTitle: string | null
+    chapters: string[]
+    tags: Array<{ id: string | null; name: string; type: HorizonTagType }>
+    masteryEstimate: number | null
+    nextReviewAt: number | null
+    confirmed: boolean
+  }
 }
 
 export interface ProblemUserEdits {

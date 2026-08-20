@@ -29,6 +29,7 @@ import {
   queueProblemAI,
   queueProblemSolution,
   queueStudentAttempt,
+  restoreProblem,
   ProblemSubjectChangeConflict,
   ProblemSubjectChangeTagConflict,
   setProblemArchived,
@@ -53,8 +54,9 @@ import {
   runIntelligenceWorker,
 } from '../../ai/intelligencePipeline'
 import { ProblemTags } from './ProblemTags'
+import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../platform/problemHistoryDatabase'
 
-type LibraryView = 'active' | 'archived'
+type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
 
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -204,6 +206,15 @@ function ProblemDiagramImage({
 export function ProblemLibrary() {
   const [view, setView] = useState<LibraryView>('active')
   const [problems, setProblems] = useState<SavedProblem[]>([])
+  const [query, setQuery] = useState('')
+  const [subjectFilter, setSubjectFilter] = useState('all')
+  const [difficultyFilter, setDifficultyFilter] = useState('all')
+  const [textbookFilter, setTextbookFilter] = useState('all')
+  const [chapterFilter, setChapterFilter] = useState('all')
+  const [knowledgeFilter, setKnowledgeFilter] = useState('all')
+  const [methodFilter, setMethodFilter] = useState('all')
+  const [modelFilter, setModelFilter] = useState('all')
+  const [reviewFilter, setReviewFilter] = useState('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
@@ -215,6 +226,7 @@ export function ProblemLibrary() {
   const [studentAttempt, setStudentAttempt] = useState<StudentAttempt | null>(null)
   const [reasoning, setReasoning] = useState<ReasoningAnalysis | null>(null)
   const [selectedRegions, setSelectedRegions] = useState<ProblemRegion[]>([])
+  const [reviewHistory, setReviewHistory] = useState<ProblemReviewHistoryEntry[]>([])
   const [editTitle, setEditTitle] = useState('')
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
@@ -247,7 +259,7 @@ export function ProblemLibrary() {
       dismiss()
     }
     try {
-      const next = await listSavedProblems(nextView === 'archived')
+      const next = await listSavedProblems(nextView === 'archived', nextView === 'trash')
       setProblems(next)
       dirtyRef.current = false
       setSelectedId((current) =>
@@ -270,7 +282,7 @@ export function ProblemLibrary() {
     } finally {
       if (!quietly) setLoading(false)
     }
-  }, [])
+  }, [dismiss, notify])
 
   useEffect(() => {
     void refresh(view)
@@ -334,6 +346,39 @@ export function ProblemLibrary() {
     return () => window.removeEventListener(AI_STATUS_EVENT, handleAIStatus)
   }, [refresh])
 
+  const subjects = useMemo(() => [...new Set(problems.map((problem) => problem.subject)
+    .filter((value): value is string => Boolean(value)))]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN')), [problems])
+  const metadataOptions = useMemo(() => {
+    const values = (items: Array<string | null | undefined>) => [...new Set(items.filter((value): value is string => Boolean(value)))]
+      .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    const tags = (type: 'knowledge' | 'method' | 'model') => values(problems.flatMap((problem) =>
+      problem.libraryMetadata.tags.filter((tag) => tag.type === type).map((tag) => tag.name)))
+    return {
+      textbooks: values(problems.map((problem) => problem.libraryMetadata.textbookTitle)),
+      chapters: values(problems.flatMap((problem) => problem.libraryMetadata.chapters)),
+      knowledge: tags('knowledge'), methods: tags('method'), models: tags('model'),
+    }
+  }, [problems])
+  const filteredProblems = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+    return problems.filter((problem) => (subjectFilter === 'all' || problem.subject === subjectFilter)
+      && (difficultyFilter === 'all' || problem.libraryMetadata.difficulty === difficultyFilter)
+      && (textbookFilter === 'all' || problem.libraryMetadata.textbookTitle === textbookFilter)
+      && (chapterFilter === 'all' || problem.libraryMetadata.chapters.includes(chapterFilter))
+      && (knowledgeFilter === 'all' || problem.libraryMetadata.tags.some((tag) => tag.type === 'knowledge' && tag.name === knowledgeFilter))
+      && (methodFilter === 'all' || problem.libraryMetadata.tags.some((tag) => tag.type === 'method' && tag.name === methodFilter))
+      && (modelFilter === 'all' || problem.libraryMetadata.tags.some((tag) => tag.type === 'model' && tag.name === modelFilter))
+      && (reviewFilter === 'all'
+        || reviewFilter === 'unconfirmed' && !problem.libraryMetadata.confirmed
+        || reviewFilter === 'due' && problem.libraryMetadata.nextReviewAt !== null && problem.libraryMetadata.nextReviewAt <= Date.now()
+        || reviewFilter === 'stable' && (problem.libraryMetadata.masteryEstimate ?? 0) >= .75
+        || reviewFilter === 'attention' && problem.libraryMetadata.masteryEstimate !== null && problem.libraryMetadata.masteryEstimate < .5)
+      && (!normalizedQuery || problem.searchText.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
+  }, [chapterFilter, difficultyFilter, knowledgeFilter, methodFilter, modelFilter, problems, query, reviewFilter, subjectFilter, textbookFilter])
+  useEffect(() => {
+    if (!filteredProblems.some((problem) => problem.id === selectedId)) setSelectedId(filteredProblems[0]?.id ?? null)
+  }, [filteredProblems, selectedId])
   const selected = useMemo(
     () => problems.find((problem) => problem.id === selectedId) ?? null,
     [problems, selectedId],
@@ -359,6 +404,11 @@ export function ProblemLibrary() {
     if (!selectedId) { setSelectedRegions([]); return }
     void getProblemRegions(selectedId).then(setSelectedRegions).catch(() => setSelectedRegions([]))
   }, [selectedId, problems])
+
+  useEffect(() => {
+    if (!selectedId) { setReviewHistory([]); return }
+    void getProblemReviewHistory(selectedId).then(setReviewHistory).catch(() => setReviewHistory([]))
+  }, [selectedId])
 
   useEffect(() => {
     let cancelled = false
@@ -518,12 +568,23 @@ export function ProblemLibrary() {
       await deleteProblem(selected.id)
       setDeleteConfirming(false)
       await refresh(view)
-      notify('已删除该错题', 'success')
+      notify('已移入回收站，可随时恢复', 'success')
     } catch (error) {
       notify(`删除失败：${String(error)}`, 'error')
     } finally {
       setDeleting(false)
     }
+  }
+
+  const handleRestore = async () => {
+    if (!selected) return
+    setUpdating(true); dismiss()
+    try {
+      await restoreProblem(selected.id)
+      await refresh(view)
+      notify('错题已恢复', 'success')
+    } catch (error) { notify(`恢复失败：${String(error)}`, 'error') }
+    finally { setUpdating(false) }
   }
 
   const retryAI = async () => {
@@ -622,7 +683,11 @@ export function ProblemLibrary() {
         actions={<SegmentedControl
           ariaLabel="错题库视图"
           onChange={setView}
-          options={[{ value: 'active', label: '错题', disabled: editing }, { value: 'archived', label: '已归档', disabled: editing }]}
+          options={[
+            { value: 'active', label: '错题', disabled: editing },
+            { value: 'archived', label: '已归档', disabled: editing },
+            { value: 'trash', label: '回收站', disabled: editing },
+          ]}
           value={view}
         />}
         eyebrow="学习记录"
@@ -632,15 +697,35 @@ export function ProblemLibrary() {
       <section className="library-layout">
         <div className="problem-list-panel">
           <div className="problem-list-heading">
-            <strong>{view === 'active' ? '全部错题' : '归档错题'}</strong>
-            <span>{problems.length} 道</span>
+            <strong>{view === 'active' ? '全部错题' : view === 'archived' ? '归档错题' : '已删除错题'}</strong>
+            <span>{filteredProblems.length} / {problems.length} 道</span>
+          </div>
+
+          <div className="problem-list-filters">
+            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案或标签" type="search" value={query} /></label>
+            <label><span className="sr-only">筛选科目</span><select onChange={(event) => setSubjectFilter(event.target.value)} value={subjectFilter}>
+              <option value="all">全部科目</option>
+              {subjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+            </select></label>
+            <details>
+              <summary>更多筛选</summary>
+              <div className="problem-list-filter-grid">
+                <select aria-label="难度" onChange={(event) => setDifficultyFilter(event.target.value)} value={difficultyFilter}><option value="all">全部难度</option><option value="basic">基础</option><option value="intermediate">中档</option><option value="advanced">进阶</option></select>
+                <select aria-label="教材" onChange={(event) => setTextbookFilter(event.target.value)} value={textbookFilter}><option value="all">全部教材</option>{metadataOptions.textbooks.map((value) => <option key={value}>{value}</option>)}</select>
+                <select aria-label="章节" onChange={(event) => setChapterFilter(event.target.value)} value={chapterFilter}><option value="all">全部章节</option>{metadataOptions.chapters.map((value) => <option key={value}>{value}</option>)}</select>
+                <select aria-label="知识点" onChange={(event) => setKnowledgeFilter(event.target.value)} value={knowledgeFilter}><option value="all">全部知识点</option>{metadataOptions.knowledge.map((value) => <option key={value}>{value}</option>)}</select>
+                <select aria-label="方法" onChange={(event) => setMethodFilter(event.target.value)} value={methodFilter}><option value="all">全部方法</option>{metadataOptions.methods.map((value) => <option key={value}>{value}</option>)}</select>
+                <select aria-label="题型模型" onChange={(event) => setModelFilter(event.target.value)} value={modelFilter}><option value="all">全部模型</option>{metadataOptions.models.map((value) => <option key={value}>{value}</option>)}</select>
+                <select aria-label="复习状态" onChange={(event) => setReviewFilter(event.target.value)} value={reviewFilter}><option value="all">全部复习状态</option><option value="due">已到复习时间</option><option value="stable">掌握较稳定</option><option value="attention">需要关注</option><option value="unconfirmed">尚未确认</option></select>
+              </div>
+            </details>
           </div>
 
           <div className="problem-card-list">
             {loading ? (
               <div className="library-empty">正在读取本地错题…</div>
-            ) : problems.length ? (
-              problems.map((problem) => (
+            ) : filteredProblems.length ? (
+              filteredProblems.map((problem) => (
                 <button
                   className={`problem-card ${
                     selectedId === problem.id ? 'active' : ''
@@ -663,7 +748,7 @@ export function ProblemLibrary() {
                     <small>{dateFormatter.format(problem.createdAt)}</small>
                     <span className="problem-card-statuses">
                       <span className="problem-status">
-                        {problem.archivedAt ? '已归档' : '已保存'}
+                        {problem.deletedAt ? '回收站' : problem.archivedAt ? '已归档' : '已保存'}
                       </span>
                       <span
                         className={`problem-ai-status ${problem.aiStatus}`}
@@ -677,12 +762,12 @@ export function ProblemLibrary() {
             ) : (
               <div className="library-empty">
                 <strong>
-                  {view === 'active' ? '还没有保存错题' : '没有归档错题'}
+                  {problems.length ? '没有符合筛选条件的错题' : view === 'active' ? '还没有保存错题' : view === 'archived' ? '没有归档错题' : '回收站为空'}
                 </strong>
                 <p>
-                  {view === 'active'
+                  {problems.length ? '尝试清除搜索词或切换科目。' : view === 'active'
                     ? '在采集页面确认题块后，点击“保存为错题”。'
-                    : '归档后的错题会显示在这里。'}
+                    : view === 'archived' ? '归档后的错题会显示在这里。' : '删除的错题会保留复习记录与媒体，可在这里恢复。'}
                 </p>
               </div>
             )}
@@ -698,7 +783,11 @@ export function ProblemLibrary() {
                   <h2>{editing ? '编辑错题信息' : selected.title}</h2>
                 </div>
                 <div className="problem-detail-actions">
-                  {editing ? (
+                  {selected.deletedAt ? (
+                    <button className="primary-button" disabled={updating} onClick={() => void handleRestore()} type="button">
+                      {updating ? '恢复中…' : '恢复到错题库'}
+                    </button>
+                  ) : editing ? (
                     <>
                       <button
                         className="secondary-action"
@@ -1019,7 +1108,7 @@ export function ProblemLibrary() {
                         <div>
                           <dt>状态</dt>
                           <dd>
-                            {selected.archivedAt ? '已归档' : '已保存'}
+                            {selected.deletedAt ? '回收站' : selected.archivedAt ? '已归档' : '已保存'}
                           </dd>
                         </div>
                         <div>
@@ -1065,6 +1154,14 @@ export function ProblemLibrary() {
                           className="problem-source-image"
                           path={selected.cropImagePath}
                         />
+                      </section>
+
+                      <section className="problem-source-information">
+                        <div><p className="eyebrow">采集来源</p><h3>原图与校正图</h3><p>这些媒体与题块图分别保留，删除到回收站后仍可恢复。</p></div>
+                        <div className="problem-source-variants">
+                          <figure><ProblemImage alt={`${selected.title}原始采集页`} className="problem-source-image" path={selected.originalImagePath} /><figcaption>原图</figcaption></figure>
+                          {selected.correctedImagePath && <figure><ProblemImage alt={`${selected.title}校正页`} className="problem-source-image" path={selected.correctedImagePath} /><figcaption>校正图</figcaption></figure>}
+                        </div>
                       </section>
 
                       <section className="problem-ai-information">
@@ -1172,15 +1269,28 @@ export function ProblemLibrary() {
                         )}
                       </section>
 
-                      <section className="problem-delete-section">
+                      <section className="model-run-history problem-review-history">
+                        <p className="eyebrow">学习证据</p>
+                        <h3>复习记录</h3>
+                        {reviewHistory.length ? <ul>
+                          {reviewHistory.map((entry) => <li key={entry.attemptId}>
+                            <div><strong>{entry.overallResult === 'correct' ? '正确' : entry.overallResult === 'partial' ? '部分正确' : '错误'}</strong><small>{dateFormatter.format(entry.createdAt)} · 批改置信度 {Math.round(entry.gradingConfidence * 100)}%</small></div>
+                            {entry.firstErrorStep && <p>首错：第 {entry.firstErrorStep} 步{entry.errorCategory ? ` · ${entry.errorCategory}` : ''}</p>}
+                            {entry.answerImagePath && <ProblemImage alt="本次复习的用户作答图" className="problem-review-history__answer" path={entry.answerImagePath} />}
+                            {entry.evidence.length > 0 && <div className="problem-review-history__evidence">{entry.evidence.map((evidence) => <span key={`${entry.attemptId}:${evidence.tagName}`}>{evidence.tagName} · {evidence.result}</span>)}</div>}
+                          </li>)}
+                        </ul> : <p>暂无复习作答或标签证据。</p>}
+                      </section>
+
+                      {!selected.deletedAt && <section className="problem-delete-section">
                         <p className="eyebrow">危险操作</p>
-                        <h3>删除该错题</h3>
+                        <h3>移入回收站</h3>
                         <p>
-                          删除后题目、解答、AI 分析记录及相关图片将被永久移除，无法恢复。
+                          题目将从学习安排中移除，但解答、AI 分析、复习证据与相关图片都会保留，可从回收站恢复。
                         </p>
                         {deleteConfirming ? (
                           <div className="problem-delete-confirm">
-                            <span>确认要删除这道错题吗？此操作不可撤销。</span>
+                            <span>确认要把这道错题移入回收站吗？</span>
                             <div className="problem-delete-confirm-actions">
                               <button
                                 className="problem-delete-cancel"
@@ -1196,7 +1306,7 @@ export function ProblemLibrary() {
                                 onClick={() => void handleDelete()}
                                 type="button"
                               >
-                                {deleting ? '删除中…' : '确认删除'}
+                                {deleting ? '处理中…' : '移入回收站'}
                               </button>
                             </div>
                           </div>
@@ -1207,10 +1317,10 @@ export function ProblemLibrary() {
                             onClick={() => setDeleteConfirming(true)}
                             type="button"
                           >
-                            删除该错题
+                            移入回收站
                           </button>
                         )}
-                      </section>
+                      </section>}
                     </div>
                   )}
                   </div>

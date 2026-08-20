@@ -345,6 +345,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0050_practice_grading_evidence.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 51,
+            description: "review_preferences",
+            sql: include_str!("../migrations/0051_review_preferences.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

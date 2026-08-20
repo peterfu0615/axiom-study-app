@@ -65,12 +65,13 @@ function supportTags(unit: TodayReviewUnit) {
     .slice(0, 3)
 }
 
-function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
+function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer, preferredMode = 'standard' }: {
   unit: TodayReviewUnit
   busy: boolean
   onPractice: (mode?: ReviewSessionMode) => void
   onReplace: () => void
   onDefer: () => void
+  preferredMode?: ReviewSessionMode
 }) {
   const supporting = supportTags(unit).map((tag) => tag.name)
   return <article className={`today-unit today-unit--${unit.status}`}>
@@ -85,7 +86,7 @@ function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
     <div className="today-unit__aside">
       {unit.status !== 'pending' && <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>}
       {unit.status === 'pending' && <div className="today-unit__actions">
-        <Button disabled={busy} onClick={() => onPractice('standard')} variant="secondary">生成练习</Button>
+        <Button disabled={busy} onClick={() => onPractice(preferredMode)} variant="secondary">生成练习</Button>
         <Menu label={`${unit.title}的更多操作`}>
           <MenuItem disabled={busy} onClick={() => onPractice('quick')}>快速复习</MenuItem>
           <MenuItem disabled={busy} onClick={() => onPractice('mock_test')}>模拟测试</MenuItem>
@@ -112,7 +113,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     try {
       const [nextPlan, nextForecast] = await Promise.all([getOrCreateTodayPlan(), getSevenDayReviewForecast()])
       setPlan(nextPlan); setForecast(nextForecast)
-      const existingPracticeSet = await findPracticeSetForSource('today', nextPlan.id)
+      const existingPracticeSet = await findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
@@ -167,7 +168,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   return <main className="workspace today-workspace">
     <PageHeader
       actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
-        <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice('standard')} variant="primary">{practiceCta}</Button>
+        <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice(plan.preferences.preferredMode)} variant="primary">{practiceCta}</Button>
         <Menu label="选择练习模式">
           <MenuItem disabled={busy} onClick={() => void openTodayPractice('quick')}>快速复习</MenuItem>
           <MenuItem disabled={busy} onClick={() => void openTodayPractice('mock_test')}>模拟测试</MenuItem>
@@ -201,6 +202,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
               catch (reason) { setError(practiceErrorMessage(reason)) }
               finally { setBusy(false) }
             })()}
+            preferredMode={plan.preferences.preferredMode}
             unit={unit}
           />)}
         </section>

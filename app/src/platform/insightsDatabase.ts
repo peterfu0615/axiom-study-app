@@ -19,6 +19,7 @@ function parse<T>(value: unknown, fallback: T): T {
 
 interface RecordRow {
   module_id: string
+  subject: string
   session_date: string
   status: ReviewInsightRecord['status']
   completed_at: number | null
@@ -56,13 +57,13 @@ interface ChangeRow {
   effective_rating: ReviewRating
 }
 
-export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.now()) {
+export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.now(), subject: string | null = null) {
   const fromStart = addLocalReviewDays(startOfLocalReviewDay(now), -(rangeDays - 1))
   const fromDate = localReviewDate(fromStart)
   const toDate = localReviewDate(now)
   const [rows, skillRows, changeRows] = await Promise.all([
     select<RecordRow[]>(`
-      SELECT module.id AS module_id, session.session_date, module.status,
+      SELECT module.id AS module_id, module.subject, session.session_date, module.status,
         module.completed_at, instance.source_problem_id,
         CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
           THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
@@ -108,7 +109,7 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
   const records: ReviewInsightRecord[] = rows.map((row) => {
     const snapshot = parse<{ tags?: ReviewTag[]; errorCategories?: ReviewTag[] }>(row.target_tags_json, {})
     return {
-      moduleId: row.module_id, sessionDate: row.session_date, status: row.status,
+      moduleId: row.module_id, subject: row.subject, sessionDate: row.session_date, status: row.status,
       completedAt: nullable(row.completed_at), sourceProblemId: row.source_problem_id,
       rating: row.rating, tags: snapshot.tags ?? [], errorCategories: snapshot.errorCategories ?? [],
     }
@@ -133,8 +134,8 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
     const next = applyReviewRating(previous, row.effective_rating, row.difficulty, num(row.reviewed_at))
     replayedBundles.set(`${row.subject}:${row.skill_bundle_id}`, next)
     return Number.isFinite(previous.masteryEstimate) && Number.isFinite(next.masteryEstimate) ? [{
-      logId: row.log_id, reviewedAt: num(row.reviewed_at), previousMastery: num(previous.masteryEstimate), newMastery: num(next.masteryEstimate),
+      logId: row.log_id, subject: row.subject, reviewedAt: num(row.reviewed_at), previousMastery: num(previous.masteryEstimate), newMastery: num(next.masteryEstimate),
     }] : []
   })
-  return buildReviewInsights({ records, skills, changes, rangeDays, now })
+  return buildReviewInsights({ records, skills, changes, rangeDays, now, subject })
 }
