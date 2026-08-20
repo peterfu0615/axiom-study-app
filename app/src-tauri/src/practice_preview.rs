@@ -11,7 +11,7 @@ use wait_timeout::ChildExt;
 
 const PREVIEW_WIDTH: u32 = 1440;
 const PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
-const PREVIEW_RENDERER_VERSION: &str = "coregraphics-v1";
+const PREVIEW_RENDERER_VERSION: &str = "coregraphics-v2";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +73,9 @@ fn render_practice_pdf_page_blocking(
         .ok_or_else(|| "无法定位练习 PDF 目录".to_string())?
         .join("previews");
     fs::create_dir_all(&directory).map_err(|error| format!("无法创建 PDF 预览缓存：{error}"))?;
-    let output = directory.join(format!("{stem}-page-{page_number}-{PREVIEW_WIDTH}.png"));
+    let output = directory.join(format!(
+        "{stem}-{PREVIEW_RENDERER_VERSION}-page-{page_number}-{PREVIEW_WIDTH}.png"
+    ));
 
     if output.is_file() {
         if let Ok((pixel_width, pixel_height)) = preview_dimensions(&output) {
@@ -232,6 +234,9 @@ mod tests {
         assert!(!source.contains("NSBitmapImageRep"));
         assert!(source.contains("CGPDFDocument"));
         assert!(source.contains("CGContext("));
+        assert!(source.contains("let rasterScale = min("));
+        assert!(source.contains("context.scaleBy(x: rasterScale, y: rasterScale)"));
+        assert_eq!(PREVIEW_RENDERER_VERSION, "coregraphics-v2");
     }
 
     #[cfg(unix)]

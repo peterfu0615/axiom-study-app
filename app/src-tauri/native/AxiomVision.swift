@@ -258,9 +258,25 @@ private func rasterizePDFPage(
     context.setFillColor(CGColor(gray: 1, alpha: 1))
     context.fill(target)
     context.interpolationQuality = .high
+
+    // CGPDFPage.getDrawingTransform does not upscale a page when the target
+    // rectangle is larger than the PDF's point-space media box. Scale the
+    // bitmap context explicitly, then let CoreGraphics handle page rotation
+    // and box origins in the page's native coordinate space.
+    let rasterScale = min(
+        CGFloat(pixelWidth) / logicalWidth,
+        CGFloat(pixelHeight) / logicalHeight
+    )
+    context.scaleBy(x: rasterScale, y: rasterScale)
+    let pageSpaceTarget = CGRect(
+        x: 0,
+        y: 0,
+        width: CGFloat(pixelWidth) / rasterScale,
+        height: CGFloat(pixelHeight) / rasterScale
+    )
     context.concatenate(page.getDrawingTransform(
         .mediaBox,
-        rect: target,
+        rect: pageSpaceTarget,
         rotate: 0,
         preserveAspectRatio: true
     ))

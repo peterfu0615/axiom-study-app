@@ -42,12 +42,14 @@ describe('canonical Axiom icon assets', () => {
 
   it('keeps the Sidebar wordmark separate from generated app icon assets', () => {
     const sidebar = readFileSync(new URL('./Sidebar.tsx', import.meta.url), 'utf8')
+    const appStyles = readFileSync(new URL('../App.css', import.meta.url), 'utf8')
     expect(sidebar).toContain(
       "../../src-tauri/icons/source/axiom-wordmark.png",
     )
     expect(sidebar).not.toContain('axiom-icon-light-1024.png')
     expect(sidebar).not.toContain('axiom-icon-dark-1024.png')
     expect(sidebar).not.toContain('../../../icons/')
+    expect(appStyles).toMatch(/\.brand-icon\s*\{[^}]*width:\s*88px;[^}]*height:\s*22px;/s)
 
     expect(pngDimensions(asset('../../src-tauri/icons/32x32.png'))).toEqual({
       width: 32,
