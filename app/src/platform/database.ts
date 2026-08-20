@@ -3449,9 +3449,7 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
      FROM ai_provider_profiles
      ORDER BY sort_order, created_at`,
   )
-  return rows.length
-    ? rows.map(rowToAIProviderProfile)
-    : defaultAIProviderProfiles
+  return rows.map(rowToAIProviderProfile)
 }
 
 /**
@@ -3476,7 +3474,6 @@ export async function saveAIProviderProfiles(
   if (!isDesktopRuntime()) {
     throw new Error('AI Provider 设置需要在 Axiom 桌面 App 中保存')
   }
-  if (!profiles.length) throw new Error('请至少保留一个 Provider')
   if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length) {
     throw new Error('Provider ID 不能重复')
   }
