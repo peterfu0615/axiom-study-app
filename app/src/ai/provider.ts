@@ -14,7 +14,21 @@ import type {
 } from '../domain/models'
 import type { TextbookRecognition } from '../domain/horizon'
 import type { PracticeGradingResult, SubjectivePracticeGradingInput } from '../domain/practiceGrading'
+import type {
+  PracticeVariantCandidate,
+  PracticeVariantGenerationInput,
+  PracticeVariantVerification,
+  PracticeVariantVerificationInput,
+} from '../domain/variantPractice'
 import { buildSubjectivePracticeGradingPrompt, parseSubjectivePracticeGrading, subjectivePracticeGradingJSONSchema } from './practiceGradingContract'
+import {
+  buildPracticeVariantGenerationPrompt,
+  buildPracticeVariantVerificationPrompt,
+  parsePracticeVariantCandidate,
+  parsePracticeVariantVerification,
+  practiceVariantGenerationJSONSchema,
+  practiceVariantVerificationJSONSchema,
+} from './variantPracticeContract'
 import {
   classifyAIError,
   type AIErrorEnvelope,
@@ -138,6 +152,16 @@ export interface SubjectivePracticeGradingProviderResult {
   rawOutput: string
 }
 
+export interface PracticeVariantGenerationProviderResult {
+  candidate: PracticeVariantCandidate
+  rawOutput: string
+}
+
+export interface PracticeVariantVerificationProviderResult {
+  verification: PracticeVariantVerification
+  rawOutput: string
+}
+
 export interface TextbookRecognitionInput {
   sourceName: string
   pageCount: number
@@ -184,6 +208,8 @@ export interface AIProvider {
     input: StudentAttemptInput,
   ) => Promise<StudentAttemptProviderResult>
   gradeSubjectivePractice?: (input: SubjectivePracticeGradingInput) => Promise<SubjectivePracticeGradingProviderResult>
+  generatePracticeVariant?: (input: PracticeVariantGenerationInput) => Promise<PracticeVariantGenerationProviderResult>
+  verifyPracticeVariant?: (input: PracticeVariantVerificationInput) => Promise<PracticeVariantVerificationProviderResult>
   analyzeStudentReasoning?: (
     input: ReasoningAnalysisInput,
     onChunk?: StreamCallback,
@@ -516,6 +542,36 @@ export class OpenAICompatibleProvider implements AIProvider {
     return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
   }
 
+  async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+      prompt: buildPracticeVariantGenerationPrompt(input),
+      jsonSchema: JSON.stringify(practiceVariantGenerationJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    try {
+      return { candidate: parsePracticeVariantCandidate(response.rawOutput), rawOutput: response.rawOutput }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput)
+    }
+  }
+
+  async verifyPracticeVariant(input: PracticeVariantVerificationInput): Promise<PracticeVariantVerificationProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+      prompt: buildPracticeVariantVerificationPrompt(input),
+      jsonSchema: JSON.stringify(practiceVariantVerificationJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    try {
+      return { verification: parsePracticeVariantVerification(response.rawOutput), rawOutput: response.rawOutput }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput)
+    }
+  }
+
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
     onChunk?: StreamCallback,
@@ -811,6 +867,36 @@ export class AntigravityCLIProvider implements AIProvider {
     return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
   }
 
+  async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath, model: this.profile.model,
+      prompt: buildPracticeVariantGenerationPrompt(input),
+      jsonSchema: JSON.stringify(practiceVariantGenerationJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    try {
+      return { candidate: parsePracticeVariantCandidate(response.rawOutput), rawOutput: response.rawOutput }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput)
+    }
+  }
+
+  async verifyPracticeVariant(input: PracticeVariantVerificationInput): Promise<PracticeVariantVerificationProviderResult> {
+    if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath, model: this.profile.model,
+      prompt: buildPracticeVariantVerificationPrompt(input),
+      jsonSchema: JSON.stringify(practiceVariantVerificationJSONSchema),
+    })
+    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    try {
+      return { verification: parsePracticeVariantVerification(response.rawOutput), rawOutput: response.rawOutput }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput)
+    }
+  }
+
   async analyzeStudentReasoning(
     input: ReasoningAnalysisInput,
     _onChunk?: StreamCallback,
@@ -1082,6 +1168,17 @@ export function getSubjectivePracticeGradingProviders() {
   )
   if (!providers.length) throw new Error(INTELLIGENCE_PROVIDER_REQUIRED)
   return providers
+}
+
+export function getPracticeVariantProviders() {
+  return activeProviders.filter(
+    (provider): provider is AIProvider & {
+      generatePracticeVariant: NonNullable<AIProvider['generatePracticeVariant']>
+      verifyPracticeVariant: NonNullable<AIProvider['verifyPracticeVariant']>
+    } => provider.supportsText
+      && typeof provider.generatePracticeVariant === 'function'
+      && typeof provider.verifyPracticeVariant === 'function',
+  )
 }
 
 export function getReasoningProvidersForRun(

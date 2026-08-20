@@ -8,6 +8,7 @@ import type { PracticeGradingResult, StructuredStudentAnswer } from '../domain/p
 import { decidePracticeLoop, practiceRating, type PracticeLoop, type PracticeLoopStopReason, type PracticeLoopStatus } from '../domain/practiceLoop'
 import { getOrCreatePracticeSetFromPracticeAttempt } from './practiceDatabase'
 import { withTransactionLock } from './transactionLock'
+import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -239,6 +240,11 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
       throw error
     }
   })
+  await transitionPracticeSessionForSet(practiceSet.id, { to: 'graded', safeCode: 'grading_confirmed' })
+  await transitionPracticeSessionForSet(practiceSet.id, {
+    to: 'applied', safeCode: 'learning_state_applied', metadata: { attemptId: attempt.id },
+  })
+  await transitionPracticeSessionForSet(practiceSet.id, { to: 'completed', safeCode: 'practice_completed' })
   if (finalized.status !== 'needs_reinforcement' || finalized.nextPracticeSetId) return finalized
   try {
     const next = await getOrCreatePracticeSetFromPracticeAttempt(attempt.id, Math.min(3, finalized.itemBudget - finalized.consumedItems))

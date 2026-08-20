@@ -10,6 +10,7 @@ import {
   type CompletePdfRenderResult,
 } from './native'
 import { withTransactionLock } from './transactionLock'
+import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -238,13 +239,29 @@ async function persistDocument(document: CompletePracticeDocument, render: Compl
 }
 
 export async function exportPracticePdf(practiceSet: PracticeSet) {
-  const cached = await atStage('cache_lookup', practiceSet.id, () => readReadyDocument(practiceSet))
-  if (cached) return cached
-  const attemptId = await atStage('attempt_identity', practiceSet.id, () => exportAttemptId(practiceSet.id))
-  const hydrated = await atStage('diagram_hydration', practiceSet.id, () => hydrateDiagramAssets(practiceSet))
-  const document = await atStage('document_build', practiceSet.id, () => buildCompletePracticeDocument(hydrated, { attemptId, generatedAt: practiceSet.createdAt }))
-  const rendered = await atStage('render_pdf', practiceSet.id, () => renderCompletePracticePdf(document))
-  return atStage('persistence', practiceSet.id, () => persistDocument(document, rendered))
+  try {
+    const cached = await atStage('cache_lookup', practiceSet.id, () => readReadyDocument(practiceSet))
+    if (cached) return cached
+    const attemptId = await atStage('attempt_identity', practiceSet.id, () => exportAttemptId(practiceSet.id))
+    const hydrated = await atStage('diagram_hydration', practiceSet.id, () => hydrateDiagramAssets(practiceSet))
+    const document = await atStage('document_build', practiceSet.id, () => buildCompletePracticeDocument(hydrated, { attemptId, generatedAt: practiceSet.createdAt }))
+    const rendered = await atStage('render_pdf', practiceSet.id, () => renderCompletePracticePdf(document))
+    const persisted = await atStage('persistence', practiceSet.id, () => persistDocument(document, rendered))
+    await transitionPracticeSessionForSet(practiceSet.id, {
+      to: 'exported', safeCode: 'practice_pdf_ready',
+      metadata: { documentId: persisted.id, layoutVersion: persisted.layoutVersion, pageCount: persisted.pageCount },
+    })
+    return persisted
+  } catch (reason) {
+    const diagnostic = practiceDocumentDiagnostic(reason, practiceSet.id)
+    try {
+      await transitionPracticeSessionForSet(practiceSet.id, {
+        to: 'generation_failed', safeCode: diagnostic.code,
+        metadata: { stage: diagnostic.stage, rendererContract: diagnostic.rendererContract },
+      })
+    } catch { /* preserve the document error */ }
+    throw reason
+  }
 }
 
 export async function getLatestReadyPracticeDocument(practiceSet: PracticeSet) {

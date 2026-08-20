@@ -6,6 +6,7 @@ import { gradePracticeAnswer, type PracticeCorrectness, type PracticeGradingResu
 import { getLatestPracticeAttempt } from './practiceAttemptDatabase'
 import { rebuildLearningStateInTransaction } from './reviewMaintenance'
 import { withTransactionLock } from './transactionLock'
+import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -156,7 +157,11 @@ async function persistCorrection(input: {
 export async function extractAndGradePracticeAttempt(practiceSet: PracticeSet, attempt: PracticeAttempt) {
   await execute("UPDATE practice_attempts SET status='extracting', error_message=NULL, updated_at=$1 WHERE id=$2", [Date.now(), attempt.id])
   try {
+    await transitionPracticeSessionForSet(practiceSet.id, {
+      to: 'processing', safeCode: 'grading_started', metadata: { attemptId: attempt.id },
+    })
     const provider = getStudentAttemptProvidersForRun('', '')[0]
+    let needsReview = false
     for (const response of attempt.responses) {
       const item = practiceSet.items.find((candidate) => candidate.id === response.practiceItemId)
       if (!item) throw new Error(`PracticeResponse ${response.regionId} 找不到对应题目`)
@@ -167,11 +172,21 @@ export async function extractAndGradePracticeAttempt(practiceSet: PracticeSet, a
         choices: item.options?.map((text, index) => ({ label: String.fromCharCode(65 + index), text })) ?? [], subQuestions: [],
       })
       const answer: StructuredStudentAnswer = { ...extracted.attempt, source: 'ai' }
-      await persistAIExtraction(response.regionId, answer, await grade(item, answer))
+      const result = await grade(item, answer)
+      needsReview ||= result.requiresReview
+      await persistAIExtraction(response.regionId, answer, result)
     }
     await execute("UPDATE practice_attempts SET status='extracted', error_message=NULL, updated_at=$1 WHERE id=$2", [Date.now(), attempt.id])
+    await transitionPracticeSessionForSet(practiceSet.id, {
+      to: needsReview ? 'needs_review' : 'graded',
+      safeCode: needsReview ? 'grading_requires_confirmation' : 'grading_completed',
+      metadata: { attemptId: attempt.id },
+    })
   } catch (error) {
     await execute("UPDATE practice_attempts SET status='failed', error_message=$1, updated_at=$2 WHERE id=$3", [String(error), Date.now(), attempt.id])
+    try {
+      await transitionPracticeSessionForSet(practiceSet.id, { to: 'grading_failed', safeCode: 'grading_failed' })
+    } catch { /* preserve the grading error */ }
     throw error
   }
   return getLatestPracticeAttempt(practiceSet.id)

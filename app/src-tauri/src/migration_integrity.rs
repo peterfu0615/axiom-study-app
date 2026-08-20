@@ -6,10 +6,10 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 47，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 47；
+//!   1. 全新库一路跑到 49，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 49；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
-//!      校验并推进到 47；
+//!      校验并推进到 49；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
 //!   5. 0029 表重建后既有 textbook_pages 数据完整且接受 'failed'。
 //!
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 47（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 49（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_47_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_49_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(47);
+            let migrations = migrations_up_to(49);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 47（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 47);
+                .expect("全新库必须能完整迁移到 49（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 49);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 47);
+            assert_eq!(max_applied_version(&mut conn).await, 49);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,71 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=47 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=49 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_47_exactly() {
+    fn migration_list_covers_versions_1_through_49_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=47).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=47");
+        let expected: Vec<i64> = (1..=49).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=49");
+    }
+
+    #[test]
+    fn generated_variant_requires_verified_immutable_plan() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("variant-practice");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(48))
+                .await
+                .expect("变式题 schema 必须迁移成功");
+            conn.execute("INSERT INTO source_documents(id, original_image_path, content_hash, source_type, processing_status, captured_at, created_at) VALUES ('doc-variant', '/tmp/variant.png', 'variant-hash', 'import', 'captured', 1, 1)").await.expect("source");
+            conn.execute("INSERT INTO problems(id, source_document_id, subject, stem_markdown, status, created_at, updated_at) VALUES ('problem-variant', 'doc-variant', '数学', '解方程', 'saved', 1, 1)").await.expect("problem");
+            conn.execute("INSERT INTO skill_bundles(id, subject, canonical_key, primary_knowledge_tag_id, difficulty_context, created_at) VALUES ('bundle-variant', '数学', 'variant-key', 'legacy:problem-variant', 'basic', 1)").await.expect("bundle");
+            conn.execute("INSERT INTO practice_sets(id, subject, source_type, source_ref, strategy, status, target_skills_json, generation_metadata_json, created_at, updated_at) VALUES ('set-variant', '数学', 'review_unit', 'module-variant', 'variant-v1', 'ready', '[]', '{}', 1, 1)").await.expect("set");
+            conn.execute("INSERT INTO variant_plans(id,subject,source_problem_id,skill_bundle_id,target_tags_json,target_difficulty,invariants_json,allowed_changes_json,forbidden_changes_json,source_input_hash,prompt_version,schema_version,status,created_at,updated_at) VALUES ('plan-variant','数学','problem-variant','bundle-variant','[]','basic','{}','[]','[]','hash','v1','v1','planned',1,1)").await.expect("plan");
+            let unverified = conn.execute("INSERT INTO practice_items(id,practice_set_id,order_index,source_type,source_problem_id,variant_plan_id,subject,target_skill_bundle_id,target_tags_json,difficulty,statement_markdown,canonical_answer,solution_json,grading_rubric_json,generation_metadata_json,validation_status,created_at) VALUES ('item-unverified','set-variant',0,'generated_variant','problem-variant','plan-variant','数学','bundle-variant','[]','basic','新题','x=3','{\"contentMarkdown\":\"解\"}','{}','{}','valid',2)").await;
+            assert!(unverified.is_err(), "未审校 VariantPlan 不得进入正式练习");
+            conn.execute("INSERT INTO variant_model_runs(id,variant_plan_id,stage,provider,model,prompt_version,schema_version,input_hash,output_json,raw_output,status,created_at,finished_at) VALUES ('run-generation','plan-variant','generation','provider','model','v1','v1','hash:generation','{}','','completed',2,3)").await.expect("generation run");
+            conn.execute("INSERT INTO variant_model_runs(id,variant_plan_id,stage,provider,model,prompt_version,schema_version,input_hash,output_json,raw_output,status,created_at,finished_at) VALUES ('run-verification','plan-variant','verification','provider','model','v1','v1','hash:verification','{}','','completed',3,4)").await.expect("verification run");
+            conn.execute("INSERT INTO variant_candidates(id,variant_plan_id,generation_model_run_id,verification_model_run_id,candidate_json,verification_json,validation_errors_json,status,created_at) VALUES ('candidate-variant','plan-variant','run-generation','run-verification','{}','{}','[]','verified',4)").await.expect("verified candidate");
+            conn.execute("UPDATE variant_plans SET status='verified',selected_candidate_id='candidate-variant',updated_at=4 WHERE id='plan-variant'").await.expect("verify plan");
+            conn.execute("INSERT INTO practice_items(id,practice_set_id,order_index,source_type,source_problem_id,variant_plan_id,subject,target_skill_bundle_id,target_tags_json,difficulty,statement_markdown,canonical_answer,solution_json,grading_rubric_json,generation_metadata_json,validation_status,created_at) VALUES ('item-verified','set-variant',0,'generated_variant','problem-variant','plan-variant','数学','bundle-variant','[]','basic','新题','x=3','{\"contentMarkdown\":\"解\"}','{}','{}','valid',5)").await.expect("verified variant item");
+            assert!(
+                conn.execute(
+                    "UPDATE variant_plans SET failure_code='tamper' WHERE id='plan-variant'"
+                )
+                .await
+                .is_err(),
+                "已验证计划必须不可变"
+            );
+            assert!(conn.execute("UPDATE variant_candidates SET candidate_json='{\"tampered\":true}' WHERE id='candidate-variant'").await.is_err(), "已验证候选必须不可变");
+        });
+    }
+
+    #[test]
+    fn practice_sessions_are_independent_from_the_daily_plan_and_events_are_immutable() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("review-session-lifecycle");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(49))
+                .await
+                .expect("ReviewSession 生命周期 schema 必须迁移成功");
+            conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,session_kind,settings_json,created_at,updated_at) VALUES ('today-session','2026-08-20','generated','standard',2,600,'today','{}',1,1)").await.expect("today session");
+            conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,session_kind,settings_json,created_at,updated_at) VALUES ('practice-standard','2026-08-20','draft','standard',3,900,'practice','{}',2,2)").await.expect("standard practice session");
+            conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,session_kind,settings_json,created_at,updated_at) VALUES ('practice-mock','2026-08-20','draft','mock_test',6,3600,'practice','{}',3,3)").await.expect("mock practice session");
+            assert!(conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,session_kind,settings_json,created_at,updated_at) VALUES ('today-duplicate','2026-08-20','generated','standard',2,600,'today','{}',4,4)").await.is_err(), "同一天只能有一个 Today 调度容器");
+            conn.execute("INSERT INTO review_session_events(id,review_session_id,from_status,to_status,safe_code,metadata_json,created_at) VALUES ('event-session','practice-standard','draft','generated','practice_set_ready','{}',5)").await.expect("session event");
+            assert!(conn.execute("UPDATE review_session_events SET safe_code='tampered' WHERE id='event-session'").await.is_err(), "会话事件必须不可变");
+            assert!(
+                conn.execute("DELETE FROM review_session_events WHERE id='event-session'")
+                    .await
+                    .is_err(),
+                "会话事件不得删除"
+            );
+        });
     }
 
     #[test]

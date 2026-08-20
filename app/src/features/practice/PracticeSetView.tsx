@@ -24,9 +24,9 @@ import { practiceErrorMessage } from './productLanguage'
 import { shouldAutoPreparePracticeDocument, type PracticeDocumentState } from './practiceDocumentState'
 import './PracticeSetView.css'
 
-type PracticePdfSection = 'exercise' | 'solution'
+type PracticePdfSection = 'exercise' | 'answer_sheet' | 'solution'
 
-const documentTabs: Array<{ value: PracticePdfSection; label: string }> = [
+const baseDocumentTabs: Array<{ value: PracticePdfSection; label: string }> = [
   { value: 'exercise', label: '练习' },
   { value: 'solution', label: '解析' },
 ]
@@ -79,7 +79,7 @@ function ResultItem({ item, response, onChange, onError }: {
   const label = result?.correctness === 'correct' ? '正确' : result?.correctness === 'partial' ? '部分正确' : result?.correctness === 'incorrect' ? '错误' : '需要检查'
   const tags = item.targetTags.filter((tag) => tag.type !== 'error').slice(0, 3)
   return <article className="practice-result-item">
-    <header><strong>第 {item.orderIndex + 1} 题</strong><StatusBadge tone={tone}>{label}</StatusBadge></header>
+    <header><strong>第 {item.orderIndex + 1} 题</strong>{item.sourceType === 'generated_variant' && <Badge>AI 变式</Badge>}<StatusBadge tone={tone}>{label}</StatusBadge></header>
     <MathMarkdown className="practice-result-item__question">{item.statementMarkdown}</MathMarkdown>
     <dl>
       <div><dt>你的作答</dt><dd><MathMarkdown>{response.extractedAnswer?.rawMarkdown || '未识别到清晰作答'}</MathMarkdown></dd></div>
@@ -112,6 +112,9 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [feedback, setFeedback] = useState<Feedback>(null)
   const [documentDiagnostic, setDocumentDiagnostic] = useState<PracticeDocumentDiagnostic | null>(null)
   const documentRequest = useRef<Promise<PracticeDocumentRecord> | null>(null)
+  const documentTabs = useMemo(() => practiceSet.sessionMode === 'mock_test' || practiceSet.sessionSettings?.includeAnswerSheet
+    ? [baseDocumentTabs[0], { value: 'answer_sheet' as const, label: '答题页' }, baseDocumentTabs[1]]
+    : baseDocumentTabs, [practiceSet.sessionMode, practiceSet.sessionSettings?.includeAnswerSheet])
 
   useEffect(() => {
     let cancelled = false
@@ -181,7 +184,8 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   }
   const chooseSection = (section: PracticePdfSection) => {
     setSelectedSection(section)
-    if (document) setCurrentPage(document.sectionPageRanges[section].startPage)
+    const range = document?.sectionPageRanges[section]
+    if (range) setCurrentPage(range.startPage)
   }
   const saveCurrent = async () => {
     const record = document ?? await ensureDocument()
@@ -199,9 +203,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     const record = document ?? await ensureDocument()
     await printExportedPracticePdf(record)
     const exercise = record.sectionPageRanges.exercise
+    const answerSheet = record.sectionPageRanges.answer_sheet
     setFeedback({
       tone: 'success',
-      message: `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
+      message: answerSheet
+        ? `已在系统预览中打开。模拟练习请打印第 ${exercise.startPage}–${answerSheet.endPage} 页；解析位于其后。`
+        : `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
     })
   }
   const submitAnswer = async () => {

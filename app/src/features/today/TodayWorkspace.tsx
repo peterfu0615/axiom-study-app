@@ -5,6 +5,7 @@ import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
+import type { ReviewSessionMode } from '../../domain/review'
 import {
   addTodayReviewUnit,
   deferTodayReviewUnit,
@@ -67,7 +68,7 @@ function supportTags(unit: TodayReviewUnit) {
 function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
   unit: TodayReviewUnit
   busy: boolean
-  onPractice: () => void
+  onPractice: (mode?: ReviewSessionMode) => void
   onReplace: () => void
   onDefer: () => void
 }) {
@@ -84,8 +85,10 @@ function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer }: {
     <div className="today-unit__aside">
       {unit.status !== 'pending' && <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>}
       {unit.status === 'pending' && <div className="today-unit__actions">
-        <Button disabled={busy} onClick={onPractice} variant="secondary">生成练习</Button>
+        <Button disabled={busy} onClick={() => onPractice('standard')} variant="secondary">生成练习</Button>
         <Menu label={`${unit.title}的更多操作`}>
+          <MenuItem disabled={busy} onClick={() => onPractice('quick')}>快速复习</MenuItem>
+          <MenuItem disabled={busy} onClick={() => onPractice('mock_test')}>模拟测试</MenuItem>
           <MenuItem disabled={busy} onClick={onReplace}>换一个主题</MenuItem>
           <MenuItem disabled={busy} onClick={onDefer}>稍后处理</MenuItem>
         </Menu>
@@ -126,12 +129,16 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
-  const openTodayPractice = async () => {
+  const openTodayPractice = async (sessionMode: ReviewSessionMode = 'standard') => {
     if (!plan) return
     setBusy(true); setError(null)
     try {
       const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
-      const next = todayPracticeSet ?? await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, Math.max(3, moduleIds.length * 2))
+      const budget = sessionMode === 'quick' ? Math.max(1, moduleIds.length)
+        : sessionMode === 'mock_test' ? Math.max(4, moduleIds.length * 3) : Math.max(3, moduleIds.length * 2)
+      const next = todayPracticeSet?.sessionMode === sessionMode
+        ? todayPracticeSet
+        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
       setTodayPracticeSet(next); setTodayAttempt(await getLatestPracticeAttempt(next.id)); setActivePracticeSet(next)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
@@ -159,7 +166,13 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         : '查看今日练习'
   return <main className="workspace today-workspace">
     <PageHeader
-      actions={plan && plan.units.length > 0 ? <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice()} variant="primary">{practiceCta}</Button> : undefined}
+      actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
+        <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice('standard')} variant="primary">{practiceCta}</Button>
+        <Menu label="选择练习模式">
+          <MenuItem disabled={busy} onClick={() => void openTodayPractice('quick')}>快速复习</MenuItem>
+          <MenuItem disabled={busy} onClick={() => void openTodayPractice('mock_test')}>模拟测试</MenuItem>
+        </Menu>
+      </div> : undefined}
       className="today-header"
       eyebrow={todayDate}
       summary={plan ? `${completed} / ${actionableUnits.length} · 共预计 ${minutes(plan.estimatedDurationSeconds)} 分钟` : undefined}
@@ -179,9 +192,12 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
             key={unit.id}
             onDefer={() => void mutate(async () => { await deferTodayReviewUnit(unit.id) })}
             onReplace={() => void mutate(() => replaceTodayReviewUnit(unit.id))}
-            onPractice={() => void (async () => {
+            onPractice={(sessionMode = 'standard') => void (async () => {
               setBusy(true); setError(null)
-              try { setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id)) }
+              try {
+                const budget = sessionMode === 'quick' ? 1 : sessionMode === 'mock_test' ? 5 : 3
+                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode))
+              }
               catch (reason) { setError(practiceErrorMessage(reason)) }
               finally { setBusy(false) }
             })()}

@@ -41,6 +41,8 @@ struct DocumentMetadata {
     created_at: i64,
     item_count: usize,
     strategy: String,
+    session_mode: String,
+    max_duration_seconds: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,6 +65,7 @@ struct PracticeSection {
 #[serde(rename_all = "snake_case")]
 enum SectionKind {
     Exercise,
+    AnswerSheet,
     Solution,
 }
 
@@ -70,6 +73,7 @@ impl SectionKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Exercise => "exercise",
+            Self::AnswerSheet => "answer_sheet",
             Self::Solution => "solution",
         }
     }
@@ -192,6 +196,7 @@ pub struct PracticePdfRenderError {
 #[derive(Debug)]
 struct PracticePage {
     local_index: usize,
+    section: SectionKind,
     page_identity: String,
     qr_payload: String,
     qr_asset: String,
@@ -542,20 +547,24 @@ fn estimated_block_height(block: &ContentBlock) -> f32 {
 
 fn estimated_question_height(question: &ContentBlock) -> Result<f32, String> {
     let ContentBlock::Question {
-        display_number,
+        display_number: _,
         content,
         ..
     } = question
     else {
         return Err("练习正文包含非题目块".to_string());
     };
-    if !content
-        .iter()
-        .any(|block| matches!(block, ContentBlock::AnswerSpace { .. }))
-    {
-        return Err(format!("第 {display_number} 题缺少答题区域"));
-    }
-    Ok(56.0 + content.iter().map(estimated_block_height).sum::<f32>())
+    let estimated = 56.0 + content.iter().map(estimated_block_height).sum::<f32>();
+    Ok(
+        if content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::AnswerSpace { .. }))
+        {
+            estimated
+        } else {
+            estimated.max(96.0)
+        },
+    )
 }
 
 fn build_practice_pages(
@@ -588,7 +597,7 @@ fn build_practice_pages(
         .into_iter()
         .enumerate()
         .map(|(index, questions)| {
-            let page_identity = format!("{}:practice-page:{index}", document.id);
+            let page_identity = format!("{}:{}-page:{index}", document.id, section.kind.as_str());
             let page_token = format!("{:x}", Sha256::digest(page_identity.as_bytes()));
             let qr_payload = match document.layout.version.as_str() {
                 "practice-a4-v1" => {
@@ -598,11 +607,12 @@ fn build_practice_pages(
                 "practice-a4-v3" => format!("AXIOM|v=3|page={}", &page_token[..32]),
                 _ => return Err("不支持的完整练习文档二维码版本".to_string()),
             };
-            let qr_asset = format!("assets/practice-qr-{index}.svg");
+            let qr_asset = format!("assets/{}-qr-{index}.svg", section.kind.as_str());
             fs::write(render_directory.join(&qr_asset), qr_svg(&qr_payload)?)
                 .map_err(|error| format!("写入练习页二维码失败：{error}"))?;
             Ok(PracticePage {
                 local_index: index,
+                section: section.kind,
                 page_identity,
                 qr_payload,
                 qr_asset,
@@ -614,6 +624,7 @@ fn build_practice_pages(
 
 fn practice_page_typst(
     page: &PracticePage,
+    section: SectionKind,
     document: &CompletePracticeDocument,
     render_directory: &Path,
     assets: &mut HashMap<String, String>,
@@ -622,33 +633,37 @@ fn practice_page_typst(
     for question in &page.questions {
         questions.push_str(&question_typst(
             question,
-            SectionKind::Exercise,
+            section,
             render_directory,
             assets,
             Some(&page.page_identity),
         )?);
     }
     Ok(format!(
-        "#block(width: {}pt, height: 839pt)[\n\
+        "#context [#metadata((kind: \"practice-page\", page_identity: {}, page: counter(page).get().first())) <axiom-meta>]\n\
+         #block(width: {}pt, height: 839pt)[\n\
            #place(top + left, dx: 24pt, dy: 24pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 560.28pt, dy: 24pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 24pt, dy: 806.89pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 560.28pt, dy: 806.89pt)[#rect(width: 11pt, height: 11pt, fill: black)]\n\
            #place(top + left, dx: 493pt, dy: 30pt)[#image({}, width: 58pt, height: 58pt)]\n\
            #place(top + left, dx: 42pt, dy: 42pt)[#box(width: {}pt)[\n\
-             #text(size: 16pt, weight: \"bold\")[Axiom {}练习]\n\
+             #text(size: 16pt, weight: \"bold\")[Axiom {}{}]\n\
              #v(4pt)\n\
              #text(size: 9pt, fill: rgb(\"#77746c\"))[姓名：________________　日期：______________]\n\
              #v(16pt)\n\
              {}\n\
            ]]\n\
-           #place(top + left, dx: 42pt, dy: 818pt)[#text(size: 7pt, fill: rgb(\"#77746c\"))[练习页 {}]]\n\
+           #place(top + left, dx: 42pt, dy: 818pt)[#text(size: 7pt, fill: rgb(\"#77746c\"))[{} {}]]\n\
          ]\n",
+        typst_string(&page.page_identity),
         A4_WIDTH_POINTS,
         typst_string(&page.qr_asset),
         CONTENT_WIDTH_POINTS,
         document.metadata.subject,
+        if section == SectionKind::AnswerSheet { "统一答题页" } else { "练习" },
         questions,
+        if section == SectionKind::AnswerSheet { "答题页" } else { "练习页" },
         page.local_index + 1,
     ))
 }
@@ -668,15 +683,16 @@ fn build_source(
     {
         return Err("不支持的完整练习文档 layout".to_string());
     }
-    if document.sections.len() != 2
-        || document.sections[0].kind != SectionKind::Exercise
-        || document.sections[1].kind != SectionKind::Solution
+    if !(document.sections.len() == 2 || document.sections.len() == 3)
+        || document.sections.first().map(|section| section.kind) != Some(SectionKind::Exercise)
+        || document.sections.last().map(|section| section.kind) != Some(SectionKind::Solution)
+        || (document.sections.len() == 3 && document.sections[1].kind != SectionKind::AnswerSheet)
     {
-        return Err("完整练习文档必须按练习、解析组织".to_string());
+        return Err("完整练习文档必须按练习、可选答题页、解析组织".to_string());
     }
     fs::create_dir_all(render_directory.join("assets"))
         .map_err(|error| format!("创建 Typst 资源目录失败：{error}"))?;
-    let practice_pages = build_practice_pages(document, &document.sections[0], render_directory)?;
+    let mut practice_pages = Vec::new();
     let mut assets = HashMap::new();
     let mut source = format!(
         "#set document(title: {}, author: \"Axiom\")\n\
@@ -737,21 +753,24 @@ fn build_source(
                     }
                 }
             }
-            SectionKind::Exercise => {
+            SectionKind::Exercise | SectionKind::AnswerSheet => {
+                let section_pages = build_practice_pages(document, section, render_directory)?;
                 source.push_str(
                     "#set page(paper: \"a4\", margin: 0pt, header: none, footer: none)\n",
                 );
-                for (index, page) in practice_pages.iter().enumerate() {
+                for (index, page) in section_pages.iter().enumerate() {
                     if index > 0 {
                         source.push_str("#pagebreak()\n");
                     }
                     source.push_str(&practice_page_typst(
                         page,
+                        section.kind,
                         document,
                         render_directory,
                         &mut assets,
                     )?);
                 }
+                practice_pages.extend(section_pages);
             }
         }
     }
@@ -847,6 +866,7 @@ fn rendered_metadata(
         .map_err(|error| format!("解析 Typst metadata 失败：{error}"))?;
     let mut section_starts = BTreeMap::new();
     let mut page_count = None;
+    let mut page_numbers_by_identity = BTreeMap::new();
     let mut regions_by_page: BTreeMap<String, (usize, Vec<RenderedAnswerRegion>)> = BTreeMap::new();
     for value in values {
         match value.get("kind").and_then(Value::as_str) {
@@ -867,6 +887,18 @@ fn rendered_metadata(
                     .get("page")
                     .and_then(Value::as_u64)
                     .map(|page| page as usize);
+            }
+            Some("practice-page") => {
+                let page_identity = value
+                    .get("page_identity")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "练习页面 metadata 缺少页面身份".to_string())?;
+                let page = value
+                    .get("page")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "练习页面 metadata 缺少 page".to_string())?
+                    as usize;
+                page_numbers_by_identity.insert(page_identity.to_string(), page);
             }
             Some("answer-region") => {
                 let page_identity = value
@@ -930,12 +962,13 @@ fn rendered_metadata(
     let solution_start = *section_starts
         .get("solution")
         .ok_or_else(|| "缺少解析章节页码".to_string())?;
-    let ranges = BTreeMap::from([
+    let answer_sheet_start = section_starts.get("answer_sheet").copied();
+    let mut ranges = BTreeMap::from([
         (
             "exercise".to_string(),
             SectionPageRange {
                 start_page: exercise_start,
-                end_page: solution_start - 1,
+                end_page: answer_sheet_start.unwrap_or(solution_start) - 1,
             },
         ),
         (
@@ -946,13 +979,37 @@ fn rendered_metadata(
             },
         ),
     ]);
+    if let Some(answer_sheet_start) = answer_sheet_start {
+        ranges.insert(
+            "answer_sheet".to_string(),
+            SectionPageRange {
+                start_page: answer_sheet_start,
+                end_page: solution_start - 1,
+            },
+        );
+    }
     let pages = practice_pages
         .iter()
         .map(|page| {
-            let (global_page, regions) =
-                regions_by_page.remove(&page.page_identity).ok_or_else(|| {
-                    format!("练习页面 {} 缺少真实区域 metadata", page.local_index + 1)
+            let global_page = page_numbers_by_identity
+                .get(&page.page_identity)
+                .copied()
+                .or_else(|| {
+                    regions_by_page
+                        .get(&page.page_identity)
+                        .map(|entry| entry.0)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{} 页面 {} 缺少真实页面 metadata",
+                        page.section.as_str(),
+                        page.local_index + 1
+                    )
                 })?;
+            let regions = regions_by_page
+                .remove(&page.page_identity)
+                .map(|entry| entry.1)
+                .unwrap_or_default();
             Ok(RenderedDocumentPage {
                 page_index: global_page - 1,
                 page_identity: page.page_identity.clone(),
@@ -1329,6 +1386,8 @@ mod tests {
                 created_at: 1_786_464_000_000,
                 item_count: 6,
                 strategy: "fixture".into(),
+                session_mode: "standard".into(),
+                max_duration_seconds: 2_520,
             },
             layout: DocumentLayout {
                 version: "practice-a4-v2".into(),
@@ -1445,7 +1504,7 @@ mod tests {
             &["A", "B", "C", "D"],
             true,
         );
-        let document = fixture(&image_path, &svg_path);
+        let mut document = fixture(&image_path, &svg_path);
         let destination = directory.join("practice.pdf");
         let output =
             render_to_path(&document, &destination).expect("render Typst practice document");
@@ -1484,6 +1543,56 @@ mod tests {
         let bytes = fs::read(&destination).expect("read rendered pdf");
         assert!(bytes.starts_with(b"%PDF-"));
         assert!(bytes.len() > 20_000);
+        let answer_questions = (1..=6)
+            .map(|index| {
+                question(
+                    &format!("item-{index}"),
+                    index,
+                    vec![
+                        paragraph(&format!("第 {index} 题作答区")),
+                        ContentBlock::AnswerSpace {
+                            practice_item_id: format!("item-{index}"),
+                            line_count: 6,
+                            minimum_height_points: 112.0,
+                        },
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        document.metadata.session_mode = "mock_test".into();
+        document.metadata.max_duration_seconds = 3_600;
+        document.sections.insert(
+            1,
+            PracticeSection {
+                kind: SectionKind::AnswerSheet,
+                title: "统一答题页".into(),
+                blocks: [
+                    vec![
+                        cover(SectionKind::AnswerSheet, "统一答题页"),
+                        ContentBlock::PageBreak {
+                            reason: "cover_to_body".into(),
+                        },
+                    ],
+                    answer_questions,
+                ]
+                .concat(),
+            },
+        );
+        let mock_destination = directory.join("practice-mock.pdf");
+        let mock_output = render_to_path(&document, &mock_destination)
+            .expect("render mock-test document with answer sheet");
+        assert!(mock_output
+            .metadata
+            .section_page_ranges
+            .contains_key("answer_sheet"));
+        assert!(
+            mock_output.metadata.section_page_ranges["exercise"].end_page
+                < mock_output.metadata.section_page_ranges["answer_sheet"].start_page
+        );
+        assert!(
+            mock_output.metadata.section_page_ranges["answer_sheet"].end_page
+                < mock_output.metadata.section_page_ranges["solution"].start_page
+        );
         if let Ok(output) = std::env::var("AXIOM_TYPST_TEST_OUTPUT") {
             let output = PathBuf::from(output);
             if let Some(parent) = output.parent() {

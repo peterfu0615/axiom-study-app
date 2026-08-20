@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { PracticeAttempt, PracticeScanResult } from '../domain/practiceAttempt'
 import { processPracticeScan, type PracticeScanLayout } from './native'
 import { withTransactionLock } from './transactionLock'
+import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 interface LayoutRow {
@@ -113,9 +114,21 @@ async function persistCapture(practiceSetId: string, scan: PracticeScanResult): 
 }
 
 export async function capturePracticeAnswerSheet(practiceSetId: string, sourcePath: string) {
-  const context = await captureContext(practiceSetId)
-  const scan = await processPracticeScan(sourcePath, context.attemptId, context.layouts)
-  return persistCapture(practiceSetId, scan)
+  try {
+    const context = await captureContext(practiceSetId)
+    const scan = await processPracticeScan(sourcePath, context.attemptId, context.layouts)
+    const attempt = await persistCapture(practiceSetId, scan)
+    await transitionPracticeSessionForSet(practiceSetId, {
+      to: 'submitted', safeCode: 'answer_sheet_captured',
+      metadata: { attemptId: attempt.id, responseCount: attempt.responses.length },
+    })
+    return attempt
+  } catch (reason) {
+    try {
+      await transitionPracticeSessionForSet(practiceSetId, { to: 'upload_failed', safeCode: 'answer_capture_failed' })
+    } catch { /* preserve the capture error */ }
+    throw reason
+  }
 }
 
 export async function getLatestPracticeAttempt(practiceSetId: string): Promise<PracticeAttempt | null> {

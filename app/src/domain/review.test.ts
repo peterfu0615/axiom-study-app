@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   applyReviewRating,
   buildTodayReviewUnits,
+  canTransitionReviewSession,
+  defaultReviewSessionSettings,
   initialReviewSkillState,
   localReviewDate,
   reviewSimilarity,
@@ -147,5 +149,30 @@ describe('Horizon review scheduler', () => {
   it('uses the local calendar date across day boundaries', () => {
     expect(localReviewDate(new Date('2026-08-10T23:59:59+08:00').getTime())).toBe('2026-08-10')
     expect(localReviewDate(new Date('2026-08-11T00:00:01+08:00').getTime())).toBe('2026-08-11')
+  })
+
+  it('enforces the durable practice session lifecycle and recovery edges', () => {
+    expect(canTransitionReviewSession('draft', 'generated')).toBe(true)
+    expect(canTransitionReviewSession('generated', 'exported')).toBe(true)
+    expect(canTransitionReviewSession('exported', 'submitted')).toBe(true)
+    expect(canTransitionReviewSession('submitted', 'processing')).toBe(true)
+    expect(canTransitionReviewSession('processing', 'needs_review')).toBe(true)
+    expect(canTransitionReviewSession('needs_review', 'graded')).toBe(true)
+    expect(canTransitionReviewSession('graded', 'applied')).toBe(true)
+    expect(canTransitionReviewSession('applied', 'completed')).toBe(true)
+    expect(canTransitionReviewSession('completed', 'processing')).toBe(false)
+    expect(canTransitionReviewSession('generation_failed', 'exported')).toBe(true)
+  })
+
+  it('uses distinct, explicit PDF behavior for quick, standard and mock modes', () => {
+    expect(defaultReviewSessionSettings('quick', 2)).toMatchObject({
+      maxDurationSeconds: 360, includeAnswerSheet: false, showSourceLabels: true,
+    })
+    expect(defaultReviewSessionSettings('standard', 2)).toMatchObject({
+      maxDurationSeconds: 840, includeAnswerSheet: false, showSourceLabels: true,
+    })
+    expect(defaultReviewSessionSettings('mock_test', 2)).toMatchObject({
+      maxDurationSeconds: 1200, includeAnswerSheet: true, showSourceLabels: false,
+    })
   })
 })

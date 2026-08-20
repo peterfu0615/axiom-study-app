@@ -4,6 +4,55 @@ export const REVIEW_SCHEDULER_VERSION = 'horizon-v1'
 
 export type ReviewRating = 'again' | 'hard' | 'good' | 'easy'
 export type ReviewUnitStatus = 'pending' | 'completed' | 'deferred'
+export type ReviewSessionMode = 'quick' | 'standard' | 'mock_test'
+export type ReviewSessionStatus =
+  | 'draft' | 'generated' | 'exported' | 'submitted' | 'processing'
+  | 'needs_review' | 'graded' | 'applied' | 'completed'
+  | 'generation_failed' | 'upload_failed' | 'grading_failed' | 'cancelled' | 'expired'
+
+export interface ReviewSessionSettings {
+  mode: ReviewSessionMode
+  maxDurationSeconds: number
+  includeAnswerSheet: boolean
+  hideSolutionsUntilSubmitted: boolean
+  showSourceLabels: boolean
+}
+
+const sessionTransitions: Record<ReviewSessionStatus, ReviewSessionStatus[]> = {
+  draft: ['generated', 'generation_failed', 'cancelled'],
+  generated: ['exported', 'submitted', 'processing', 'generation_failed', 'cancelled', 'expired'],
+  exported: ['submitted', 'processing', 'upload_failed', 'cancelled', 'expired'],
+  submitted: ['processing', 'upload_failed', 'cancelled'],
+  processing: ['needs_review', 'graded', 'grading_failed', 'cancelled'],
+  needs_review: ['graded', 'processing', 'cancelled'],
+  graded: ['applied', 'needs_review'],
+  applied: ['completed'],
+  completed: [],
+  generation_failed: ['draft', 'generated', 'exported', 'cancelled'],
+  upload_failed: ['submitted', 'processing', 'cancelled'],
+  grading_failed: ['processing', 'needs_review', 'cancelled'],
+  cancelled: [],
+  expired: [],
+}
+
+export function canTransitionReviewSession(from: ReviewSessionStatus, to: ReviewSessionStatus) {
+  return from === to || sessionTransitions[from].includes(to)
+}
+
+export function defaultReviewSessionSettings(mode: ReviewSessionMode, itemCount: number): ReviewSessionSettings {
+  if (mode === 'quick') return {
+    mode, maxDurationSeconds: Math.max(300, Math.min(600, itemCount * 180)),
+    includeAnswerSheet: false, hideSolutionsUntilSubmitted: true, showSourceLabels: true,
+  }
+  if (mode === 'mock_test') return {
+    mode, maxDurationSeconds: Math.max(1200, itemCount * 600),
+    includeAnswerSheet: true, hideSolutionsUntilSubmitted: true, showSourceLabels: false,
+  }
+  return {
+    mode, maxDurationSeconds: Math.max(600, itemCount * 420),
+    includeAnswerSheet: false, hideSolutionsUntilSubmitted: true, showSourceLabels: true,
+  }
+}
 
 export interface ReviewTag {
   id: string | null

@@ -361,7 +361,7 @@ async function readTodayPlanBySession(session: SessionRow): Promise<TodayReviewP
 async function findTodaySession(sessionDate: string) {
   return (await select<SessionRow[]>(`
     SELECT id, session_date, status, estimated_duration_seconds, created_at, completed_at
-    FROM review_sessions WHERE session_date = $1 AND mode = 'standard' LIMIT 1
+    FROM review_sessions WHERE session_date = $1 AND session_kind = 'today' AND mode = 'standard' LIMIT 1
   `, [sessionDate]))[0] ?? null
 }
 

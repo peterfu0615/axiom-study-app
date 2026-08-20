@@ -5,7 +5,7 @@ export const PRACTICE_LAYOUT_VERSION = 'practice-a4-v3'
 export const A4_POINTS = { width: 595.28, height: 841.89 } as const
 
 export type PracticeDocumentType = 'questions' | 'answer_sheet' | 'solutions'
-export type PracticeSectionKind = 'exercise' | 'solution'
+export type PracticeSectionKind = 'exercise' | 'answer_sheet' | 'solution'
 
 export type PracticeInlineContent =
   | { kind: 'text'; text: string }
@@ -47,7 +47,7 @@ export interface CompletePracticeDocument {
   attemptId: string
   documentType: 'complete'
   title: string
-  metadata: { subject: string; createdAt: number; itemCount: number; strategy: string }
+  metadata: { subject: string; createdAt: number; itemCount: number; strategy: string; sessionMode: string; maxDurationSeconds: number }
   layout: { version: typeof PRACTICE_LAYOUT_VERSION; pageSize: 'A4'; widthPoints: number; heightPoints: number; marginPoints: number }
   sections: StructuredPracticeSection[]
 }
@@ -201,13 +201,16 @@ function solutionDetails(item: PracticeItem) {
   } catch { return { units: 0, stepCount: 0 } }
 }
 
-export function answerPolicy(item: PracticeItem) {
+export function answerPolicy(item: PracticeItem, mode: PracticeSet['sessionMode'] = 'standard', answerSheet = false) {
   const answerUnits = estimateVisibleWritingUnits(item.canonicalAnswer)
   const solution = solutionDetails(item)
   const proofLike = /证明|求证|证明题|prove/iu.test(`${item.statementMarkdown}\n${item.gradingRubric?.criteria?.join(' ') ?? ''}`)
   const rawHeight = 58 + answerUnits * .75 + Math.min(solution.units, 360) * .20
     + Math.min(Math.max(solution.stepCount - 1, 0), 7) * 12 + (proofLike ? 24 : 0)
-  const height = Math.round(Math.min(220, Math.max(76, item.options?.length ? Math.min(88, rawHeight) : rawHeight)) * 100) / 100
+  const modeHeight = answerSheet ? Math.max(112, rawHeight * .8) : mode === 'quick' ? rawHeight * .68 : rawHeight
+  const minimum = answerSheet ? 112 : mode === 'quick' ? 58 : 76
+  const maximum = answerSheet ? 180 : mode === 'quick' ? 128 : 220
+  const height = Math.round(Math.min(maximum, Math.max(minimum, item.options?.length && !answerSheet ? Math.min(88, modeHeight) : modeHeight)) * 100) / 100
   return { minimumHeightPoints: height, lineCount: Math.min(12, Math.max(3, Math.floor((height - 24) / 16))) }
 }
 
@@ -335,24 +338,37 @@ function printableImages(item: PracticeItem): PracticeContentBlock[] {
 }
 
 function sectionCover(section: PracticeSectionKind, practiceSet: PracticeSet, createdAt: number): PracticeContentBlock {
-  const title = section === 'exercise' ? `${practiceSet.subject}练习` : '答案与解析'
-  const subtitle = section === 'exercise' ? '' : '完成练习后再查看。'
+  const mode = practiceSet.sessionMode ?? 'standard'
+  const settings = practiceSet.sessionSettings
+  const title = section === 'exercise' ? `${practiceSet.subject}练习` : section === 'answer_sheet' ? '统一答题页' : '答案与解析'
+  const subtitle = section === 'exercise'
+    ? mode === 'quick' ? '快速复习 · 建议 5–10 分钟内完成。'
+      : mode === 'mock_test' ? `模拟测试 · 限时 ${Math.ceil((settings?.maxDurationSeconds ?? 3600) / 60)} 分钟。`
+        : ''
+    : section === 'answer_sheet' ? '请按题号在对应区域内完整作答。' : '完成练习后再查看。'
   return {
     kind: 'sectionCover', section, brand: 'Axiom', title, subtitle,
     dateLabel: section === 'exercise'
       ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(createdAt)
-      : practiceSet.subject,
+      : section === 'answer_sheet' ? `${practiceSet.items.length} 题` : practiceSet.subject,
     itemCount: practiceSet.items.length,
   }
 }
 
-function questionBlock(item: PracticeItem, section: PracticeSectionKind): PracticeContentBlock {
-  const content = [
+function questionBlock(item: PracticeItem, section: PracticeSectionKind, practiceSet: PracticeSet): PracticeContentBlock {
+  const mode = practiceSet.sessionMode ?? 'standard'
+  const content = section === 'answer_sheet' ? [
+      { kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: `第 ${item.orderIndex + 1} 题作答区` }] },
+      { kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item, mode, true) },
+    ] : [
+      ...(item.sourceType === 'generated_variant'
+        ? [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: 'AI 变式题 · 已独立审校' }] }]
+        : []),
       ...parsePracticeMarkdown(item.statementMarkdown),
       ...(item.options?.length ? [{ kind: 'list' as const, ordered: false, items: item.options.map((option, index) => parsePracticeInlineContent(`${String.fromCharCode(65 + index)}. ${option}`)) }] : []),
       ...printableImages(item),
       ...(section === 'exercise'
-        ? [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item) }]
+        ? mode === 'mock_test' ? [] : [{ kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item, mode) }]
         : solutionContent(item)),
     ]
   return { kind: 'question', practiceItemId: item.id, displayNumber: item.orderIndex + 1, content }
@@ -370,15 +386,24 @@ export function buildCompletePracticeDocument(practiceSet: PracticeSet, input: {
     blocks: [
       sectionCover(kind, practiceSet, createdAt),
       { kind: 'pageBreak', reason: 'cover_to_body' },
-      ...practiceSet.items.map((item) => questionBlock(item, kind)),
+      ...practiceSet.items.map((item) => questionBlock(item, kind, practiceSet)),
     ],
   })
   return {
     id, practiceSetId: practiceSet.id, attemptId: input.attemptId, documentType: 'complete',
     title: `Axiom ${practiceSet.subject}练习`,
-    metadata: { subject: practiceSet.subject, createdAt, itemCount: practiceSet.items.length, strategy: practiceSet.strategy },
+    metadata: {
+      subject: practiceSet.subject, createdAt, itemCount: practiceSet.items.length, strategy: practiceSet.strategy,
+      sessionMode: practiceSet.sessionMode ?? 'standard', maxDurationSeconds: practiceSet.sessionSettings?.maxDurationSeconds ?? 0,
+    },
     layout: { version: PRACTICE_LAYOUT_VERSION, pageSize: 'A4', widthPoints: A4_POINTS.width, heightPoints: A4_POINTS.height, marginPoints: margin },
-    sections: [section('exercise', '练习'), section('solution', '答案与解析')],
+    sections: [
+      section('exercise', '练习'),
+      ...(practiceSet.sessionMode === 'mock_test' || practiceSet.sessionSettings?.includeAnswerSheet
+        ? [section('answer_sheet', '统一答题页')]
+        : []),
+      section('solution', '答案与解析'),
+    ],
   }
 }
 

@@ -1,5 +1,5 @@
 import type { DifficultyLevel } from './models'
-import type { ReviewSkillState, ReviewTag } from './review'
+import type { ReviewSessionMode, ReviewSessionSettings, ReviewSkillState, ReviewTag } from './review'
 
 export const PRACTICE_PLANNER_VERSION = 'deterministic-v1'
 
@@ -39,6 +39,8 @@ export interface PracticePlannerInput {
   relatedProblems: PracticeProblemCandidate[]
   recentFailureCount: number
   desiredBudget: number
+  sessionMode?: ReviewSessionMode
+  sessionSettings?: Partial<ReviewSessionSettings>
   excludedProblemIds?: string[]
   preferredErrorCategories?: string[]
 }
@@ -63,6 +65,7 @@ export interface PracticeItem {
   orderIndex: number
   sourceType: PracticeItemSourceType
   sourceProblemId: string | null
+  variantPlanId?: string | null
   subject: string
   targetSkillBundleId: string | null
   targetTags: ReviewTag[]
@@ -85,6 +88,9 @@ export interface PracticeSet {
   subject: string
   sourceType: PracticeSourceType
   sourceRef: string
+  reviewSessionId?: string | null
+  sessionMode?: ReviewSessionMode
+  sessionSettings?: ReviewSessionSettings
   strategy: string
   status: PracticeSetStatus
   targetSkills: PracticeTargetSkill[]

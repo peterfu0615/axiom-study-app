@@ -114,6 +114,37 @@ describe('PracticeDocument', () => {
       .toEqual(practiceSet.items.map((practiceItem) => practiceItem.id))
   })
 
+  it('marks a verified AI variant in both printable sections without exposing target tags', () => {
+    const practiceSet = set(1)
+    practiceSet.items[0] = { ...practiceSet.items[0], sourceType: 'generated_variant', variantPlanId: 'plan-1' }
+    const document = buildCompletePracticeDocument(practiceSet, { attemptId: 'attempt-variant', generatedAt: 1 })
+    document.sections.forEach((section) => {
+      const serialized = JSON.stringify(section)
+      expect(serialized).toContain('AI 变式题 · 已独立审校')
+      expect(serialized).not.toContain('targetTags')
+    })
+  })
+
+  it('builds distinct quick and mock-test PDF contracts', () => {
+    const standard = set(2)
+    const quick = { ...set(2), sessionMode: 'quick' as const, sessionSettings: {
+      mode: 'quick' as const, maxDurationSeconds: 360, includeAnswerSheet: false,
+      hideSolutionsUntilSubmitted: true, showSourceLabels: true,
+    } }
+    const mock = { ...set(2), sessionMode: 'mock_test' as const, sessionSettings: {
+      mode: 'mock_test' as const, maxDurationSeconds: 1200, includeAnswerSheet: true,
+      hideSolutionsUntilSubmitted: true, showSourceLabels: false,
+    } }
+    expect(answerPolicy(quick.items[0], 'quick').minimumHeightPoints)
+      .toBeLessThan(answerPolicy(standard.items[0], 'standard').minimumHeightPoints)
+    const mockDocument = buildCompletePracticeDocument(mock, { attemptId: 'attempt-mock', generatedAt: 1 })
+    expect(mockDocument.sections.map((section) => section.kind)).toEqual(['exercise', 'answer_sheet', 'solution'])
+    expect(JSON.stringify(mockDocument.sections[0])).not.toContain('answerSpace')
+    expect(mockDocument.sections[1].blocks.filter((block) => block.kind === 'question')).toHaveLength(2)
+    expect(JSON.stringify(mockDocument.sections[1])).toContain('answerSpace')
+    expect(mockDocument.metadata).toMatchObject({ sessionMode: 'mock_test', maxDurationSeconds: 1200 })
+  })
+
   it('keeps the exercise section when solution JSON is missing or malformed', () => {
     const practiceSet = set(2)
     practiceSet.items[0] = { ...practiceSet.items[0], solutionJson: '{}' }

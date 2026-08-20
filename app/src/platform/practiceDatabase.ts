@@ -13,6 +13,8 @@ import type { DifficultyLevel } from '../domain/models'
 import type { ReviewSkillState, ReviewTag } from '../domain/review'
 import { initialReviewSkillState } from '../domain/review'
 import { withTransactionLock } from './transactionLock'
+import { generateVerifiedPracticeVariant, type PracticeVariantPreparationOutcome } from './variantPracticeDatabase'
+import { createPracticeReviewSession, transitionPracticeReviewSession } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -43,11 +45,12 @@ export function canonicalAnswerFromSolution(solutionJson: string) {
 interface SetRow {
   id: string; subject: string; source_type: PracticeSourceType; source_ref: string
   strategy: string; status: PracticeSet['status']; target_skills_json: string
-  generation_metadata_json: string; created_at: number; updated_at: number
+  generation_metadata_json: string; review_session_id: string | null; session_mode: PracticeSet['sessionMode']
+  session_settings_json: string; created_at: number; updated_at: number
 }
 interface ItemRow {
   id: string; practice_set_id: string; order_index: number; source_type: PracticeItem['sourceType']
-  source_problem_id: string | null; subject: string; target_skill_bundle_id: string | null
+  source_problem_id: string | null; variant_plan_id: string | null; subject: string; target_skill_bundle_id: string | null
   target_tags_json: string; difficulty: DifficultyLevel; statement_markdown: string
   options_json: string | null; canonical_answer: string; solution_json: string
   grading_rubric_json: string; generation_metadata_json: string | null
@@ -60,7 +63,8 @@ async function readPracticeSetById(id: string): Promise<PracticeSet | null> {
   const items = await select<ItemRow[]>('SELECT * FROM practice_items WHERE practice_set_id=$1 ORDER BY order_index, id', [id])
   return {
     id: set.id, subject: set.subject, sourceType: set.source_type, sourceRef: set.source_ref,
-    strategy: set.strategy, status: set.status,
+    reviewSessionId: set.review_session_id, sessionMode: set.session_mode,
+    sessionSettings: parseJSON(set.session_settings_json, undefined), strategy: set.strategy, status: set.status,
     targetSkills: parseJSON(set.target_skills_json, []),
     generationMetadata: parseJSON(set.generation_metadata_json, {}),
     createdAt: numeric(set.created_at), updatedAt: numeric(set.updated_at),
@@ -68,7 +72,7 @@ async function readPracticeSetById(id: string): Promise<PracticeSet | null> {
       const metadata = parseJSON<Record<string, unknown> | null>(row.generation_metadata_json, null)
       return {
         id: row.id, practiceSetId: row.practice_set_id, orderIndex: numeric(row.order_index),
-        sourceType: row.source_type, sourceProblemId: row.source_problem_id, subject: row.subject,
+        sourceType: row.source_type, sourceProblemId: row.source_problem_id, variantPlanId: row.variant_plan_id, subject: row.subject,
         targetSkillBundleId: row.target_skill_bundle_id, targetTags: parseJSON(row.target_tags_json, []),
         difficulty: row.difficulty, statementMarkdown: row.statement_markdown,
         options: parseJSON<string[] | null>(row.options_json, null), canonicalAnswer: row.canonical_answer,
@@ -86,59 +90,142 @@ export function getPracticeSet(id: string) {
   return readPracticeSetById(id)
 }
 
-export async function findPracticeSetForSource(sourceType: PracticeSourceType, sourceRef: string) {
+export async function findPracticeSetForSource(sourceType: PracticeSourceType, sourceRef: string, sessionMode?: PracticeSet['sessionMode']) {
   const row = (await select<Array<{ id: string }>>(
-    "SELECT id FROM practice_sets WHERE source_type=$1 AND source_ref=$2 AND status='ready' ORDER BY created_at DESC LIMIT 1",
-    [sourceType, sourceRef],
+    `SELECT id FROM practice_sets WHERE source_type=$1 AND source_ref=$2 AND status='ready'
+      ${sessionMode ? 'AND session_mode=$3' : ''} ORDER BY created_at DESC LIMIT 1`,
+    sessionMode ? [sourceType, sourceRef, sessionMode] : [sourceType, sourceRef],
   ))[0]
   return row ? readPracticeSetById(row.id) : null
 }
 
 export async function createPracticeSet(input: PracticePlannerInput): Promise<PracticeSet> {
+  const mode = input.sessionMode ?? 'standard'
+  const cached = await findPracticeSetForSource(input.sourceType, input.sourceRef, mode)
+  if (cached) return cached
   const blueprint = buildPracticeBlueprint(input)
   if (!blueprint.items.length) throw new Error('没有带有效题干、答案和解法的关联题，无法创建练习集')
-  return withTransactionLock(async () => {
-    await execute('BEGIN IMMEDIATE')
-    try {
-      const existing = await findPracticeSetForSource(input.sourceType, input.sourceRef)
-      if (existing) { await execute('COMMIT'); return existing }
-      const now = Date.now()
-      const setId = uuid()
-      await execute(`INSERT INTO practice_sets(
-        id, subject, source_type, source_ref, strategy, status, target_skills_json,
-        generation_metadata_json, created_at, updated_at
-      ) VALUES($1,$2,$3,$4,$5,'ready',$6,$7,$8,$8)`, [
-        setId, input.subject, input.sourceType, input.sourceRef, PRACTICE_PLANNER_VERSION,
-        JSON.stringify(input.targetSkills), JSON.stringify({
-          plannerVersion: blueprint.plannerVersion, masteryBand: blueprint.masteryBand,
-          requestedBudget: blueprint.requestedBudget, warnings: blueprint.warnings,
-        }), now,
-      ])
-      for (const [index, planned] of blueprint.items.entries()) {
-        const problem = planned.problem
-        await execute(`INSERT INTO practice_items(
-          id, practice_set_id, order_index, source_type, source_problem_id, subject,
-          target_skill_bundle_id, target_tags_json, difficulty, statement_markdown,
-          options_json, canonical_answer, solution_json, grading_rubric_json,
-          generation_metadata_json, validation_status, created_at
-        ) VALUES($1,$2,$3,'existing_problem',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'valid',$15)`, [
-          uuid(), setId, index, problem.problemId, problem.subject,
-          problem.targetSkillBundleId ?? (input.targetSkills[0]?.id.startsWith('bundle:') ? input.targetSkills[0].id.slice(7) : null),
-          JSON.stringify(problem.targetTags), planned.difficulty, problem.statementMarkdown,
-          problem.options ? JSON.stringify(problem.options) : null, problem.canonicalAnswer,
-          problem.solutionJson, JSON.stringify({ criteria: ['答案正确', '关键步骤完整', '表达清晰'], maxScore: 100 }),
-          JSON.stringify({ diagramIds: problem.diagramIds, questionImagePath: problem.questionImagePath, diagramImagePaths: problem.diagramImagePaths }), now,
-        ])
-      }
-      await execute('COMMIT')
-      const created = await readPracticeSetById(setId)
-      if (!created) throw new Error('练习集保存后无法读取')
-      return created
-    } catch (error) {
-      try { await execute('ROLLBACK') } catch { /* original error wins */ }
-      throw error
-    }
+  const durationPerItem = mode === 'quick' ? 180 : mode === 'mock_test' ? 600 : 420
+  const session = await createPracticeReviewSession({
+    mode, itemCount: blueprint.items.length,
+    estimatedDurationSeconds: blueprint.items.length * durationPerItem,
+    settings: input.sessionSettings,
   })
+  try {
+    const prepared: Array<{ planned: typeof blueprint.items[number]; outcome: PracticeVariantPreparationOutcome }> = []
+    for (const planned of blueprint.items) {
+      prepared.push({
+        planned,
+        outcome: await generateVerifiedPracticeVariant({ source: planned.problem, targetDifficulty: planned.difficulty }),
+      })
+    }
+    return await withTransactionLock(async () => {
+      await execute('BEGIN IMMEDIATE')
+      try {
+        const existing = await findPracticeSetForSource(input.sourceType, input.sourceRef, mode)
+        if (existing) {
+          const now = Date.now()
+          await execute("UPDATE review_sessions SET status='cancelled',failure_code='source_race_reused',updated_at=$1 WHERE id=$2 AND status='draft'", [now, session.id])
+          await execute(`INSERT INTO review_session_events(id,review_session_id,from_status,to_status,safe_code,metadata_json,created_at)
+            VALUES($1,$2,'draft','cancelled','source_race_reused','{}',$3)`, [uuid(), session.id, now])
+          await execute('COMMIT')
+          return existing
+        }
+        const now = Date.now()
+        const setId = uuid()
+        await execute(`INSERT INTO practice_sets(
+          id, subject, source_type, source_ref, review_session_id, session_mode, session_settings_json,
+          strategy, status, target_skills_json, generation_metadata_json, created_at, updated_at
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'ready',$9,$10,$11,$11)`, [
+          setId, input.subject, input.sourceType, input.sourceRef, session.id, session.mode,
+          JSON.stringify(session.settings), PRACTICE_PLANNER_VERSION, JSON.stringify(input.targetSkills), JSON.stringify({
+            plannerVersion: blueprint.plannerVersion, masteryBand: blueprint.masteryBand,
+            requestedBudget: blueprint.requestedBudget, warnings: blueprint.warnings,
+            variantPlanIds: prepared.map((item) => item.outcome.planId),
+            generatedVariantCount: prepared.filter((item) => item.outcome.variant).length,
+            fallbackCount: prepared.filter((item) => !item.outcome.variant).length,
+          }), now,
+        ])
+        for (const [index, preparedItem] of prepared.entries()) {
+          const { planned, outcome } = preparedItem
+          const problem = planned.problem
+          const variant = outcome.variant
+          const sourceType = variant ? 'generated_variant' : 'existing_problem'
+          const statementMarkdown = variant?.candidate.statementMarkdown ?? problem.statementMarkdown
+          const options = variant?.candidate.options ?? problem.options
+          const canonicalAnswer = variant?.candidate.canonicalAnswer ?? problem.canonicalAnswer
+          const solutionJson = variant?.candidate.solutionJson ?? problem.solutionJson
+          const bundleId = problem.targetSkillBundleId
+            ?? input.targetSkills.find((target) => target.id.startsWith('bundle:'))?.id.slice(7)
+            ?? null
+          if (!bundleId) throw new Error(`练习题 ${index + 1} 缺少 SkillBundle，无法建立 ReviewSession`)
+          const generationMetadata = variant ? {
+            variantPlanId: variant.plan.id, sourceProblemId: problem.problemId,
+            changes: variant.candidate.changes, verification: variant.verification,
+            provider: variant.provider, model: variant.model,
+            promptVersion: variant.plan.promptVersion, schemaVersion: variant.plan.schemaVersion,
+            generationModelRunId: variant.generationModelRunId,
+            verificationModelRunId: variant.verificationModelRunId,
+            diagramIds: problem.diagramIds, questionImagePath: null,
+            diagramImagePaths: variant.candidate.diagramPolicy === 'preserved' ? problem.diagramImagePaths : [],
+          } : {
+            variantFallbackPlanId: outcome.planId, variantFallbackCode: outcome.fallbackCode,
+            diagramIds: problem.diagramIds, questionImagePath: problem.questionImagePath,
+            diagramImagePaths: problem.diagramImagePaths,
+          }
+          const itemId = uuid()
+          await execute(`INSERT INTO practice_items(
+            id, practice_set_id, order_index, source_type, source_problem_id, variant_plan_id, subject,
+            target_skill_bundle_id, target_tags_json, difficulty, statement_markdown,
+            options_json, canonical_answer, solution_json, grading_rubric_json,
+            generation_metadata_json, validation_status, created_at
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'valid',$17)`, [
+            itemId, setId, index, sourceType, problem.problemId, variant?.plan.id ?? null, problem.subject,
+            bundleId, JSON.stringify(problem.targetTags), planned.difficulty, statementMarkdown,
+            options ? JSON.stringify(options) : null, canonicalAnswer, solutionJson,
+            JSON.stringify({ criteria: ['答案正确', '关键步骤完整', '表达清晰'], maxScore: 100 }),
+            JSON.stringify(generationMetadata), now,
+          ])
+          const moduleId = uuid()
+          await execute(`INSERT INTO review_modules(
+            id,subject,session_id,skill_bundle_id,priority_score,selection_reason,target_difficulty,
+            source_mode,estimated_duration_seconds,order_index,status
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')`, [
+            moduleId, problem.subject, session.id, bundleId, problem.relevance,
+            variant ? '受约束变式题已通过独立审校' : '变式不可安全生成，已回退到已确认原题',
+            planned.difficulty, variant ? 'variant' : 'original', durationPerItem, index,
+          ])
+          await execute(`INSERT INTO question_instances(
+            id,subject,review_module_id,source_type,source_problem_id,variant_plan_id,stem_markdown,
+            structured_content_json,solution_json,target_tags_json,difficulty,generation_model_run_id,
+            verification_status,created_at
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'verified',$13)`, [
+            uuid(), problem.subject, moduleId, variant ? 'variant' : 'original', problem.problemId,
+            variant?.plan.id ?? null, statementMarkdown, JSON.stringify({ options, practiceItemId: itemId }),
+            solutionJson, JSON.stringify({ tags: problem.targetTags }), planned.difficulty,
+            variant?.generationModelRunId ?? null, now,
+          ])
+        }
+        await execute("UPDATE review_sessions SET status='generated',updated_at=$1 WHERE id=$2 AND status='draft'", [now, session.id])
+        await execute(`INSERT INTO review_session_events(id,review_session_id,from_status,to_status,safe_code,metadata_json,created_at)
+          VALUES($1,$2,'draft','generated','practice_set_ready',$3,$4)`, [
+          uuid(), session.id, JSON.stringify({ practiceSetId: setId, mode: session.mode }), now,
+        ])
+        await execute('COMMIT')
+        const created = await readPracticeSetById(setId)
+        if (!created) throw new Error('练习集保存后无法读取')
+        return created
+      } catch (error) {
+        try { await execute('ROLLBACK') } catch { /* original error wins */ }
+        throw error
+      }
+    })
+  } catch (error) {
+    try {
+      await transitionPracticeReviewSession({ sessionId: session.id, to: 'generation_failed', safeCode: 'practice_generation_failed' })
+    } catch { /* preserve the original generation error */ }
+    throw error
+  }
 }
 
 interface ReviewPracticeContextRow {
@@ -217,17 +304,17 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
   }
 }
 
-export async function getOrCreatePracticeSetFromReviewUnit(moduleId: string, budget = 3) {
-  const existing = await findPracticeSetForSource('review_unit', moduleId)
-  return existing ?? createPracticeSet(await plannerInputForReviewModule(moduleId, 'review_unit', budget))
+export async function getOrCreatePracticeSetFromReviewUnit(moduleId: string, budget = 3, sessionMode: PracticeSet['sessionMode'] = 'standard') {
+  const existing = await findPracticeSetForSource('review_unit', moduleId, sessionMode)
+  return existing ?? createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'review_unit', budget)), sessionMode })
 }
 
-export async function getOrCreatePracticeSetFromToday(moduleId: string, budget = 3) {
-  return createPracticeSet(await plannerInputForReviewModule(moduleId, 'today', budget))
+export async function getOrCreatePracticeSetFromToday(moduleId: string, budget = 3, sessionMode: PracticeSet['sessionMode'] = 'standard') {
+  return createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'today', budget)), sessionMode })
 }
 
-export async function getOrCreatePracticeSetFromTodayPlan(sessionId: string, moduleIds: string[], budget = 6) {
-  const existing = await findPracticeSetForSource('today', sessionId)
+export async function getOrCreatePracticeSetFromTodayPlan(sessionId: string, moduleIds: string[], budget = 6, sessionMode: PracticeSet['sessionMode'] = 'standard') {
+  const existing = await findPracticeSetForSource('today', sessionId, sessionMode)
   if (existing) return existing
   const uniqueModuleIds = [...new Set(moduleIds)]
   if (!uniqueModuleIds.length) throw new Error('今天没有可用于生成练习的学习主题')
@@ -245,7 +332,7 @@ export async function getOrCreatePracticeSetFromTodayPlan(sessionId: string, mod
     targetSkills,
     relatedProblems,
     recentFailureCount: Math.max(...inputs.map((input) => input.recentFailureCount), 0),
-    desiredBudget: Math.max(uniqueModuleIds.length, budget),
+    desiredBudget: Math.max(uniqueModuleIds.length, budget), sessionMode,
   })
 }
 
