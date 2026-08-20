@@ -26,7 +26,7 @@ export interface PracticeScanResult {
   orientationDegrees: 0 | 90 | 180 | 270
   pageDetected: boolean
   corners: Array<{ x: number; y: number }>
-  stages: Array<'page_detection' | 'identity_recognition' | 'orientation' | 'perspective_correction' | 'layout_lookup' | 'answer_region_extraction' | 'per_item_crop'>
+  stages: Array<'page_detection' | 'identity_recognition' | 'manual_layout_selection' | 'orientation' | 'perspective_correction' | 'layout_lookup' | 'answer_region_extraction' | 'per_item_crop'>
   responses: PracticeCapturedResponse[]
 }
 

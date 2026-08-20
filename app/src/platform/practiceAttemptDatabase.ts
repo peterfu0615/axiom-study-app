@@ -1,7 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { PracticeAttempt, PracticeScanResult } from '../domain/practiceAttempt'
 import { normalizePracticeGradingResult } from '../domain/practiceGrading'
-import { processPracticeScan, type PracticeScanLayout } from './native'
+import {
+  processPracticeScan,
+  processPracticeScanForPage,
+  type PracticeScanLayout,
+} from './native'
 import { withTransactionLock } from './transactionLock'
 import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 
@@ -9,6 +13,7 @@ interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 interface LayoutRow {
   attempt_id: string
   page_id: string
+  page_index: number
   page_identity: string
   qr_payload: string
   width_points: number
@@ -44,8 +49,32 @@ export function groupScanLayouts(rows: LayoutRow[]): PracticeScanLayout[] {
   return [...grouped.values()]
 }
 
+export interface PracticeSubmissionPageOption {
+  pageId: string
+  pageIndex: number
+  pageIdentity: string
+  responseCount: number
+}
+
+export interface PracticeAnswerSubmission {
+  sourcePath: string
+  practiceDocumentPageId?: string
+}
+
+export class PracticeSubmissionMatchError extends Error {
+  readonly submissions: PracticeAnswerSubmission[]
+  readonly pageOptions: PracticeSubmissionPageOption[]
+
+  constructor(message: string, submissions: PracticeAnswerSubmission[], pageOptions: PracticeSubmissionPageOption[]) {
+    super(message)
+    this.name = 'PracticeSubmissionMatchError'
+    this.submissions = submissions
+    this.pageOptions = pageOptions
+  }
+}
+
 async function captureContext(practiceSetId: string) {
-  const rows = await select<LayoutRow[]>(`SELECT document.attempt_id, page.id AS page_id,
+  const rows = await select<LayoutRow[]>(`SELECT document.attempt_id, page.id AS page_id, page.page_index,
     page.page_identity, page.qr_payload, page.width_points, page.height_points,
     region.id AS region_id, region.practice_item_id, region.region_index,
     region.x, region.y, region.width, region.height
@@ -56,7 +85,23 @@ async function captureContext(practiceSetId: string) {
     ORDER BY document.updated_at DESC, page.page_index, region.region_index`, [practiceSetId])
   if (!rows.length) throw new Error('请先生成完整练习文档，再导入作答照片')
   const attemptId = rows[0].attempt_id
-  return { attemptId, layouts: groupScanLayouts(rows.filter((row) => row.attempt_id === attemptId)) }
+  const attemptRows = rows.filter((row) => row.attempt_id === attemptId)
+  const capturedPages = await select<Array<{ practice_document_page_id: string }>>(
+    `SELECT practice_document_page_id FROM practice_attempt_pages
+     WHERE practice_attempt_id=$1 AND status='captured'`,
+    [attemptId],
+  )
+  return {
+    attemptId,
+    layouts: groupScanLayouts(attemptRows),
+    pageOptions: [...new Map(attemptRows.map((row) => [row.page_id, {
+      pageId: row.page_id,
+      pageIndex: Number(row.page_index),
+      pageIdentity: row.page_identity,
+      responseCount: attemptRows.filter((candidate) => candidate.page_id === row.page_id && candidate.region_id).length,
+    }])).values()].sort((left, right) => left.pageIndex - right.pageIndex),
+    capturedPageIds: new Set(capturedPages.map((row) => row.practice_document_page_id)),
+  }
 }
 
 async function persistCapture(practiceSetId: string, scan: PracticeScanResult): Promise<PracticeAttempt> {
@@ -115,13 +160,48 @@ async function persistCapture(practiceSetId: string, scan: PracticeScanResult): 
 }
 
 export async function capturePracticeAnswerSheet(practiceSetId: string, sourcePath: string) {
+  return capturePracticeAnswerPages(practiceSetId, [{ sourcePath }])
+}
+
+export async function capturePracticeAnswerPages(
+  practiceSetId: string,
+  submissions: PracticeAnswerSubmission[],
+) {
   try {
     const context = await captureContext(practiceSetId)
-    const scan = await processPracticeScan(sourcePath, context.attemptId, context.layouts)
-    const attempt = await persistCapture(practiceSetId, scan)
+    if (!submissions.length) throw new Error('请选择至少一页作答文件')
+    for (const [index, submission] of submissions.entries()) {
+      try {
+        const scan = submission.practiceDocumentPageId
+          ? await processPracticeScanForPage(
+            submission.sourcePath,
+            context.attemptId,
+            context.layouts,
+            submission.practiceDocumentPageId,
+          )
+          : await processPracticeScan(submission.sourcePath, context.attemptId, context.layouts)
+        await persistCapture(practiceSetId, scan)
+        context.capturedPageIds.add(scan.practiceDocumentPageId)
+      } catch (reason) {
+        const remainingOptions = context.pageOptions.filter(
+          (option) => !context.capturedPageIds.has(option.pageId),
+        )
+        throw new PracticeSubmissionMatchError(
+          String(reason),
+          submissions.slice(index),
+          remainingOptions.length ? remainingOptions : context.pageOptions,
+        )
+      }
+    }
+    const attempt = await getLatestPracticeAttempt(practiceSetId)
+    if (!attempt) throw new Error('作答页已保存，但无法重新读取 PracticeAttempt')
     await transitionPracticeSessionForSet(practiceSetId, {
       to: 'submitted', safeCode: 'answer_sheet_captured',
-      metadata: { attemptId: attempt.id, responseCount: attempt.responses.length },
+      metadata: {
+        attemptId: attempt.id,
+        pageCount: submissions.length,
+        responseCount: attempt.responses.length,
+      },
     })
     return attempt
   } catch (reason) {

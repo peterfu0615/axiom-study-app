@@ -16,7 +16,13 @@ import {
   type PracticeDocumentDiagnostic,
   type PracticeDocumentRecord,
 } from '../../platform/practiceDocumentDatabase'
-import { capturePracticeAnswerSheet, getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
+import {
+  capturePracticeAnswerPages,
+  getLatestPracticeAttempt,
+  PracticeSubmissionMatchError,
+  type PracticeAnswerSubmission,
+  type PracticeSubmissionPageOption,
+} from '../../platform/practiceAttemptDatabase'
 import { correctAndRegradePracticeResponse, extractAndGradePracticeAttempt, overridePracticeGrade } from '../../platform/practiceGradingDatabase'
 import { finalizePracticeAttempt, getPracticeLoopForSet } from '../../platform/practiceLoopDatabase'
 import { getPracticeSet } from '../../platform/practiceDatabase'
@@ -118,7 +124,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [currentPage, setCurrentPage] = useState(1)
   const [pagePreview, setPagePreview] = useState<PracticePdfPagePreview | null>(null)
   const [documentState, setDocumentState] = useState<PracticeDocumentState>('idle')
-  const [mode, setMode] = useState<'ready' | 'submit' | 'processing' | 'results'>(initialMode ?? 'ready')
+  const [mode, setMode] = useState<'ready' | 'submit' | 'manual_match' | 'processing' | 'results'>(initialMode ?? 'ready')
   const [processingStep, setProcessingStep] = useState({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
   const [attempt, setAttempt] = useState<PracticeAttempt | null>(initialAttempt ?? null)
   const [loop, setLoop] = useState<PracticeLoop | null>(null)
@@ -126,6 +132,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
   const [documentDiagnostic, setDocumentDiagnostic] = useState<PracticeDocumentDiagnostic | null>(null)
+  const [manualMatch, setManualMatch] = useState<{
+    submissions: PracticeAnswerSubmission[]
+    pageOptions: PracticeSubmissionPageOption[]
+    message: string
+  } | null>(null)
   const documentRequest = useRef<Promise<PracticeDocumentRecord> | null>(null)
   const documentTabs = useMemo(() => practiceSet.sessionMode === 'mock_test' || practiceSet.sessionSettings?.includeAnswerSheet
     ? [baseDocumentTabs[0], { value: 'answer_sheet' as const, label: '答题页' }, baseDocumentTabs[1]]
@@ -135,7 +146,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     let cancelled = false
     documentRequest.current = null
     setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null); setDocumentDiagnostic(null)
-    setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt))
+    setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt)); setManualMatch(null)
     if (!initialAttempt) {
       void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
         if (!cancelled) {
@@ -226,24 +237,15 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
         : `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
     })
   }
-  const submitAnswer = async () => {
-    setFeedback(null)
-    await ensureDocument()
-    const selected = await open({ directory: false, multiple: false })
-    if (typeof selected !== 'string') return
-    if (!/\.(?:pdf|jpe?g|png|heic)$/iu.test(selected)) {
-      setMode('submit')
-      setFeedback({ tone: 'danger', message: '请选择 PDF、JPG、PNG 或 HEIC 作答文件。' })
-      return
-    }
+  const processSubmissions = async (submissions: PracticeAnswerSubmission[]) => {
     setMode('processing')
     try {
-      setProcessingStep({ title: '正在读取作答', detail: '正在安全导入文件…', progress: .12 })
-      const sourcePath = selected.toLowerCase().endsWith('.pdf')
-        ? await preparePracticeSubmission(selected)
-        : (await importImage(selected)).path
-      setProcessingStep({ title: '正在匹配练习', detail: '正在识别页面并校正拍摄角度…', progress: .38 })
-      const captured = await capturePracticeAnswerSheet(practiceSet.id, sourcePath)
+      setProcessingStep({
+        title: '正在匹配练习',
+        detail: `正在识别并校正 ${submissions.length} 页作答…`,
+        progress: .38,
+      })
+      const captured = await capturePracticeAnswerPages(practiceSet.id, submissions)
       setAttempt(captured)
       setProcessingStep({ title: '正在读取答案', detail: `已找到 ${captured.responses.length} 个作答区域…`, progress: .64 })
       setProcessingStep({ title: '正在批改', detail: '正在逐题核对答案与关键步骤…', progress: .82 })
@@ -251,8 +253,60 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       if (!graded) throw new Error('批改完成后无法读取结果')
       setAttempt(graded); setMode('results')
     } catch (reason) {
-      setMode('submit'); setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
+      if (reason instanceof PracticeSubmissionMatchError) {
+        setManualMatch({
+          submissions: reason.submissions,
+          pageOptions: reason.pageOptions,
+          message: reason.message,
+        })
+        setFeedback(null)
+        setMode('manual_match')
+      } else {
+        setMode('submit')
+        setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
+      }
     }
+  }
+  const submitAnswer = async () => {
+    setFeedback(null)
+    await ensureDocument()
+    const selected = await open({
+      directory: false,
+      multiple: true,
+      filters: [{ name: '作答文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'heic'] }],
+    })
+    const selectedPaths = typeof selected === 'string' ? [selected] : selected ?? []
+    if (!selectedPaths.length) return
+    if (selectedPaths.some((path) => !/\.(?:pdf|jpe?g|png|heic)$/iu.test(path))) {
+      setMode('submit')
+      setFeedback({ tone: 'danger', message: '请选择 PDF、JPG、PNG 或 HEIC 作答文件。' })
+      return
+    }
+    setMode('processing')
+    setProcessingStep({ title: '正在读取作答', detail: `正在安全导入 ${selectedPaths.length} 个文件…`, progress: .12 })
+    try {
+      const submissions: PracticeAnswerSubmission[] = []
+      for (const path of selectedPaths) {
+        submissions.push({
+          sourcePath: path.toLowerCase().endsWith('.pdf')
+            ? await preparePracticeSubmission(path)
+            : (await importImage(path)).path,
+        })
+      }
+      await processSubmissions(submissions)
+    } catch (reason) {
+      setMode('submit')
+      setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })
+    }
+  }
+  const resumeManualMatch = async (practiceDocumentPageId: string) => {
+    if (!manualMatch?.submissions.length) return
+    const [failed, ...remaining] = manualMatch.submissions
+    setManualMatch(null)
+    await processSubmissions([
+      { ...failed, practiceDocumentPageId },
+      ...remaining,
+    ])
   }
   const updateResponse = (updated: PracticeCapturedResponse) => setAttempt((current) => current ? {
     ...current, responses: current.responses.map((response) => response.regionId === updated.regionId ? updated : response),
@@ -283,6 +337,33 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     <FlowingTaskSurface detail={processingStep.detail} progress={processingStep.progress} progressLabel="自动处理作答" state="running" title={processingStep.title} widthMode="full">
       <p className="practice-processing__note">请保持 Axiom 打开，处理完成后会自动显示逐题结果。</p>
     </FlowingTaskSurface>
+  </main>
+
+  if (mode === 'manual_match' && manualMatch) return <main className="workspace practice-workspace">
+    <PageHeader
+      className="practice-header"
+      eyebrow="页面恢复"
+      leading={<IconButton appearance="plain" label="返回提交作答" onClick={() => { setManualMatch(null); setMode('submit') }}><Icon name="chevron" size={20} /></IconButton>}
+      summary="二维码不可读时，仅使用当前练习已保存的页面布局"
+      title="选择这张作答页"
+    />
+    <section className="practice-manual-match">
+      <figure>
+        <img alt="等待手动匹配的作答页" src={mediaAssetUrl(manualMatch.submissions[0].sourcePath)} />
+        <figcaption>{practiceErrorMessage(manualMatch.message)}</figcaption>
+      </figure>
+      <div>
+        <InlineNotice feedback={{ tone: 'warning', message: '请按纸面页码选择；Axiom 只会使用该页已保存的作答区域，不会猜测或跨练习匹配。' }} />
+        <div className="practice-manual-match__options">
+          {manualMatch.pageOptions.map((option) => <Button
+            key={option.pageId}
+            onClick={() => void resumeManualMatch(option.pageId)}
+            variant="secondary"
+          >第 {option.pageIndex + 1} 页 · {option.responseCount} 个作答区</Button>)}
+        </div>
+        <Button onClick={() => { setManualMatch(null); setMode('submit') }} variant="ghost">重新选择文件</Button>
+      </div>
+    </section>
   </main>
 
   if (mode === 'results' && attempt) return <main className="workspace practice-workspace">
@@ -334,11 +415,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {mode === 'submit' ? <section className="practice-submit">
-      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持 PDF、JPG、PNG 和 HEIC。请确保整页完整、四角清晰，Axiom 会自动识别并批改。</p></div>
+      <div className="practice-submit__copy"><p className="eyebrow">提交作答</p><h2>上传作答页或清晰照片</h2><p>支持单个 PDF 或多张 JPG、PNG、HEIC。请按页码顺序选择，Axiom 会逐页识别；二维码不可读时可以手动指定页面。</p></div>
       <button className="practice-submit__dropzone" onClick={() => void submitAnswer()} type="button">
         <Icon name="image" size={28} />
-        <strong>选择作答文件</strong>
-        <span>PDF 或照片</span>
+        <strong>选择一个或多个作答文件</strong>
+        <span>PDF 或按顺序选择多张照片</span>
       </button>
       <div className="practice-submit__actions"><Button onClick={() => setMode('ready')} variant="ghost">返回练习</Button></div>
     </section> : <>

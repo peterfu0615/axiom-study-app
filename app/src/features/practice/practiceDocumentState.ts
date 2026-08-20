@@ -2,7 +2,7 @@ export type PracticeDocumentState = 'idle' | 'loading' | 'ready' | 'error'
 
 export function shouldAutoPreparePracticeDocument(input: {
   attemptLoaded: boolean
-  mode: 'ready' | 'submit' | 'processing' | 'results'
+  mode: 'ready' | 'submit' | 'manual_match' | 'processing' | 'results'
   hasDocument: boolean
   documentState: PracticeDocumentState
 }) {

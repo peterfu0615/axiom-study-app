@@ -422,6 +422,16 @@ fn run_capture(
     practice_attempt_id: &str,
     layouts: &[ScanLayout],
 ) -> Result<PracticeScanResult, String> {
+    run_capture_with_layout(source, output_directory, practice_attempt_id, layouts, None)
+}
+
+fn run_capture_with_layout(
+    source: &Path,
+    output_directory: &Path,
+    practice_attempt_id: &str,
+    layouts: &[ScanLayout],
+    forced_page_id: Option<&str>,
+) -> Result<PracticeScanResult, String> {
     if layouts.is_empty() {
         return Err("没有可用于识别的答题卡布局，请先导出机器答题卡".to_string());
     }
@@ -429,11 +439,28 @@ fn run_capture(
         image::open(source).map_err(|error| format!("答题卡图片格式无效：{error}"))?;
     let source_width = source_image.width();
     let source_height = source_image.height();
-    let (oriented, orientation_degrees, payload) = recognize_identity(&source_image)?;
-    let layout = layouts
-        .iter()
-        .find(|candidate| candidate.qr_payload == payload)
-        .ok_or_else(|| "页面身份不属于当前 PracticeSet，未提取任何作答区域".to_string())?;
+    let (oriented, orientation_degrees, payload, layout, identity_stage) =
+        if let Some(page_id) = forced_page_id {
+            let layout = layouts
+                .iter()
+                .find(|candidate| candidate.page_id == page_id)
+                .ok_or_else(|| "手动选择的页面不属于当前 PracticeSet".to_string())?;
+            let degrees = if source_width > source_height { 90 } else { 0 };
+            (
+                rotate(&source_image, degrees),
+                degrees,
+                layout.qr_payload.clone(),
+                layout,
+                "manual_layout_selection",
+            )
+        } else {
+            let (oriented, degrees, payload) = recognize_identity(&source_image)?;
+            let layout = layouts
+                .iter()
+                .find(|candidate| candidate.qr_payload == payload)
+                .ok_or_else(|| "页面身份不属于当前 PracticeSet，未提取任何作答区域".to_string())?;
+            (oriented, degrees, payload, layout, "identity_recognition")
+        };
     if (layout.width_points - 595.28).abs() > 0.5 || (layout.height_points - 841.89).abs() > 0.5 {
         return Err("页面身份对应的布局不是受支持的 A4 版本".to_string());
     }
@@ -486,7 +513,7 @@ fn run_capture(
         corners: markers.into_iter().collect(),
         stages: [
             "page_detection",
-            "identity_recognition",
+            identity_stage,
             "orientation",
             "perspective_correction",
             "layout_lookup",
@@ -500,13 +527,7 @@ fn run_capture(
     })
 }
 
-#[tauri::command]
-pub fn process_practice_scan(
-    app: AppHandle,
-    source_path: String,
-    practice_attempt_id: String,
-    layouts: Vec<ScanLayout>,
-) -> Result<PracticeScanResult, String> {
+fn validate_practice_attempt_id(practice_attempt_id: &str) -> Result<(), String> {
     if practice_attempt_id.is_empty()
         || practice_attempt_id.contains('/')
         || practice_attempt_id.contains('\\')
@@ -514,13 +535,51 @@ pub fn process_practice_scan(
     {
         return Err("PracticeAttempt ID 无效".to_string());
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn process_practice_scan(
+    app: AppHandle,
+    source_path: String,
+    practice_attempt_id: String,
+    layouts: Vec<ScanLayout>,
+) -> Result<PracticeScanResult, String> {
+    validate_practice_attempt_id(&practice_attempt_id)?;
     let source = validate_source(&app, &source_path)?;
-    run_capture(
-        &source,
-        &practice_media_directory(&app)?,
-        &practice_attempt_id,
-        &layouts,
-    )
+    let output_directory = practice_media_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_capture(&source, &output_directory, &practice_attempt_id, &layouts)
+    })
+    .await
+    .map_err(|error| format!("等待答题卡扫描任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn process_practice_scan_for_page(
+    app: AppHandle,
+    source_path: String,
+    practice_attempt_id: String,
+    layouts: Vec<ScanLayout>,
+    practice_document_page_id: String,
+) -> Result<PracticeScanResult, String> {
+    validate_practice_attempt_id(&practice_attempt_id)?;
+    if practice_document_page_id.trim().is_empty() {
+        return Err("必须选择当前练习中的页面".to_string());
+    }
+    let source = validate_source(&app, &source_path)?;
+    let output_directory = practice_media_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_capture_with_layout(
+            &source,
+            &output_directory,
+            &practice_attempt_id,
+            &layouts,
+            Some(&practice_document_page_id),
+        )
+    })
+    .await
+    .map_err(|error| format!("等待手动页面扫描任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -713,6 +772,47 @@ mod tests {
         assert_eq!(result.page_identity, "identity-1");
         assert_eq!(result.responses.len(), 1);
         assert!(Path::new(&result.responses[0].answer_asset_path).is_file());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn manual_page_selection_recovers_a_sheet_with_an_unreadable_qr() {
+        let payload = "AXIOM|v=3|page=manual-fixture";
+        let directory =
+            std::env::temp_dir().join(format!("axiom-practice-manual-capture-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temporary output");
+        let source = directory.join("practice-page-no-qr.png");
+        let mut image = fixture(payload);
+        for y in 20..190 {
+            for x in 540..720 {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+        image.save(&source).expect("fixture image");
+        assert!(run_capture(&source, &directory, "attempt-manual", &[layout(payload)]).is_err());
+
+        let result = run_capture_with_layout(
+            &source,
+            &directory,
+            "attempt-manual",
+            &[layout(payload)],
+            Some("page-1"),
+        )
+        .expect("manual page selection should use the persisted layout");
+        assert_eq!(result.practice_document_page_id, "page-1");
+        assert!(result
+            .stages
+            .iter()
+            .any(|stage| stage == "manual_layout_selection"));
+        assert_eq!(result.responses.len(), 1);
+        assert!(run_capture_with_layout(
+            &source,
+            &directory,
+            "attempt-manual",
+            &[layout(payload)],
+            Some("foreign-page"),
+        )
+        .is_err());
         let _ = fs::remove_dir_all(directory);
     }
 

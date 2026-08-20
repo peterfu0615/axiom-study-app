@@ -431,6 +431,7 @@ pub fn run() {
             practice_pdf::save_practice_pdf,
             practice_pdf::print_practice_pdf,
             practice_capture::process_practice_scan,
+            practice_capture::process_practice_scan_for_page,
             practice_capture::prepare_practice_submission,
             ai::analyze_problem_with_openai_compatible,
             ai::analyze_problem_with_antigravity_cli,

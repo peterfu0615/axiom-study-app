@@ -325,6 +325,20 @@ export function processPracticeScan(sourcePath: string, practiceAttemptId: strin
   return invoke<PracticeScanResult>('process_practice_scan', { sourcePath, practiceAttemptId, layouts })
 }
 
+export function processPracticeScanForPage(
+  sourcePath: string,
+  practiceAttemptId: string,
+  layouts: PracticeScanLayout[],
+  practiceDocumentPageId: string,
+) {
+  return invoke<PracticeScanResult>('process_practice_scan_for_page', {
+    sourcePath,
+    practiceAttemptId,
+    layouts,
+    practiceDocumentPageId,
+  })
+}
+
 export function preparePracticeSubmission(sourcePath: string) {
   return invoke<string>('prepare_practice_submission', { sourcePath })
 }
