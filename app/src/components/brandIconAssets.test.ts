@@ -49,7 +49,7 @@ describe('canonical Axiom icon assets', () => {
     expect(sidebar).not.toContain('axiom-icon-light-1024.png')
     expect(sidebar).not.toContain('axiom-icon-dark-1024.png')
     expect(sidebar).not.toContain('../../../icons/')
-    expect(appStyles).toMatch(/\.brand-icon\s*\{[^}]*width:\s*88px;[^}]*height:\s*22px;/s)
+    expect(appStyles).toMatch(/\.brand-icon\s*\{[^}]*width:\s*59px;[^}]*height:\s*15px;/s)
 
     expect(pngDimensions(asset('../../src-tauri/icons/32x32.png'))).toEqual({
       width: 32,
