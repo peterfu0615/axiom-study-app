@@ -61,6 +61,7 @@ export function CaptureWorkspace() {
   const [editingDocument, setEditingDocument] =
     useState<SourceDocument | null>(null)
   const [busy, setBusy] = useState(false)
+  const [continuousCapture, setContinuousCapture] = useState(true)
   const [frameReady, setFrameReady] = useState(false)
   const { toast, notify, dismiss } = useToast()
   const [rotation, setRotation] = useState<QuarterTurn>(0)
@@ -297,14 +298,27 @@ export function CaptureWorkspace() {
       const document = await saveSourceDocument(media)
       setPreview(document)
       await refreshRecent()
-      notify('照片已保存到本地处理队列', 'success')
-      setEditingDocument(document)
+      if (continuousCapture && selectedDeviceId) {
+        setCameraStatus('requesting')
+        try {
+          const nextStream = await openCameraStream(selectedDeviceId)
+          setStream(nextStream)
+          setCameraStatus('ready')
+          notify('本页已保存到队列，可以继续拍摄下一页', 'success')
+        } catch (resumeError) {
+          setCameraStatus('error')
+          notify(`本页已保存；重新连接相机失败：${String(resumeError)}`, 'error')
+        }
+      } else {
+        notify('照片已保存到本地处理队列', 'success')
+        setEditingDocument(document)
+      }
     } catch (error) {
       notify(`拍照失败：${String(error)}`, 'error')
     } finally {
       setBusy(false)
     }
-  }, [dismiss, frameReady, notify, refreshRecent, rotation, stream])
+  }, [continuousCapture, dismiss, frameReady, notify, refreshRecent, rotation, selectedDeviceId, stream])
 
   const chooseImage = useCallback(async () => {
     if (!isDesktopRuntime()) {
@@ -315,7 +329,7 @@ export function CaptureWorkspace() {
     dismiss()
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         directory: false,
         title: '选择试卷或错题图片',
         filters: [
@@ -326,15 +340,26 @@ export function CaptureWorkspace() {
         ],
       })
       if (!selected) return
-      const media = await importImage(selected)
-      const document = await saveSourceDocument(media)
+      const paths = Array.isArray(selected) ? selected : [selected]
+      const documents: SourceDocument[] = []
+      for (const path of paths) {
+        const media = await importImage(path)
+        documents.push(await saveSourceDocument(media))
+      }
+      const document = documents.at(-1)
+      if (!document) return
       setPreview(document)
       await refreshRecent()
-      notify('图片已复制到 Axiom 本地资料库', 'success')
+      notify(
+        documents.length > 1
+          ? `${documents.length} 页图片已加入本地处理队列`
+          : '图片已复制到 Axiom 本地资料库',
+        'success',
+      )
       stopCameraStream(stream)
       setStream(null)
       setCameraStatus('idle')
-      setEditingDocument(document)
+      if (documents.length === 1) setEditingDocument(document)
     } catch (error) {
       notify(`导入失败：${String(error)}`, 'error')
     } finally {
@@ -455,6 +480,15 @@ export function CaptureWorkspace() {
                 )}
                 {stream && (
                   <>
+                    <label className="continuous-capture-toggle">
+                      <input
+                        checked={continuousCapture}
+                        disabled={busy}
+                        onChange={(event) => setContinuousCapture(event.target.checked)}
+                        type="checkbox"
+                      />
+                      连续多页
+                    </label>
                     <button
                       aria-label="顺时针旋转预览"
                       className="camera-rotate-button"

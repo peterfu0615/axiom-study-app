@@ -4073,6 +4073,19 @@
   accent-color: var(--brand);
 }
 
+.continuous-capture-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.continuous-capture-toggle input {
+  accent-color: var(--brand);
+}
+
 .settings-form input,
 .settings-form select {
   width: 100%;
