@@ -3,9 +3,9 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::atomic::{AtomicI64, Ordering},
-    sync::{Arc, Mutex, OnceLock},
+    process::{Child, Command, Stdio},
+    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    sync::{Arc, Condvar, Mutex, OnceLock},
     thread,
     time::Duration,
     time::Instant,
@@ -14,12 +14,12 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 use crate::models::{
-    CameraOrientationInfo, DocumentProcessingResult, ImportedTextbookSource, MediaEntry,
+    CameraOrientationUpdate, DocumentProcessingResult, ImportedTextbookSource, MediaEntry,
     NativeCapabilities, NormalizedRect, PersistedMedia, PersistedProblemImage,
     TextbookExtractionResult,
 };
@@ -33,6 +33,120 @@ const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 /// 不会让导入永远挂起。用户主动取消仍由 cancel 标志负责，不受此限制。
 const TEXTBOOK_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 static CANCELLED_TEXTBOOK_IMPORTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+struct WatchedCameraChild {
+    generation: u64,
+    watch_id: String,
+    child: Child,
+}
+
+pub struct CameraOrientationWatcher {
+    generation: AtomicU64,
+    child: Arc<Mutex<Option<WatchedCameraChild>>>,
+}
+
+impl Default for CameraOrientationWatcher {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            child: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl CameraOrientationWatcher {
+    pub fn stop(&self) {
+        stop_camera_orientation_child(&self.child, None);
+    }
+}
+
+impl Drop for CameraOrientationWatcher {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+enum VisionWarmupStatus {
+    Idle,
+    Running,
+    Ready,
+}
+
+struct VisionWarmupGate {
+    status: Mutex<VisionWarmupStatus>,
+    completed: Condvar,
+}
+
+static VISION_WARMUP: OnceLock<VisionWarmupGate> = OnceLock::new();
+
+fn vision_warmup_gate() -> &'static VisionWarmupGate {
+    VISION_WARMUP.get_or_init(|| VisionWarmupGate {
+        status: Mutex::new(VisionWarmupStatus::Idle),
+        completed: Condvar::new(),
+    })
+}
+
+fn document_processing_progress_payload(
+    line: &str,
+    source_document_id: &str,
+) -> Option<serde_json::Value> {
+    let payload = line.strip_prefix("AXIOM_PROGRESS ")?;
+    let value = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+    let object = value.as_object()?;
+    let stage = object.get("stage")?.as_str()?;
+    if ![
+        "starting",
+        "detecting_page",
+        "correcting_page",
+        "corrected_ready",
+        "recognizing_text",
+        "generating_blocks",
+        "completed",
+        "failed",
+    ]
+    .contains(&stage)
+    {
+        return None;
+    }
+    let mut safe = serde_json::Map::from_iter([
+        (
+            "stage".to_string(),
+            serde_json::Value::String(stage.to_string()),
+        ),
+        (
+            "sourceDocumentId".to_string(),
+            serde_json::Value::String(source_document_id.to_string()),
+        ),
+    ]);
+    if stage == "corrected_ready" {
+        for key in ["correctedPath", "width", "height"] {
+            if let Some(value) = object.get(key) {
+                safe.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    Some(serde_json::Value::Object(safe))
+}
+
+fn camera_watch_id_matches(
+    current_watch_id: Option<&str>,
+    expected_watch_id: Option<&str>,
+) -> bool {
+    match expected_watch_id {
+        Some(expected) => current_watch_id == Some(expected),
+        None => true,
+    }
+}
+
+fn emit_document_processing_stage(app: &AppHandle, source_document_id: &str, stage: &str) {
+    let _ = app.emit(
+        "document-processing-progress",
+        serde_json::json!({
+            "sourceDocumentId": source_document_id,
+            "stage": stage,
+        }),
+    );
+}
 
 fn cancelled_textbook_imports() -> &'static Mutex<HashSet<String>> {
     CANCELLED_TEXTBOOK_IMPORTS.get_or_init(|| Mutex::new(HashSet::new()))
@@ -585,53 +699,280 @@ pub fn import_image(app: AppHandle, source_path: String) -> Result<PersistedMedi
 }
 
 #[tauri::command]
-pub fn persist_camera_frame(app: AppHandle, data_url: String) -> Result<PersistedMedia, String> {
-    let encoded = data_url
-        .strip_prefix("data:image/jpeg;base64,")
-        .ok_or_else(|| "相机帧格式无效".to_string())?;
-    let bytes = STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("无法解码相机帧：{error}"))?;
-    persist_bytes(&app, &bytes, "jpg", "camera")
+pub async fn persist_camera_frame(
+    app: AppHandle,
+    data_url: String,
+) -> Result<PersistedMedia, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let encoded = data_url
+            .strip_prefix("data:image/jpeg;base64,")
+            .ok_or_else(|| "相机帧格式无效".to_string())?;
+        let bytes = STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("无法解码相机帧：{error}"))?;
+        persist_bytes(&app, &bytes, "jpg", "camera")
+    })
+    .await
+    .map_err(|error| format!("保存相机帧任务失败：{error}"))?
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn camera_orientation(
+pub fn start_camera_orientation_watch(
     app: AppHandle,
+    state: State<'_, CameraOrientationWatcher>,
     device_label: String,
-) -> Result<CameraOrientationInfo, String> {
+    watch_id: String,
+) -> Result<(), String> {
     let helper = vision_helper_path(&app)?;
     if !helper.is_file() {
         return Err("本地相机方向检测器尚未构建".to_string());
     }
-    let output = Command::new(helper)
-        .arg("camera-orientation")
+    if watch_id.trim().is_empty() {
+        return Err("相机方向 watcher ID 不能为空".to_string());
+    }
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    stop_camera_orientation_child(&state.child, None);
+    let mut child = Command::new(helper)
+        .arg("watch-camera-orientation")
         .arg("--device-label")
         .arg(device_label)
-        .output()
-        .map_err(|error| format!("无法读取相机方向：{error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "相机方向检测失败：{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("无法启动相机方向检测器：{error}"))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("无法读取相机方向事件".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("无法读取相机方向日志".to_string());
+        }
+    };
+    let event_watch_id = watch_id.clone();
+    match state.child.lock() {
+        Ok(mut slot) => {
+            *slot = Some(WatchedCameraChild {
+                generation,
+                watch_id,
+                child,
+            });
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("相机方向状态不可用".to_string());
+        }
     }
-    serde_json::from_slice(&output.stdout).map_err(|error| format!("无法解析相机方向：{error}"))
+
+    let child_store = Arc::clone(&state.child);
+    let app_for_events = app.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            match serde_json::from_str::<CameraOrientationUpdate>(&line) {
+                Ok(update) => {
+                    let payload = serde_json::json!({
+                        "watchId": event_watch_id.clone(),
+                        "deviceName": update.device_name,
+                        "isContinuityCamera": update.is_continuity_camera,
+                        "rotationAngle": update.rotation_angle,
+                    });
+                    let _ = app_for_events.emit("camera://orientation", payload);
+                }
+                Err(error) => log::debug!("相机方向事件解析失败：{error}"),
+            }
+        }
+        if let Ok(mut slot) = child_store.lock() {
+            if slot
+                .as_ref()
+                .is_some_and(|watched| watched.generation == generation)
+            {
+                if let Some(mut watched) = slot.take() {
+                    let _ = watched.child.wait();
+                }
+            }
+        }
+    });
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if !line.trim().is_empty() {
+                log::debug!("相机方向 watcher：{line}");
+            }
+        }
+    });
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn camera_orientation(
+pub fn start_camera_orientation_watch(
     _app: AppHandle,
+    _state: State<'_, CameraOrientationWatcher>,
     _device_label: String,
-) -> Result<CameraOrientationInfo, String> {
+    _watch_id: String,
+) -> Result<(), String> {
     Err("相机方向检测目前仅支持 macOS".to_string())
+}
+
+#[tauri::command]
+pub fn stop_camera_orientation_watch(
+    state: State<'_, CameraOrientationWatcher>,
+    watch_id: String,
+) -> Result<(), String> {
+    stop_camera_orientation_child(&state.child, Some(watch_id.trim()));
+    Ok(())
+}
+
+fn stop_camera_orientation_child(
+    child_store: &Arc<Mutex<Option<WatchedCameraChild>>>,
+    expected_watch_id: Option<&str>,
+) {
+    if let Ok(mut slot) = child_store.lock() {
+        if !camera_watch_id_matches(
+            slot.as_ref().map(|watched| watched.watch_id.as_str()),
+            expected_watch_id,
+        ) {
+            return;
+        }
+        if let Some(mut watched) = slot.take() {
+            let _ = watched.child.kill();
+            let _ = watched.child.wait();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_vision_warmup_blocking(app: AppHandle) -> Result<(), String> {
+    let helper = vision_helper_path(&app)?;
+    if !helper.is_file() {
+        return Err("本地图像处理器尚未构建".to_string());
+    }
+    let mut child = Command::new(helper)
+        .arg("warm-up")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("无法启动 Vision 预热：{error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 Vision 预热结果".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 Vision 预热日志".to_string())?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let status = match child
+        .wait_timeout(Duration::from_secs(90))
+        .map_err(|error| format!("等待 Vision 预热失败：{error}"))?
+    {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err("Vision 预热超时".to_string());
+        }
+    };
+    let _ = stdout_reader.join();
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "读取 Vision 预热日志失败".to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        log::warn!(
+            "Vision 预热失败 [stage=warmup code=sidecar_exit status={:?} stderrBytes={}]",
+            status.code(),
+            stderr.len()
+        );
+        Err("Vision 预热失败".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_vision_warmup_blocking(_app: AppHandle) -> Result<(), String> {
+    Err("图片处理目前仅支持 macOS".to_string())
+}
+
+fn run_vision_warmup_once(app: AppHandle) -> Result<(), String> {
+    let gate = vision_warmup_gate();
+    loop {
+        let mut status = gate
+            .status
+            .lock()
+            .map_err(|_| "Vision 预热状态不可用".to_string())?;
+        match *status {
+            VisionWarmupStatus::Ready => return Ok(()),
+            VisionWarmupStatus::Running => {
+                status = gate
+                    .completed
+                    .wait(status)
+                    .map_err(|_| "等待 Vision 预热失败".to_string())?;
+                drop(status);
+            }
+            VisionWarmupStatus::Idle => {
+                *status = VisionWarmupStatus::Running;
+                break;
+            }
+        }
+    }
+    let result = run_vision_warmup_blocking(app);
+    if let Ok(mut status) = gate.status.lock() {
+        *status = if result.is_ok() {
+            VisionWarmupStatus::Ready
+        } else {
+            VisionWarmupStatus::Idle
+        };
+        gate.completed.notify_all();
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn warm_up_document_processor(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || run_vision_warmup_once(app))
+        .await
+        .map_err(|error| format!("Vision 预热任务失败：{error}"))?
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn process_document(
+pub async fn process_document(
+    app: AppHandle,
+    source_document_id: String,
+    source_path: String,
+    mode: String,
+) -> Result<DocumentProcessingResult, String> {
+    let warmup_app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || run_vision_warmup_once(warmup_app)).await;
+    tauri::async_runtime::spawn_blocking(move || {
+        process_document_blocking(app, source_document_id, source_path, mode)
+    })
+    .await
+    .map_err(|error| format!("图片处理任务失败：{error}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn process_document_blocking(
     app: AppHandle,
     source_document_id: String,
     source_path: String,
@@ -680,7 +1021,7 @@ pub fn process_document(
         .stdout
         .take()
         .ok_or_else(|| "无法读取处理结果".to_string())?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| "无法读取处理日志".to_string())?;
@@ -689,14 +1030,24 @@ pub fn process_document(
         let _ = stdout.read_to_end(&mut bytes);
         bytes
     });
+    let app_for_progress = app.clone();
+    let progress_document_id = source_document_id.clone();
     let stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr.read_to_end(&mut bytes);
-        bytes
+        let mut diagnostic = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(value) = document_processing_progress_payload(&line, &progress_document_id)
+            {
+                let _ = app_for_progress.emit("document-processing-progress", value);
+            } else if !line.trim().is_empty() {
+                diagnostic.push_str(&line);
+                diagnostic.push('\n');
+            }
+        }
+        diagnostic
     });
 
     let status = match child
-        .wait_timeout(Duration::from_secs(45))
+        .wait_timeout(Duration::from_secs(90))
         .map_err(|error| format!("等待图片处理失败：{error}"))?
     {
         Some(status) => status,
@@ -706,7 +1057,8 @@ pub fn process_document(
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             let _ = fs::remove_file(&output_path);
-            return Err("图片处理超过 45 秒，请缩小图片或重试".to_string());
+            emit_document_processing_stage(&app, &source_document_id, "failed");
+            return Err("图片处理超过 90 秒，请缩小图片或重试".to_string());
         }
     };
     let stdout = stdout_reader
@@ -718,12 +1070,23 @@ pub fn process_document(
 
     if !status.success() {
         let _ = fs::remove_file(&output_path);
-        let details = String::from_utf8_lossy(&stderr);
-        return Err(format!("图片处理失败：{details}"));
+        log::warn!(
+            "页面处理失败 [stage=vision_process code=sidecar_exit status={:?} stderrBytes={}]",
+            status.code(),
+            stderr.len()
+        );
+        emit_document_processing_stage(&app, &source_document_id, "failed");
+        return Err("图片处理失败，请重试".to_string());
     }
 
-    let mut result: DocumentProcessingResult = serde_json::from_slice(&stdout)
-        .map_err(|error| format!("无法解析图像处理结果：{error}"))?;
+    let mut result: DocumentProcessingResult = match serde_json::from_slice(&stdout) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = fs::remove_file(&output_path);
+            emit_document_processing_stage(&app, &source_document_id, "failed");
+            return Err(format!("无法解析图像处理结果：{error}"));
+        }
+    };
     result.processing_run_id = Some(processing_run_id);
     result.duration_ms = Some(started.elapsed().as_millis());
     Ok(result)
@@ -1136,14 +1499,63 @@ pub fn delete_media_file(app: AppHandle, path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_and_hash_textbook, hash_textbook_file, validate_normalized_rect,
-        validate_vision_helper_path, versioned_diagram_image_name, versioned_problem_image_name,
-        ALLOWED_MEDIA_SUBDIRS,
+        camera_watch_id_matches, copy_and_hash_textbook, document_processing_progress_payload,
+        hash_textbook_file, validate_normalized_rect, validate_vision_helper_path,
+        versioned_diagram_image_name, versioned_problem_image_name, ALLOWED_MEDIA_SUBDIRS,
     };
     use crate::models::NormalizedRect;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
+
+    #[test]
+    fn document_progress_parser_scopes_safe_known_stages_to_the_document() {
+        let parsed = document_processing_progress_payload(
+            r#"AXIOM_PROGRESS {"stage":"corrected_ready","sourceDocumentId":"spoofed","correctedPath":"/tmp/corrected.jpg","width":1440,"height":1920,"rawText":"sensitive user content"}"#,
+            "document-123",
+        )
+        .expect("valid progress line");
+        assert_eq!(parsed["stage"], "corrected_ready");
+        assert_eq!(parsed["sourceDocumentId"], "document-123");
+        assert_eq!(parsed["width"], 1440);
+        assert_eq!(parsed["height"], 1920);
+        assert!(parsed.get("rawText").is_none());
+
+        assert!(
+            document_processing_progress_payload("ordinary diagnostic", "document-123").is_none()
+        );
+        assert!(document_processing_progress_payload(
+            r#"AXIOM_PROGRESS {"stage":"unknown_internal_stage"}"#,
+            "document-123",
+        )
+        .is_none());
+        assert!(
+            document_processing_progress_payload("AXIOM_PROGRESS not-json", "document-123")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn stale_watcher_cleanup_cannot_stop_the_replacement() {
+        assert!(camera_watch_id_matches(Some("new-watch"), None));
+        assert!(camera_watch_id_matches(
+            Some("new-watch"),
+            Some("new-watch")
+        ));
+        assert!(!camera_watch_id_matches(
+            Some("new-watch"),
+            Some("old-watch")
+        ));
+        assert!(!camera_watch_id_matches(None, Some("old-watch")));
+    }
+
+    #[test]
+    fn watcher_shutdown_is_idempotent_without_an_active_child() {
+        let watcher = super::CameraOrientationWatcher::default();
+        watcher.stop();
+        watcher.stop();
+        assert!(watcher.child.lock().unwrap().is_none());
+    }
 
     #[test]
     fn accepts_valid_normalized_crop() {

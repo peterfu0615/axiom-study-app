@@ -22,12 +22,13 @@ import {
   type QuarterTurn,
 } from '../../platform/cameraGeometry'
 import {
-  getCameraOrientation,
   getNativeCapabilities,
   importImage,
   isDesktopRuntime,
   mediaAssetUrl,
   persistCameraFrame,
+  startCameraOrientationWatch,
+  warmUpDocumentProcessor,
 } from '../../platform/native'
 import {
   listRecentSourceDocuments,
@@ -60,6 +61,7 @@ export function CaptureWorkspace() {
   const [editingDocument, setEditingDocument] =
     useState<SourceDocument | null>(null)
   const [busy, setBusy] = useState(false)
+  const [frameReady, setFrameReady] = useState(false)
   const { toast, notify, dismiss } = useToast()
   const [rotation, setRotation] = useState<QuarterTurn>(0)
   const [manualRotation, setManualRotation] = useState(false)
@@ -68,6 +70,10 @@ export function CaptureWorkspace() {
   >('portrait')
   const videoRef = useRef<HTMLVideoElement>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement>(null)
+  const latestOrientationRef = useRef<{
+    rotationAngle: number
+    isContinuityCamera: boolean
+  } | null>(null)
 
   const refreshRecent = useCallback(async () => {
     try {
@@ -75,7 +81,7 @@ export function CaptureWorkspace() {
     } catch (error) {
       notify(`读取本地记录失败：${String(error)}`, 'error')
     }
-  }, [])
+  }, [notify])
 
   useEffect(() => {
     void getNativeCapabilities().then(setCapabilities).catch(() => null)
@@ -83,6 +89,11 @@ export function CaptureWorkspace() {
   }, [refreshRecent])
 
   useEffect(() => {
+    void warmUpDocumentProcessor().catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    setFrameReady(false)
     if (videoRef.current) {
       videoRef.current.srcObject = stream
       void videoRef.current.play().catch(() => null)
@@ -95,10 +106,16 @@ export function CaptureWorkspace() {
     const video = videoRef.current
     const canvas = previewCanvasRef.current
     let frameId = 0
-    let lastOrientation = previewOrientation
+    let lastOrientation: 'portrait' | 'landscape' | null = null
+    let hasSuccessfulFrame = false
 
     const draw = () => {
-      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      const canDrawFrame = Boolean(
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        && video.videoWidth
+        && video.videoHeight,
+      )
+      if (canDrawFrame) {
         try {
           const dimensions = drawOrientedVideoFrame(
             video,
@@ -112,55 +129,80 @@ export function CaptureWorkspace() {
             lastOrientation = nextOrientation
             setPreviewOrientation(nextOrientation)
           }
+          if (!hasSuccessfulFrame) {
+            hasSuccessfulFrame = true
+            setFrameReady(true)
+          }
         } catch {
-          // Metadata can be briefly unavailable while WebKit switches cameras.
+          // Continuity Camera can transiently pause between otherwise valid
+          // frames. Keep the last successfully copied frame available; the
+          // capture path validates video dimensions again before release.
         }
       }
       frameId = requestAnimationFrame(draw)
     }
     frameId = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(frameId)
-  }, [previewOrientation, rotation, stream])
+    return () => {
+      cancelAnimationFrame(frameId)
+      setFrameReady(false)
+    }
+  }, [rotation, stream])
+
+  const applyOrientation = useCallback(
+    (update: {
+      rotationAngle: number
+      isContinuityCamera: boolean
+    }) => {
+      latestOrientationRef.current = update
+      const video = videoRef.current
+      if (!video?.videoWidth || !video.videoHeight) return
+      setRotation(
+        resolveDocumentRotation(
+          update.rotationAngle,
+          video.videoWidth,
+          video.videoHeight,
+          update.isContinuityCamera,
+        ),
+      )
+    },
+    [],
+  )
 
   useEffect(() => {
     if (!stream || !selectedDeviceId || manualRotation) return
     const selected = devices.find((device) => device.id === selectedDeviceId)
     if (!selected) return
-    let cancelled = false
-    let timer = 0
+    let active = true
+    let unlisten: (() => void) | null = null
+    latestOrientationRef.current = null
 
-    const syncOrientation = async () => {
-      try {
-        const orientation = await getCameraOrientation(selected.label)
-        if (!cancelled && orientation) {
-          const video = videoRef.current
-          setRotation(
-            resolveDocumentRotation(
-              orientation.previewRotationAngle,
-              video?.videoWidth ?? 0,
-              video?.videoHeight ?? 0,
-              orientation.isContinuityCamera
-                || /iphone|continuity|连续互通/i.test(selected.label),
-            ),
-          )
-        }
-      } catch {
+    void startCameraOrientationWatch(selected.label, (update) => {
+      if (active) {
+        applyOrientation({
+          rotationAngle: update.rotationAngle,
+          isContinuityCamera:
+            update.isContinuityCamera
+            || /iphone|continuity|连续互通/i.test(selected.label),
+        })
+      }
+    })
+      .then((cleanup) => {
+        if (active) unlisten = cleanup
+        else cleanup()
+      })
+      .catch(() => {
         const video = videoRef.current
-        if (!cancelled && video?.videoWidth && video.videoWidth > video.videoHeight) {
+        if (active && video?.videoWidth && video.videoWidth > video.videoHeight) {
           setRotation(90)
         }
-      } finally {
-        if (!cancelled) {
-          timer = window.setTimeout(() => void syncOrientation(), 900)
-        }
-      }
-    }
-    void syncOrientation()
+      })
+
     return () => {
-      cancelled = true
-      window.clearTimeout(timer)
+      active = false
+      unlisten?.()
+      unlisten = null
     }
-  }, [devices, manualRotation, selectedDeviceId, stream])
+  }, [applyOrientation, devices, manualRotation, selectedDeviceId, stream])
 
   const connectCamera = useCallback(async () => {
     dismiss()
@@ -180,6 +222,9 @@ export function CaptureWorkspace() {
       setManualRotation(false)
       setRotation(0)
       stopCameraStream(stream)
+      setStream(null)
+      setFrameReady(false)
+      latestOrientationRef.current = null
       const nextStream = await openCameraStream(preferred.id)
       setStream(nextStream)
       setCameraStatus('ready')
@@ -192,7 +237,7 @@ export function CaptureWorkspace() {
       )
       notify(`无法连接相机：${String(error)}`, 'error')
     }
-  }, [stream])
+  }, [dismiss, notify, stream])
 
   const switchCamera = useCallback(
     async (deviceId: string) => {
@@ -202,6 +247,9 @@ export function CaptureWorkspace() {
       setCameraStatus('requesting')
       try {
         stopCameraStream(stream)
+        setStream(null)
+        setFrameReady(false)
+        latestOrientationRef.current = null
         const nextStream = await openCameraStream(deviceId)
         setStream(nextStream)
         setCameraStatus('ready')
@@ -210,15 +258,41 @@ export function CaptureWorkspace() {
         notify(`切换相机失败：${String(error)}`, 'error')
       }
     },
+    [notify, stream],
+  )
+
+  const changeMode = useCallback(
+    (nextMode: CaptureMode) => {
+      if (nextMode === 'import') {
+        stopCameraStream(stream)
+        setStream(null)
+        setCameraStatus('idle')
+      }
+      setMode(nextMode)
+    },
     [stream],
   )
 
   const captureFrame = useCallback(async () => {
     if (!videoRef.current || !isDesktopRuntime()) return
+    if (!frameReady) {
+      notify('相机画面正在准备，请稍候再拍', 'info')
+      return
+    }
     setBusy(true)
     dismiss()
     try {
-      const dataUrl = captureVideoFrame(videoRef.current, rotation)
+      const dataUrl = await captureVideoFrame(
+        videoRef.current,
+        rotation,
+        () => {
+          // Pixels are now owned by the canvas. Release Continuity Camera
+          // before asynchronous JPEG encoding, persistence and OCR begin.
+          stopCameraStream(stream)
+          setStream(null)
+          setCameraStatus('idle')
+        },
+      )
       const media = await persistCameraFrame(dataUrl)
       const document = await saveSourceDocument(media)
       setPreview(document)
@@ -230,7 +304,7 @@ export function CaptureWorkspace() {
     } finally {
       setBusy(false)
     }
-  }, [refreshRecent, rotation])
+  }, [dismiss, frameReady, notify, refreshRecent, rotation, stream])
 
   const chooseImage = useCallback(async () => {
     if (!isDesktopRuntime()) {
@@ -257,13 +331,16 @@ export function CaptureWorkspace() {
       setPreview(document)
       await refreshRecent()
       notify('图片已复制到 Axiom 本地资料库', 'success')
+      stopCameraStream(stream)
+      setStream(null)
+      setCameraStatus('idle')
       setEditingDocument(document)
     } catch (error) {
       notify(`导入失败：${String(error)}`, 'error')
     } finally {
       setBusy(false)
     }
-  }, [refreshRecent])
+  }, [dismiss, notify, refreshRecent, stream])
 
   const selectedDevice = devices.find(
     (device) => device.id === selectedDeviceId,
@@ -302,7 +379,7 @@ export function CaptureWorkspace() {
         <div className="capture-card">
           <SegmentedControl
             ariaLabel="采集方式"
-            onChange={setMode}
+            onChange={changeMode}
             options={[
               { value: 'camera', label: <><Icon name="camera" size={16} /> iPhone 相机</> },
               { value: 'import', label: <><Icon name="image" size={16} /> 导入图片</> },
@@ -327,6 +404,11 @@ export function CaptureWorkspace() {
                     autoPlay
                     className="camera-source-video"
                     muted
+                    onLoadedMetadata={() => {
+                      if (latestOrientationRef.current) {
+                        applyOrientation(latestOrientationRef.current)
+                      }
+                    }}
                     playsInline
                     ref={videoRef}
                   />
@@ -365,6 +447,7 @@ export function CaptureWorkspace() {
                 {devices.length > 0 && (
                   <ListboxSelect
                     ariaLabel="选择摄像头"
+                    disabled={cameraStatus === 'requesting'}
                     onValueChange={(value) => void switchCamera(value)}
                     options={devices.map((device) => ({ value: device.id, label: device.label }))}
                     value={selectedDeviceId}
@@ -388,9 +471,9 @@ export function CaptureWorkspace() {
                     </button>
                     <button
                       className="shutter-button"
-                      disabled={busy}
+                      disabled={busy || !frameReady}
                       onClick={() => void captureFrame()}
-                      title="拍照"
+                      title={frameReady ? '拍照' : '相机画面准备中'}
                       type="button"
                     >
                       <span />
@@ -458,6 +541,9 @@ export function CaptureWorkspace() {
                   className="queue-item"
                   key={document.id}
                   onClick={() => {
+                    stopCameraStream(stream)
+                    setStream(null)
+                    setCameraStatus('idle')
                     setPreview(document)
                     setEditingDocument(document)
                   }}

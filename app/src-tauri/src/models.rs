@@ -30,13 +30,12 @@ pub struct PersistedProblemImage {
     pub created: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CameraOrientationInfo {
+pub struct CameraOrientationUpdate {
     pub device_name: String,
     pub is_continuity_camera: bool,
-    pub preview_rotation_angle: f64,
-    pub capture_rotation_angle: f64,
+    pub rotation_angle: f64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
