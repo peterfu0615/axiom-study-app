@@ -7,6 +7,7 @@ export type AppSection =
   | 'library'
   | 'curriculum'
   | 'insights'
+  | 'planner'
   | 'settings'
 
 const items: Array<{
@@ -19,6 +20,7 @@ const items: Array<{
   { id: 'library', label: '错题库', icon: 'library' },
   { id: 'curriculum', label: '课程', icon: 'curriculum' },
   { id: 'insights', label: '洞察', icon: 'insights' },
+  { id: 'planner', label: '计划', icon: 'planner' },
 ]
 
 export function Sidebar({

@@ -6,8 +6,8 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 55，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 55；
+//!   1. 全新库一路跑到 56，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 56；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
 //!      校验并推进到 51；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 55（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 56（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_55_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_56_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(55);
+            let migrations = migrations_up_to(56);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 55（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 55);
+                .expect("全新库必须能完整迁移到 56（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 56);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 55);
+            assert_eq!(max_applied_version(&mut conn).await, 56);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=55 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=56 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_55_exactly() {
+    fn migration_list_covers_versions_1_through_56_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=55).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=55");
+        let expected: Vec<i64> = (1..=56).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=56");
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("problem-library-enhancements");
             let mut conn = connect(&temp).await;
-            migrate_embedded_schema(&mut conn, &migrations_up_to(55))
+            migrate_embedded_schema(&mut conn, &migrations_up_to(56))
                 .await
                 .expect("problem library schema must migrate");
             conn.execute("INSERT INTO source_documents(id,original_image_path,content_hash,source_type,captured_at,created_at) VALUES ('source','/tmp/source.png','hash','import',1,1)")
