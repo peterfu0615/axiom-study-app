@@ -21,12 +21,14 @@ describe('practice grading', () => {
     expect(gradePracticeAnswer(item('m > -(1)/(3)'), answer('m > -1/3')).correctness).toBe('correct')
     expect(gradePracticeAnswer(item('\\because 3m + 1 > 0\n\\Longrightarrow m > -\\frac{1}{3}\n\\therefore m \\text{ 的取值范围是 } m > -\\frac{1}{3}.'), answer('m > -1/3')).correctness).toBe('correct')
   })
-  it('marks a rubric-heavy response for review instead of inventing a confidence score', () => {
+  it('marks a rubric-heavy response for structured AI review without applying empty evidence', () => {
     const subjective = item('证明完成')
     subjective.gradingRubric.criteria = ['结论', '推理链']
     const graded = gradePracticeAnswer(subjective, { ...answer('由条件可得...'), steps: [{ index: 1, contentMarkdown: '步骤一' }, { index: 2, contentMarkdown: '步骤二' }] })
     expect(graded.correctness).toBe('needs_review')
     expect(graded.score).toBeNull()
-    expect(graded).not.toHaveProperty('confidence')
+    expect(graded.overallConfidence).toBe(0)
+    expect(graded.tagEvidence).toEqual([])
+    expect(graded.requiresReview).toBe(true)
   })
 })

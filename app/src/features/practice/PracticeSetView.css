@@ -58,6 +58,13 @@
 .practice-result-item dt { margin-bottom: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
 .practice-result-item dd { margin: 0; color: var(--ax-text-primary); }
 .practice-result-item__explanation { margin: var(--ax-space-4) 0; color: var(--ax-text-secondary); line-height: var(--ax-type-body-line); }
+.practice-result-item__first-error { display: grid; gap: var(--ax-space-1); margin: var(--ax-space-4) 0; padding: var(--ax-space-3); border-left: 3px solid var(--ax-warning-fg); background: var(--ax-color-inset); }
+.practice-result-item__first-error > span { color: var(--ax-text-secondary); }
+.practice-result-item__evidence { display: grid; gap: var(--ax-space-2); margin: var(--ax-space-4) 0; }
+.practice-result-item__evidence > div { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--ax-space-2); }
+.practice-result-item__evidence span { color: var(--ax-text-primary); font-size: var(--ax-type-caption-size); }
+.practice-result-item__evidence small { color: var(--ax-text-secondary); }
+.practice-result-item__review-note { color: var(--ax-warning-fg); font-size: var(--ax-type-caption-size); }
 .practice-result-item__tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ax-space-2); }
 .practice-result-item__tags > span { margin-right: var(--ax-space-1); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
 .practice-result__correction { margin-top: var(--ax-space-5); padding-top: var(--ax-space-4); border-top: 1px solid var(--ax-border-subtle); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }

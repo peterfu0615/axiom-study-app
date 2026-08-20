@@ -86,6 +86,21 @@ function ResultItem({ item, response, onChange, onError }: {
       <div><dt>参考答案</dt><dd><MathMarkdown>{item.canonicalAnswer}</MathMarkdown></dd></div>
     </dl>
     {result?.explanation && <p className="practice-result-item__explanation">{result.explanation}</p>}
+    {result?.firstErrorStep && <div className="practice-result-item__first-error">
+      <strong>首个错误：第 {result.firstErrorStep} 步</strong>
+      {result.errorReason && <span>{result.errorReason}</span>}
+      {result.correctAlternativeStep && <MathMarkdown>{result.correctAlternativeStep}</MathMarkdown>}
+    </div>}
+    {(result?.tagEvidence?.length ?? 0) > 0 && <div className="practice-result-item__evidence" aria-label="标签证据">
+      {result!.tagEvidence.map((entry) => {
+        const tag = item.targetTags.find((candidate) => candidate.id === entry.tagId)
+        const evidenceLabel = entry.result === 'demonstrated' ? '已证明' : entry.result === 'contradicted' ? '存在冲突' : '证据不足'
+        return <div key={`${entry.tagType}:${entry.tagId}`}>
+          <Badge>{tag?.name ?? entry.tagId}</Badge><span>{evidenceLabel}</span><small>{entry.evidence}</small>
+        </div>
+      })}
+    </div>}
+    {result?.requiresReview && <p className="practice-result-item__review-note">批改证据置信度不足，请检查后再应用学习进度。</p>}
     {tags.length > 0 && <div className="practice-result-item__tags"><span>相关知识</span>{tags.map((tag) => <Badge key={tag.id || tag.name}>{tag.name}</Badge>)}</div>}
     <ResultCorrection item={item} onChange={onChange} onError={onError} response={response} />
   </article>
@@ -243,7 +258,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     ...current, responses: current.responses.map((response) => response.regionId === updated.regionId ? updated : response),
   } : current)
   const canFinalize = Boolean(attempt?.responses.length && attempt.responses.every((response) =>
-    response.gradingResult && response.gradingResult.correctness !== 'needs_review'))
+    response.gradingResult && response.gradingResult.correctness !== 'needs_review' && !response.gradingResult.requiresReview))
   const finalize = async () => {
     if (!attempt) return
     setFinalizing(true); setFeedback(null)

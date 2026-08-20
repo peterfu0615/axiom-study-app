@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { PracticeAttempt, PracticeScanResult } from '../domain/practiceAttempt'
+import { normalizePracticeGradingResult } from '../domain/practiceGrading'
 import { processPracticeScan, type PracticeScanLayout } from './native'
 import { withTransactionLock } from './transactionLock'
 import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
@@ -158,7 +159,9 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
       regionId: response.id, practiceItemId: response.practice_item_id, regionIndex: index,
       answerAssetPath: response.answer_asset_path, pixelWidth: 0, pixelHeight: 0,
       extractedAnswer: response.effective_answer_json ? JSON.parse(response.effective_answer_json) : null,
-      gradingResult: response.effective_grading_json ? JSON.parse(response.effective_grading_json) : null,
+      gradingResult: response.effective_grading_json
+        ? normalizePracticeGradingResult(JSON.parse(response.effective_grading_json))
+        : null,
     })),
   }
 }

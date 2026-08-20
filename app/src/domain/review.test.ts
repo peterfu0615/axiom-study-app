@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyReviewRating,
+  applyWeightedReviewRating,
   buildTodayReviewUnits,
   canTransitionReviewSession,
   defaultReviewSessionSettings,
@@ -144,6 +145,15 @@ describe('Horizon review scheduler', () => {
     expect(next.successCount).toBe(2)
     expect(next.failureCount).toBe(1)
     expect(next.uncertainty).toBeLessThan(initial.uncertainty)
+  })
+
+  it('ignores insufficient tag evidence and preserves a demonstrated method after a calculation error', () => {
+    const initial = initialReviewSkillState()
+    expect(applyWeightedReviewRating(initial, 'again', 'intermediate', now, 0)).toEqual(initial)
+    const method = applyWeightedReviewRating(initial, 'good', 'intermediate', now, .9, true)
+    expect(method.masteryEstimate).toBeGreaterThan(initial.masteryEstimate)
+    expect(method.failureCount).toBe(0)
+    expect(method.transferScore).toBeGreaterThan(0)
   })
 
   it('uses the local calendar date across day boundaries', () => {

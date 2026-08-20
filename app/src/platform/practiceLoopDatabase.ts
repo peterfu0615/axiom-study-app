@@ -1,11 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { DifficultyLevel } from '../domain/models'
 import type { ReviewSkillState, ReviewTag } from '../domain/review'
-import { REVIEW_SCHEDULER_VERSION, applyReviewRating, initialReviewSkillState, ratingEvidence } from '../domain/review'
+import { REVIEW_SCHEDULER_VERSION, applyWeightedReviewRating, initialReviewSkillState, ratingEvidence } from '../domain/review'
 import type { PracticeSet } from '../domain/practice'
 import type { PracticeAttempt } from '../domain/practiceAttempt'
-import type { PracticeGradingResult, StructuredStudentAnswer } from '../domain/practiceGrading'
-import { decidePracticeLoop, practiceRating, type PracticeLoop, type PracticeLoopStopReason, type PracticeLoopStatus } from '../domain/practiceLoop'
+import { normalizePracticeGradingResult, type PracticeGradingResult, type StructuredStudentAnswer } from '../domain/practiceGrading'
+import { decidePracticeLoop, practiceRating, tagEvidenceUpdate, type PracticeLoop, type PracticeLoopStopReason, type PracticeLoopStatus } from '../domain/practiceLoop'
 import { getOrCreatePracticeSetFromPracticeAttempt } from './practiceDatabase'
 import { withTransactionLock } from './transactionLock'
 import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
@@ -89,30 +89,60 @@ async function applyPracticeEvidence(input: {
   const reviewAttemptId = uuid()
   await execute(`INSERT INTO review_attempts(
     id,subject,question_instance_id,answer_text,answer_image_path,is_correct,error_category,
-    duration_seconds,used_hint,grading_confidence,created_at,rating,result_key,evidence_source
-  ) VALUES($1,$2,$3,$4,$5,$6,$7,0,0,1,$8,$9,$10,'practice_attempt')`, [
+    duration_seconds,used_hint,grading_confidence,created_at,rating,result_key,evidence_source,
+    first_error_step,overall_result,process_complete,error_reason,correct_alternative_step,
+    used_target_method,applied_target_knowledge,matched_target_model,independent_completion,
+    bundle_evidence_json,grading_model_run_id
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,'practice_attempt',$13,$14,$15,$16,
+    $17,$18,$19,$20,$21,$22,$23)`, [
     reviewAttemptId, input.subject, question.id, input.answer.rawMarkdown, input.answerImagePath,
     input.grading.correctness === 'correct' ? 1 : 0, input.grading.errorCategory,
-    input.reviewedAt, rating, resultKey,
+    input.grading.usedHint ? 1 : 0, input.grading.overallConfidence,
+    input.reviewedAt, rating, resultKey, input.grading.firstErrorStep, input.grading.correctness,
+    input.grading.processComplete ? 1 : 0, input.grading.errorReason,
+    input.grading.correctAlternativeStep,
+    input.grading.usedTargetMethod == null ? null : input.grading.usedTargetMethod ? 1 : 0,
+    input.grading.appliedTargetKnowledge == null ? null : input.grading.appliedTargetKnowledge ? 1 : 0,
+    input.grading.matchedTargetModel == null ? null : input.grading.matchedTargetModel ? 1 : 0,
+    input.grading.independentCompletion ? 1 : 0, JSON.stringify(input.grading.bundleEvidence),
+    input.grading.modelRunId,
   ])
   for (const tag of input.targetTags) {
     if (!tag.id || tag.type === 'error') continue
+    if (!tag.id.startsWith('legacy:')) {
+      const definition = await select<Array<{ id: string }>>(
+        'SELECT id FROM tag_definitions WHERE id=$1 AND subject=$2 AND tag_type=$3 LIMIT 1',
+        [tag.id, input.subject, tag.type],
+      )
+      if (!definition.length) throw new Error(`目标标签 ${tag.id} 不属于本题科目或类型`)
+    }
+    const gradedEvidence = input.grading.tagEvidence.find((entry) =>
+      entry.tagId === tag.id && entry.tagType === tag.type,
+    ) ?? {
+      tagId: tag.id, tagType: tag.type, result: 'insufficient' as const,
+      confidence: 0, weight: 0, evidence: '旧版批改结果没有该标签的独立证据。',
+    }
     const row = (await select<Array<Record<string, unknown>>>(
       'SELECT * FROM skill_states WHERE subject=$1 AND tag_id=$2 LIMIT 1', [input.subject, tag.id],
     ))[0]
     const current = row ? skillFromRow(row) : initialReviewSkillState()
-    const next = applyReviewRating(current, rating, input.difficulty, input.reviewedAt)
-    if (row) await execute(`UPDATE skill_states SET mastery_estimate=$1,stability=$2,retrievability=$3,
+    const tagUpdate = tagEvidenceUpdate(gradedEvidence, input.grading)
+    const next = tagUpdate.rating
+      ? applyWeightedReviewRating(current, tagUpdate.rating, input.difficulty, input.reviewedAt,
+        tagUpdate.strength, input.grading.bundleEvidence.transfer)
+      : current
+    if (row && tagUpdate.rating) await execute(`UPDATE skill_states SET mastery_estimate=$1,stability=$2,retrievability=$3,
       evidence_count=$4,success_count=$5,failure_count=$6,transfer_score=$7,max_stable_difficulty=$8,
       last_practiced_at=$9,next_review_at=$10,uncertainty=$11,scheduler_version=$12,updated_at=$13
       WHERE subject=$14 AND tag_id=$15`, [
       ...skillParams(next), REVIEW_SCHEDULER_VERSION, input.reviewedAt, input.subject, tag.id,
     ])
     await execute(`INSERT INTO tag_evidences(id,subject,review_attempt_id,tag_id,skill_bundle_id,result,
-      confidence,weight,evidence_text,transfer_flag,difficulty_context,user_verified,created_at)
-      VALUES($1,$2,$3,$4,$5,$6,1,$7,$8,0,$9,$10,$11)`, [
-      uuid(), input.subject, reviewAttemptId, tag.id, input.skillBundleId, evidence.result,
-      evidence.weight, `Practice Attempt：${input.grading.explanation}`, input.difficulty,
+      confidence,weight,evidence_text,transfer_flag,difficulty_context,grading_model_run_id,user_verified,created_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
+      uuid(), input.subject, reviewAttemptId, tag.id, input.skillBundleId, gradedEvidence.result,
+      gradedEvidence.confidence, gradedEvidence.weight, gradedEvidence.evidence,
+      input.grading.bundleEvidence.transfer ? 1 : 0, input.difficulty, input.grading.modelRunId,
       input.grading.userConfirmed ? 1 : 0, input.reviewedAt,
     ])
   }
@@ -120,8 +150,17 @@ async function applyPracticeEvidence(input: {
     'SELECT * FROM skill_bundle_states WHERE subject=$1 AND skill_bundle_id=$2 LIMIT 1', [input.subject, input.skillBundleId],
   ))[0]
   const previousBundle = bundleRow ? skillFromRow(bundleRow) : initialReviewSkillState()
-  const nextBundle = applyReviewRating(previousBundle, rating, input.difficulty, input.reviewedAt)
-  if (bundleRow) await execute(`UPDATE skill_bundle_states SET mastery_estimate=$1,stability=$2,
+  const bundleRating = input.grading.bundleEvidence.result === 'demonstrated' ? 'good'
+    : input.grading.bundleEvidence.result === 'contradicted' ? 'again' : null
+  const bundleStrength = bundleRating
+    ? input.grading.bundleEvidence.confidence
+      * (input.grading.independentCompletion ? 1 : .75) * (input.grading.usedHint ? .65 : 1)
+    : 0
+  const nextBundle = bundleRating
+    ? applyWeightedReviewRating(previousBundle, bundleRating, input.difficulty, input.reviewedAt,
+      bundleStrength, input.grading.bundleEvidence.transfer)
+    : previousBundle
+  if (bundleRow && bundleRating) await execute(`UPDATE skill_bundle_states SET mastery_estimate=$1,stability=$2,
     retrievability=$3,transfer_score=$4,evidence_count=$5,last_practiced_at=$6,next_review_at=$7,
     uncertainty=$8,scheduler_version=1,updated_at=$9 WHERE subject=$10 AND skill_bundle_id=$11`, [
     nextBundle.masteryEstimate, nextBundle.stability, nextBundle.retrievability,
@@ -132,7 +171,8 @@ async function applyPracticeEvidence(input: {
     previous_state_json,evidence_json,new_state_json,scheduler_version,reviewed_at)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [
     uuid(), reviewAttemptId, input.subject, input.skillBundleId, rating,
-    JSON.stringify(previousBundle), JSON.stringify({ ...evidence, source: 'practice_attempt', grading: input.grading }),
+    JSON.stringify(previousBundle), JSON.stringify({ ...evidence, source: 'practice_attempt', grading: input.grading,
+      tagEvidence: input.grading.tagEvidence, bundleEvidence: input.grading.bundleEvidence }),
     JSON.stringify(nextBundle), REVIEW_SCHEDULER_VERSION, input.reviewedAt,
   ])
   await execute(`INSERT INTO practice_evidences(id,practice_loop_id,practice_attempt_id,
@@ -203,8 +243,15 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
         FROM practice_responses response JOIN practice_items item ON item.id=response.practice_item_id
         WHERE response.practice_attempt_id=$1 ORDER BY item.order_index`, [attempt.id])
       if (!contexts.length || contexts.length !== practiceSet.items.length) throw new Error('作答区域不完整，不能提交学习证据')
-      const grades = contexts.map((row) => parseJSON<PracticeGradingResult | null>(row.grading_result_json, null))
-      if (grades.some((grade) => !grade || grade.correctness === 'needs_review')) throw new Error('仍有未完成或待确认的批改结果')
+      const grades = contexts.map((row) => {
+        const grading = parseJSON<PracticeGradingResult | null>(row.grading_result_json, null)
+        return grading ? normalizePracticeGradingResult(grading, {
+          targetSkillBundleId: row.target_skill_bundle_id,
+          difficulty: row.difficulty,
+          sourceType: practiceSet.items.find((item) => item.id === row.item_id)?.sourceType ?? 'existing_problem',
+        }) : null
+      })
+      if (grades.some((grade) => !grade || grade.correctness === 'needs_review' || grade.requiresReview)) throw new Error('仍有未完成或待确认的批改结果')
       let inserted = 0
       for (const [index, row] of contexts.entries()) {
         if (!row.source_problem_id || !row.target_skill_bundle_id) throw new Error(`练习题 ${row.item_id} 缺少 SkillBundle 或原题快照`)

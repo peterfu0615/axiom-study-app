@@ -1,8 +1,20 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getStudentAttemptProvidersForRun, getSubjectivePracticeGradingProviders } from '../ai/provider'
+import {
+  SUBJECTIVE_PRACTICE_GRADING_PROMPT_VERSION,
+  SUBJECTIVE_PRACTICE_GRADING_SCHEMA_VERSION,
+} from '../ai/practiceGradingContract'
 import type { PracticeItem, PracticeSet } from '../domain/practice'
 import type { PracticeAttempt } from '../domain/practiceAttempt'
-import { gradePracticeAnswer, type PracticeCorrectness, type PracticeGradingResult, type StructuredStudentAnswer } from '../domain/practiceGrading'
+import {
+  gradePracticeAnswer,
+  gradingRequiresReview,
+  type PracticeCorrectness,
+  type PracticeGradingResult,
+  type StructuredStudentAnswer,
+  type SubjectivePracticeGradingInput,
+} from '../domain/practiceGrading'
+import type { ReviewTag } from '../domain/review'
 import { getLatestPracticeAttempt } from './practiceAttemptDatabase'
 import { rebuildLearningStateInTransaction } from './reviewMaintenance'
 import { withTransactionLock } from './transactionLock'
@@ -23,14 +35,43 @@ function canonicalSolution(item: PracticeItem) {
   } catch { return '' }
 }
 
-async function grade(item: PracticeItem, answer: StructuredStudentAnswer) {
+function safeGradingErrorCode(reason: unknown) {
+  const message = String(reason).toLowerCase()
+  if (message.includes('provider') || message.includes('模型')) return 'grading_provider_unavailable'
+  if (message.includes('json') || message.includes('契约') || message.includes('标签')) return 'grading_contract_invalid'
+  return 'grading_failed'
+}
+
+async function grade(responseId: string, item: PracticeItem, answer: StructuredStudentAnswer) {
   const deterministic = gradePracticeAnswer(item, answer)
   if (!deterministic.requiresReview) return deterministic
   const provider = getSubjectivePracticeGradingProviders()[0]
-  return (await provider.gradeSubjectivePractice({
+  if (!provider) return deterministic
+  const input: SubjectivePracticeGradingInput = {
     subject: item.subject, statementMarkdown: item.statementMarkdown, canonicalAnswer: item.canonicalAnswer,
     canonicalSolution: canonicalSolution(item), rubric: item.gradingRubric, studentAnswer: answer,
-  })).grading
+    targetTags: item.targetTags, skillBundleId: item.targetSkillBundleId, difficulty: item.difficulty,
+    sourceType: item.sourceType, usedHint: false,
+  }
+  const runId = crypto.randomUUID()
+  const startedAt = Date.now()
+  await execute(`INSERT INTO practice_grading_model_runs(
+    id,practice_response_id,provider,model,prompt_version,schema_version,input_hash,status,started_at
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,'running',$8)`, [
+    runId, responseId, provider.id, provider.model, SUBJECTIVE_PRACTICE_GRADING_PROMPT_VERSION,
+    SUBJECTIVE_PRACTICE_GRADING_SCHEMA_VERSION, operationKey('grading_input', JSON.stringify(input)), startedAt,
+  ])
+  try {
+    const grading = { ...(await provider.gradeSubjectivePractice(input)).grading, modelRunId: runId }
+    grading.requiresReview = gradingRequiresReview(grading)
+    await execute(`UPDATE practice_grading_model_runs SET status='succeeded',result_json=$1,completed_at=$2
+      WHERE id=$3 AND status='running'`, [JSON.stringify(grading), Date.now(), runId])
+    return grading
+  } catch (reason) {
+    await execute(`UPDATE practice_grading_model_runs SET status='failed',safe_error_code=$1,completed_at=$2
+      WHERE id=$3 AND status='running'`, [safeGradingErrorCode(reason), Date.now(), runId])
+    throw reason
+  }
 }
 
 async function persistAIExtraction(responseId: string, answer: StructuredStudentAnswer, result: PracticeGradingResult) {
@@ -39,7 +80,7 @@ async function persistAIExtraction(responseId: string, answer: StructuredStudent
   [JSON.stringify(answer), JSON.stringify(result), status(result), Date.now(), responseId])
 }
 
-function operationKey(kind: 'regrade' | 'manual_override', value: string) {
+function operationKey(kind: 'regrade' | 'manual_override' | 'grading_input', value: string) {
   let hash = 2166136261
   for (const character of value) {
     hash ^= character.codePointAt(0) ?? 0
@@ -172,7 +213,7 @@ export async function extractAndGradePracticeAttempt(practiceSet: PracticeSet, a
         choices: item.options?.map((text, index) => ({ label: String.fromCharCode(65 + index), text })) ?? [], subQuestions: [],
       })
       const answer: StructuredStudentAnswer = { ...extracted.attempt, source: 'ai' }
-      const result = await grade(item, answer)
+      const result = await grade(response.regionId, item, answer)
       needsReview ||= result.requiresReview
       await persistAIExtraction(response.regionId, answer, result)
     }
@@ -198,7 +239,7 @@ export async function correctAndRegradePracticeResponse(responseId: string, item
     rawMarkdown: rawMarkdown.trim(), source: 'user',
     steps: (lines.length ? lines : ['未检测到作答内容']).map((contentMarkdown, index) => ({ index: index + 1, contentMarkdown })),
   }
-  const grading = await grade(item, answer)
+  const grading = await grade(responseId, item, answer)
   return persistCorrection({
     responseId, type: 'regrade', answer, grading,
     operationKey: operationKey('regrade', rawMarkdown.trim()),
@@ -207,9 +248,48 @@ export async function correctAndRegradePracticeResponse(responseId: string, item
 
 export async function overridePracticeGrade(responseId: string, correctness: Exclude<PracticeCorrectness, 'needs_review'>) {
   const score = correctness === 'correct' ? 100 : correctness === 'partial' ? 50 : 0
+  const context = (await select<Array<{
+    effective_grading_json: string | null; target_tags_json: string; target_skill_bundle_id: string | null
+    difficulty: PracticeItem['difficulty']; source_type: PracticeItem['sourceType']
+  }>>(`SELECT effective.effective_grading_json,item.target_tags_json,item.target_skill_bundle_id,
+      item.difficulty,item.source_type
+    FROM practice_effective_responses effective
+    JOIN practice_responses response ON response.id=effective.response_id
+    JOIN practice_items item ON item.id=response.practice_item_id
+    WHERE effective.response_id=$1 LIMIT 1`, [responseId]))[0]
+  if (!context) throw new Error('找不到需要确认的批改结果')
+  const previous = context.effective_grading_json
+    ? JSON.parse(context.effective_grading_json) as PracticeGradingResult
+    : null
+  const tags = JSON.parse(context.target_tags_json) as ReviewTag[]
+  const previousByTag = new Map(previous?.tagEvidence.map((entry) => [`${entry.tagType}:${entry.tagId}`, entry]))
+  const tagEvidence = tags.flatMap((tag) => {
+    if (!tag.id || tag.type === 'error') return []
+    const existing = previousByTag.get(`${tag.type}:${tag.id}`)
+    if (existing) return [{ ...existing, confidence: 1 }]
+    return [{
+      tagId: tag.id, tagType: tag.type,
+      result: tag.type === 'knowledge' ? (correctness === 'correct' ? 'demonstrated' as const : 'contradicted' as const) : 'insufficient' as const,
+      confidence: 1, evidence: '用户确认了本题总体批改结果。', weight: tag.type === 'knowledge' ? .8 : 0,
+    }]
+  })
   const grading: PracticeGradingResult = {
+    modelRunId: previous?.modelRunId ?? null,
     correctness, score, method: 'manual', errorCategory: correctness === 'correct' ? null : 'user_confirmed_error',
-    evidence: ['用户已检查作答与标准答案'], explanation: '本结果由用户确认，优先于自动批改。',
+    processComplete: previous?.processComplete ?? false,
+    firstErrorStep: correctness === 'correct' ? null : previous?.firstErrorStep ?? 1,
+    errorReason: correctness === 'correct' ? null : previous?.errorReason ?? '用户确认本题存在错误。',
+    correctAlternativeStep: correctness === 'correct' ? null : previous?.correctAlternativeStep ?? '请按标准解核对首个错误步骤。',
+    usedTargetMethod: previous?.usedTargetMethod ?? null,
+    appliedTargetKnowledge: correctness === 'correct', matchedTargetModel: previous?.matchedTargetModel ?? null,
+    independentCompletion: previous?.independentCompletion ?? true, usedHint: previous?.usedHint ?? false,
+    evidence: ['用户已检查作答与标准答案'], tagEvidence,
+    bundleEvidence: previous?.bundleEvidence ?? {
+      skillBundleId: context.target_skill_bundle_id,
+      result: correctness === 'correct' ? 'demonstrated' : correctness === 'partial' ? 'insufficient' : 'contradicted',
+      transfer: context.source_type === 'generated_variant', difficulty: context.difficulty, confidence: 1,
+    },
+    explanation: '本结果由用户确认，优先于自动批改。', overallConfidence: 1,
     requiresReview: false, userConfirmed: true,
   }
   return persistCorrection({

@@ -304,8 +304,24 @@ export class MockAIProvider implements AIProvider {
     }
   }
 
-  async gradeSubjectivePractice(_input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
-    const grading = parseSubjectivePracticeGrading('{"correctness":"needs_review","score":null,"error_category":null,"evidence":["Mock Provider 未执行真实主观题批改"],"explanation":"需要用户检查"}')
+  async gradeSubjectivePractice(input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
+    const grading = parseSubjectivePracticeGrading(JSON.stringify({
+      correctness: 'needs_review', score: null, process_complete: false,
+      first_error_step: null, error_category: null, error_reason: null,
+      correct_alternative_step: null, used_target_method: null,
+      applied_target_knowledge: null, matched_target_model: null,
+      independent_completion: true, used_hint: input.usedHint,
+      evidence: ['Mock Provider 未执行真实主观题批改'],
+      tag_evidence: input.targetTags.flatMap((tag) => tag.id && tag.type !== 'error' ? [{
+        tag_id: tag.id, tag_type: tag.type, result: 'insufficient', confidence: 0,
+        evidence: 'Mock Provider 没有提供可应用的标签证据。', weight: 0,
+      }] : []),
+      bundle_evidence: {
+        skill_bundle_id: input.skillBundleId, result: 'insufficient', transfer: false,
+        difficulty: input.difficulty, confidence: 0,
+      },
+      explanation: '需要用户检查', overall_confidence: 0, needs_review: true,
+    }), input)
     return { grading, rawOutput: JSON.stringify(grading) }
   }
 
@@ -539,7 +555,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       jsonSchema: JSON.stringify(subjectivePracticeGradingJSONSchema),
     })
     if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
+    return { grading: parseSubjectivePracticeGrading(response.rawOutput, input), rawOutput: response.rawOutput }
   }
 
   async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
@@ -864,7 +880,7 @@ export class AntigravityCLIProvider implements AIProvider {
       jsonSchema: JSON.stringify(subjectivePracticeGradingJSONSchema),
     })
     if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    return { grading: parseSubjectivePracticeGrading(response.rawOutput), rawOutput: response.rawOutput }
+    return { grading: parseSubjectivePracticeGrading(response.rawOutput, input), rawOutput: response.rawOutput }
   }
 
   async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {

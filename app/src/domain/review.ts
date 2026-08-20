@@ -384,6 +384,39 @@ export function applyReviewRating(
   }
 }
 
+export function applyWeightedReviewRating(
+  current: ReviewSkillState | null,
+  rating: ReviewRating,
+  difficulty: DifficultyLevel,
+  reviewedAt: number,
+  strength: number,
+  transfer = false,
+): ReviewSkillState {
+  const state = current ?? initialReviewSkillState()
+  const factor = clamp(strength, 0, 1)
+  if (factor === 0) return state
+  const full = applyReviewRating(state, rating, difficulty, reviewedAt)
+  const interpolate = (from: number, to: number) => from + (to - from) * factor
+  const fullInterval = Math.max(DAY_MS, (full.nextReviewAt ?? reviewedAt + DAY_MS) - reviewedAt)
+  const interval = DAY_MS + (fullInterval - DAY_MS) * factor
+  return {
+    ...state,
+    masteryEstimate: clamp(interpolate(state.masteryEstimate, full.masteryEstimate)),
+    stability: Math.max(.5, interpolate(state.stability, full.stability)),
+    retrievability: clamp(interpolate(state.retrievability, full.retrievability)),
+    evidenceCount: state.evidenceCount + 1,
+    successCount: state.successCount + (rating === 'good' || rating === 'easy' ? 1 : 0),
+    failureCount: state.failureCount + (rating === 'again' ? 1 : 0),
+    transferScore: transfer && (rating === 'good' || rating === 'easy')
+      ? clamp(state.transferScore + (1 - state.transferScore) * .16 * factor)
+      : state.transferScore,
+    maxStableDifficulty: factor >= .5 ? full.maxStableDifficulty : state.maxStableDifficulty,
+    lastPracticedAt: reviewedAt,
+    nextReviewAt: reviewedAt + Math.round(interval),
+    uncertainty: clamp(interpolate(state.uncertainty, full.uncertainty)),
+  }
+}
+
 export function ratingEvidence(rating: ReviewRating) {
   if (rating === 'again') return { result: 'not_demonstrated', weight: 1 }
   if (rating === 'hard') return { result: 'partially_demonstrated', weight: .75 }
