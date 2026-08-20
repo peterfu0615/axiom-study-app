@@ -1,5 +1,4 @@
 import AVFoundation
-import AppKit
 import CoreImage
 import Foundation
 import ImageIO
@@ -87,11 +86,10 @@ private struct ProcessResult: Codable {
     let warnings: [String]
 }
 
-private struct CameraOrientationResult: Codable {
+private struct CameraOrientationUpdate: Codable {
     let deviceName: String
     let isContinuityCamera: Bool
-    let previewRotationAngle: Double
-    let captureRotationAngle: Double
+    let rotationAngle: Double
 }
 
 private struct TextbookExtractedPage: Codable {
@@ -133,6 +131,22 @@ private func emitTextbookProgress(
         "failedPages": failedPages,
         "phase": phase,
     ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8),
+          let line = "AXIOM_PROGRESS \(json)\n".data(using: .utf8) else { return }
+    FileHandle.standardError.write(line)
+}
+
+private func emitDocumentProgress(
+    stage: String,
+    correctedPath: String? = nil,
+    width: Int? = nil,
+    height: Int? = nil
+) {
+    var payload: [String: Any] = ["stage": stage]
+    if let correctedPath { payload["correctedPath"] = correctedPath }
+    if let width { payload["width"] = width }
+    if let height { payload["height"] = height }
     guard let data = try? JSONSerialization.data(withJSONObject: payload),
           let json = String(data: data, encoding: .utf8),
           let line = "AXIOM_PROGRESS \(json)\n".data(using: .utf8) else { return }
@@ -200,8 +214,116 @@ private func outlineCandidates(from pages: [TextbookExtractedPage]) -> [Textbook
     return output
 }
 
+private struct RasterizedPDFPage {
+    let image: CGImage
+    let pixelWidth: Int
+    let pixelHeight: Int
+}
+
+private func rasterizePDFPage(
+    _ page: CGPDFPage,
+    pixelWidth requestedWidth: Int,
+    maximumPixelHeight: Int? = nil
+) throws -> RasterizedPDFPage {
+    let bounds = page.getBoxRect(.mediaBox).standardized
+    guard bounds.width > 0, bounds.height > 0, requestedWidth > 0 else {
+        throw ProcessorError.renderFailed
+    }
+
+    let normalizedRotation = ((page.rotationAngle % 360) + 360) % 360
+    let swapsDimensions = normalizedRotation == 90 || normalizedRotation == 270
+    let logicalWidth = swapsDimensions ? bounds.height : bounds.width
+    let logicalHeight = swapsDimensions ? bounds.width : bounds.height
+    var width = CGFloat(requestedWidth)
+    var height = width * logicalHeight / logicalWidth
+    if let maximumPixelHeight, height > CGFloat(maximumPixelHeight) {
+        height = CGFloat(maximumPixelHeight)
+        width = height * logicalWidth / logicalHeight
+    }
+    let pixelWidth = max(1, Int(width.rounded()))
+    let pixelHeight = max(1, Int(height.rounded()))
+
+    guard let context = CGContext(
+        data: nil,
+        width: pixelWidth,
+        height: pixelHeight,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        throw ProcessorError.renderFailed
+    }
+    let target = CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.fill(target)
+    context.interpolationQuality = .high
+
+    // CGPDFPage.getDrawingTransform does not upscale a page when the target
+    // rectangle is larger than the PDF's point-space media box. Scale the
+    // bitmap context explicitly, then let CoreGraphics handle page rotation
+    // and box origins in the page's native coordinate space.
+    let rasterScale = min(
+        CGFloat(pixelWidth) / logicalWidth,
+        CGFloat(pixelHeight) / logicalHeight
+    )
+    context.scaleBy(x: rasterScale, y: rasterScale)
+    let pageSpaceTarget = CGRect(
+        x: 0,
+        y: 0,
+        width: CGFloat(pixelWidth) / rasterScale,
+        height: CGFloat(pixelHeight) / rasterScale
+    )
+    context.concatenate(page.getDrawingTransform(
+        .mediaBox,
+        rect: pageSpaceTarget,
+        rotate: 0,
+        preserveAspectRatio: true
+    ))
+    context.drawPDFPage(page)
+    guard let image = context.makeImage() else {
+        throw ProcessorError.renderFailed
+    }
+    return RasterizedPDFPage(image: image, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+}
+
+private func writePNGAtomically(_ image: CGImage, to outputURL: URL) throws {
+    try FileManager.default.createDirectory(
+        at: outputURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let temporaryURL = outputURL
+        .deletingLastPathComponent()
+        .appendingPathComponent(".\(outputURL.lastPathComponent).\(UUID().uuidString).tmp")
+    guard let destination = CGImageDestinationCreateWithURL(
+        temporaryURL as CFURL,
+        "public.png" as CFString,
+        1,
+        nil
+    ) else {
+        throw ProcessorError.renderFailed
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else {
+        try? FileManager.default.removeItem(at: temporaryURL)
+        throw ProcessorError.renderFailed
+    }
+    do {
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: temporaryURL)
+        } else {
+            try FileManager.default.moveItem(at: temporaryURL, to: outputURL)
+        }
+    } catch {
+        try? FileManager.default.removeItem(at: temporaryURL)
+        throw error
+    }
+}
+
 private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionResult {
-    guard let document = PDFDocument(url: URL(fileURLWithPath: inputPath)) else {
+    let inputURL = URL(fileURLWithPath: inputPath)
+    guard let document = PDFDocument(url: inputURL),
+          let renderingDocument = CGPDFDocument(inputURL as CFURL) else {
         throw ProcessorError.unreadableImage
     }
     var pages: [TextbookExtractedPage] = []
@@ -244,13 +366,23 @@ private func extractTextbookPDF(inputPath: String) throws -> TextbookExtractionR
             emitTextbookProgress(currentPage: index + 1, totalPages: maximumPages, pdfTextPages: textPageCount, ocrPages: ocrPageCount, failedPages: failedPageCount, phase: "pdf_text")
             continue
         }
-        let bounds = page.bounds(for: .mediaBox)
-        let thumbnail = page.thumbnail(
-            of: NSSize(width: min(2400, bounds.width * 2), height: min(3200, bounds.height * 2)),
-            for: .mediaBox
-        )
-        var proposed = NSRect(origin: .zero, size: thumbnail.size)
-        guard let image = thumbnail.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
+        guard let renderingPage = renderingDocument.page(at: index + 1) else {
+            appendFailedPage(pageNumber: index + 1, reason: "无法渲染")
+            continue
+        }
+        let bounds = renderingPage.getBoxRect(.mediaBox).standardized
+        let normalizedRotation = ((renderingPage.rotationAngle % 360) + 360) % 360
+        let logicalWidth = normalizedRotation == 90 || normalizedRotation == 270
+            ? bounds.height
+            : bounds.width
+        let image: CGImage
+        do {
+            image = try rasterizePDFPage(
+                renderingPage,
+                pixelWidth: min(2400, max(600, Int((logicalWidth * 2).rounded()))),
+                maximumPixelHeight: 3200
+            ).image
+        } catch {
             appendFailedPage(pageNumber: index + 1, reason: "无法渲染")
             continue
         }
@@ -302,32 +434,21 @@ private func renderPDFPage(
     pageNumber: Int,
     pixelWidth: Int
 ) throws -> PDFPagePreview {
-    guard let document = PDFDocument(url: URL(fileURLWithPath: inputPath)) else {
+    guard let document = CGPDFDocument(URL(fileURLWithPath: inputPath) as CFURL) else {
         throw ProcessorError.unreadableImage
     }
-    guard pageNumber > 0, pageNumber <= document.pageCount,
-          let page = document.page(at: pageNumber - 1), pixelWidth >= 600, pixelWidth <= 2400 else {
+    guard pageNumber > 0, pageNumber <= document.numberOfPages,
+          let page = document.page(at: pageNumber), pixelWidth >= 600, pixelWidth <= 2400 else {
         throw ProcessorError.invalidArguments
     }
-    let bounds = page.bounds(for: .mediaBox)
-    guard bounds.width > 0, bounds.height > 0 else {
-        throw ProcessorError.renderFailed
-    }
-    let width = CGFloat(pixelWidth)
-    let height = width * bounds.height / bounds.width
-    let image = page.thumbnail(of: NSSize(width: width, height: height), for: .mediaBox)
-    guard let tiff = image.tiffRepresentation,
-          let bitmap = NSBitmapImageRep(data: tiff),
-          let png = bitmap.representation(using: .png, properties: [:]) else {
-        throw ProcessorError.renderFailed
-    }
+    let rendered = try rasterizePDFPage(page, pixelWidth: pixelWidth)
     let outputURL = URL(fileURLWithPath: outputPath)
-    try FileManager.default.createDirectory(
-        at: outputURL.deletingLastPathComponent(),
-        withIntermediateDirectories: true
+    try writePNGAtomically(rendered.image, to: outputURL)
+    return PDFPagePreview(
+        path: outputPath,
+        pixelWidth: rendered.pixelWidth,
+        pixelHeight: rendered.pixelHeight
     )
-    try png.write(to: outputURL, options: .atomic)
-    return PDFPagePreview(path: outputPath, pixelWidth: Int(width), pixelHeight: Int(height.rounded()))
 }
 
 private func extractTextbookImage(inputPath: String) throws -> TextbookExtractionResult {
@@ -375,7 +496,7 @@ private enum ProcessorError: LocalizedError {
     }
 }
 
-private func cameraOrientation(deviceLabel: String) throws -> CameraOrientationResult {
+private func cameraDevice(deviceLabel: String) throws -> AVCaptureDevice {
     let discovery = AVCaptureDevice.DiscoverySession(
         deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
         mediaType: .video,
@@ -389,27 +510,53 @@ private func cameraOrientation(deviceLabel: String) throws -> CameraOrientationR
     }) else {
         throw ProcessorError.cameraNotFound
     }
+    return device
+}
 
-    if #available(macOS 14.0, *) {
-        let coordinator = AVCaptureDevice.RotationCoordinator(
-            device: device,
-            previewLayer: nil
-        )
-        return CameraOrientationResult(
+private final class OrientationEventEmitter {
+    private let device: AVCaptureDevice
+    private var lastAngle: Double?
+
+    init(device: AVCaptureDevice) {
+        self.device = device
+    }
+
+    func emit(angle: Double) {
+        if let lastAngle, abs(lastAngle - angle) < 0.1 { return }
+        lastAngle = angle
+        let update = CameraOrientationUpdate(
             deviceName: device.localizedName,
             isContinuityCamera: device.deviceType == .continuityCamera
                 || device.localizedName.localizedCaseInsensitiveContains("iPhone"),
-            previewRotationAngle: coordinator.videoRotationAngleForHorizonLevelPreview,
-            captureRotationAngle: coordinator.videoRotationAngleForHorizonLevelCapture
+            rotationAngle: angle
         )
+        guard let data = try? JSONEncoder().encode(update) else { return }
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
     }
+}
 
-    return CameraOrientationResult(
-        deviceName: device.localizedName,
-        isContinuityCamera: false,
-        previewRotationAngle: 0,
-        captureRotationAngle: 0
+private func watchCameraOrientation(deviceLabel: String) throws {
+    let device = try cameraDevice(deviceLabel: deviceLabel)
+    let emitter = OrientationEventEmitter(device: device)
+    guard #available(macOS 14.0, *) else {
+        emitter.emit(angle: 0)
+        RunLoop.main.run()
+        return
+    }
+    let coordinator = AVCaptureDevice.RotationCoordinator(
+        device: device,
+        previewLayer: nil
     )
+    let observation = coordinator.observe(
+        \.videoRotationAngleForHorizonLevelCapture,
+        options: [.initial, .new]
+    ) { coordinator, _ in
+        emitter.emit(angle: Double(coordinator.videoRotationAngleForHorizonLevelCapture))
+    }
+    withExtendedLifetime(observation) {
+        RunLoop.main.run()
+    }
 }
 
 private final class DocumentProcessor {
@@ -468,6 +615,7 @@ private final class DocumentProcessor {
         mode: String,
         beforeOutputPath: String? = nil
     ) throws -> ProcessResult {
+        emitDocumentProgress(stage: "starting")
         let inputURL = URL(fileURLWithPath: inputPath)
         let outputURL = URL(fileURLWithPath: outputPath)
         guard var image = CIImage(contentsOf: inputURL, options: [.applyOrientationProperty: true]) else {
@@ -478,7 +626,9 @@ private final class DocumentProcessor {
         var corners: [String: Point] = fullPageCorners()
         var pageDetected = false
 
+        emitDocumentProgress(stage: "detecting_page")
         if let document = detectDocument(in: image) {
+            emitDocumentProgress(stage: "correcting_page")
             let corrected = perspectiveCorrect(image, using: document)
             if isPlausiblePage(corrected) {
                 corners = normalizedCorners(document)
@@ -497,17 +647,26 @@ private final class DocumentProcessor {
         let recognitionImage = prepareForTextRecognition(image)
         let enhanced = enhance(image, mode: mode)
         try render(enhanced, to: outputURL)
+        let extent = enhanced.extent.integral
+        emitDocumentProgress(
+            stage: "corrected_ready",
+            correctedPath: outputPath,
+            width: Int(extent.width),
+            height: Int(extent.height)
+        )
 
+        emitDocumentProgress(stage: "recognizing_text")
         let lines = recognizeText(in: recognitionImage)
         if lines.isEmpty {
             warnings.append("没有识别到文字，请手动添加题目块")
         }
+        emitDocumentProgress(stage: "generating_blocks")
         let blocks = generateProblemBlocks(from: lines)
         if blocks.count == 1 && !lines.isEmpty {
             warnings.append("未识别到明确题号，已按版面生成一个候选块")
         }
 
-        let extent = enhanced.extent.integral
+        emitDocumentProgress(stage: "completed")
         return ProcessResult(
             correctedPath: outputPath,
             width: Int(extent.width),
@@ -519,6 +678,18 @@ private final class DocumentProcessor {
             enhancementMode: mode,
             warnings: warnings
         )
+    }
+
+    func warmUp() throws {
+        let image = CIImage(color: CIColor(red: 1, green: 1, blue: 1))
+            .cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.automaticallyDetectsLanguage = false
+        request.recognitionLanguages = ["zh-Hans"]
+        request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.004
+        try VNImageRequestHandler(ciImage: image, options: [:]).perform([request])
     }
 
     func crop(
@@ -1200,9 +1371,6 @@ private final class DocumentProcessor {
 @main
 private enum AxiomVisionCLI {
     static func main() {
-        // PDFKit may initialize AppKit even for a command-line process. Keep
-        // the helper out of the Dock and prohibit it from creating UI.
-        _ = NSApplication.shared.setActivationPolicy(.prohibited)
         do {
             let arguments = CommandLine.arguments
             guard arguments.count >= 2 else {
@@ -1218,6 +1386,15 @@ private enum AxiomVisionCLI {
 
             let resultData: Data
             switch arguments[1] {
+            case "watch-camera-orientation":
+                guard let deviceLabel = value(after: "--device-label") else {
+                    throw ProcessorError.invalidArguments
+                }
+                try watchCameraOrientation(deviceLabel: deviceLabel)
+                return
+            case "warm-up":
+                try DocumentProcessor().warmUp()
+                resultData = try JSONEncoder().encode(["ready": true])
             case "render-pdf-page":
                 guard
                     let input = value(after: "--input"),
@@ -1264,13 +1441,6 @@ private enum AxiomVisionCLI {
                         mode: mode,
                         beforeOutputPath: value(after: "--before-output")
                     )
-                )
-            case "camera-orientation":
-                guard let deviceLabel = value(after: "--device-label") else {
-                    throw ProcessorError.invalidArguments
-                }
-                resultData = try JSONEncoder().encode(
-                    cameraOrientation(deviceLabel: deviceLabel)
                 )
             case "crop":
                 guard

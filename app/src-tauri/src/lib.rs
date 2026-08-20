@@ -343,7 +343,7 @@ pub fn run() {
         log::LevelFilter::Info
     };
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -371,6 +371,7 @@ pub fn run() {
             // 阶段（早于前端 Database.load）执行，见 db.rs 说明。
             tauri_plugin_sql::Builder::default().build(),
         )
+        .manage(commands::CameraOrientationWatcher::default())
         .invoke_handler(tauri::generate_handler![
             commands::platform_capabilities,
             commands::import_image,
@@ -381,7 +382,9 @@ pub fn run() {
             commands::promote_textbook_source,
             commands::remove_textbook_source,
             commands::persist_camera_frame,
-            commands::camera_orientation,
+            commands::start_camera_orientation_watch,
+            commands::stop_camera_orientation_watch,
+            commands::warm_up_document_processor,
             commands::process_document,
             commands::crop_problem_image,
             commands::crop_problem_diagram,
@@ -497,6 +500,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            app_handle
+                .state::<commands::CameraOrientationWatcher>()
+                .stop();
+        }
+    });
 }

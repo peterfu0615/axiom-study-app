@@ -137,11 +137,11 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     if (!document) return undefined
     let cancelled = false
     setPagePreview(null)
-    void renderPracticePdfPage(document.filePath, currentPage)
+    void renderPracticePdfPage(document.filePath, currentPage, practiceSet.id)
       .then((preview) => { if (!cancelled) setPagePreview(preview) })
       .catch((reason) => { if (!cancelled) setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) }) })
     return () => { cancelled = true }
-  }, [currentPage, document])
+  }, [currentPage, document, practiceSet.id])
 
   const ensureDocument = useCallback(async () => {
     if (document) return document

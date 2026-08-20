@@ -235,18 +235,22 @@ pub async fn persist_ai_provider_profiles(
     state: State<'_, crate::db::DbState>,
     profiles: Vec<PersistedAIProviderProfile>,
 ) -> Result<Vec<AIProviderSaveStatus>, String> {
-    if profiles.is_empty() {
-        return Err("请至少保留一个 Provider".to_string());
-    }
+    let mut guard = state.connection.lock().await;
+    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
+    persist_ai_provider_profiles_in_connection(conn, &profiles).await
+}
+
+async fn persist_ai_provider_profiles_in_connection(
+    conn: &mut sqlx::SqliteConnection,
+    profiles: &[PersistedAIProviderProfile],
+) -> Result<Vec<AIProviderSaveStatus>, String> {
     let mut ids = std::collections::HashSet::new();
-    for profile in &profiles {
+    for profile in profiles {
         provider_profile_error(profile)?;
         if !ids.insert(profile.id.trim().to_string()) {
             return Err("Provider ID 不能重复".to_string());
         }
     }
-    let mut guard = state.connection.lock().await;
-    let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
     conn.execute("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("无法开始 Provider 保存事务：{error}"))?;
@@ -255,7 +259,7 @@ pub async fn persist_ai_provider_profiles(
             .fetch_all(&mut *conn)
             .await
             .map_err(|error| format!("读取已有 Provider 失败：{error}"))?;
-        for profile in &profiles {
+        for profile in profiles {
             upsert_ai_provider_profile(conn, profile).await?;
         }
         for row in existing_ids {
@@ -271,7 +275,7 @@ pub async fn persist_ai_provider_profiles(
             }
         }
         let statuses = read_ai_provider_save_statuses(conn).await?;
-        validate_provider_save_statuses(&profiles, &statuses)?;
+        validate_provider_save_statuses(profiles, &statuses)?;
         Ok::<_, String>(statuses)
     }
     .await;
@@ -1177,8 +1181,9 @@ mod tests {
     use super::{
         antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
         http_ai_error, is_vision_unsupported, load_provider_api_key_from_connection,
-        provider_error_message, read_ai_provider_save_statuses, run_command_with_file_capture,
-        upsert_ai_provider_profile, validate_provider_save_statuses, PersistedAIProviderProfile,
+        persist_ai_provider_profiles_in_connection, provider_error_message,
+        read_ai_provider_save_statuses, run_command_with_file_capture, upsert_ai_provider_profile,
+        validate_provider_save_statuses, PersistedAIProviderProfile,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::{
@@ -1358,6 +1363,54 @@ mod tests {
                 .await
                 .unwrap_err()
                 .contains("找不到"));
+        });
+    }
+
+    #[test]
+    fn saving_an_empty_provider_list_deletes_the_last_mock_transactionally() {
+        tauri::async_runtime::block_on(async {
+            let mut conn = sqlx::SqliteConnection::connect(":memory:").await.unwrap();
+            conn.execute(
+                "CREATE TABLE ai_provider_profiles (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   provider TEXT NOT NULL,
+                   base_url TEXT NOT NULL,
+                   api_key TEXT NOT NULL DEFAULT '',
+                   credential_ref TEXT NOT NULL DEFAULT '',
+                   command_path TEXT NOT NULL DEFAULT '',
+                   model TEXT NOT NULL,
+                   supports_vision INTEGER NOT NULL,
+                   supports_text INTEGER NOT NULL,
+                   enabled INTEGER NOT NULL,
+                   sort_order INTEGER NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 )",
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO ai_provider_profiles (
+                   id, name, provider, base_url, model, supports_vision,
+                   supports_text, enabled, sort_order, created_at, updated_at
+                 ) VALUES (
+                   'mock-default', 'Mock Provider', 'mock', '', 'mock-vision-v1',
+                   1, 1, 1, 0, 1, 1
+                 )",
+            )
+            .await
+            .unwrap();
+
+            let statuses = persist_ai_provider_profiles_in_connection(&mut conn, &[])
+                .await
+                .expect("empty configuration should be valid");
+            assert!(statuses.is_empty());
+            let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ai_provider_profiles")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(remaining, 0);
         });
     }
 

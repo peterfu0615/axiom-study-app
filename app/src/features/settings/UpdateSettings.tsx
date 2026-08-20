@@ -5,16 +5,19 @@ import {
   downloadAndInstallUpdate,
   getAppVersion,
   onDownloadProgress,
+  type DownloadProgress,
   type UpdateInfo,
 } from '../../platform/native'
 import { Button } from '../../components/ui'
+import {
+  formatSize,
+  type UpdateErrorPhase,
+  updateErrorTitle,
+} from './updatePresentation'
 
-/** 格式化文件大小为人类可读字符串。 */
-function formatSize(bytes: number): string {
+function formatDownloadedSize(bytes: number): string {
   if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+  return formatSize(bytes)
 }
 
 /** 格式化 ISO 8601 日期为本地可读日期。 */
@@ -36,8 +39,13 @@ export function UpdateSettings() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [checking, setChecking] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [progress, setProgress] = useState<DownloadProgress>({
+    downloaded: 0,
+    total: null,
+    percent: null,
+  })
   const [error, setError] = useState<string | null>(null)
+  const [errorPhase, setErrorPhase] = useState<UpdateErrorPhase | null>(null)
   const [hasChecked, setHasChecked] = useState(false)
   const unlistenRef = useRef<(() => void) | null>(null)
 
@@ -58,6 +66,7 @@ export function UpdateSettings() {
   const handleCheck = async () => {
     setChecking(true)
     setError(null)
+    setErrorPhase(null)
     setUpdateInfo(null)
     setHasChecked(false)
     try {
@@ -67,6 +76,7 @@ export function UpdateSettings() {
     } catch (e) {
       console.error('检查更新失败', e)
       setError('暂时无法连接更新服务，请稍后重试。')
+      setErrorPhase('check')
       setHasChecked(true)
     } finally {
       setChecking(false)
@@ -77,15 +87,15 @@ export function UpdateSettings() {
     if (!updateInfo) return
     setDownloading(true)
     setError(null)
-    setProgress(0)
-
-    // 设置进度监听
-    unlistenRef.current?.()
-    unlistenRef.current = await onDownloadProgress((p) => {
-      setProgress(p.percent)
-    })
+    setErrorPhase(null)
+    setProgress({ downloaded: 0, total: null, percent: null })
 
     try {
+      // 设置进度监听。监听失败也必须进入同一安装错误路径，并清理旧监听。
+      unlistenRef.current?.()
+      unlistenRef.current = await onDownloadProgress((p) => {
+        setProgress(p)
+      })
       await downloadAndInstallUpdate(
         updateInfo.downloadUrl,
         updateInfo.sha256Url,
@@ -95,7 +105,9 @@ export function UpdateSettings() {
     } catch (e) {
       console.error('安装更新失败', e)
       setError('更新未能完成，请稍后重试。')
+      setErrorPhase('install')
       setDownloading(false)
+    } finally {
       unlistenRef.current?.()
       unlistenRef.current = null
     }
@@ -139,7 +151,7 @@ export function UpdateSettings() {
 
       {error && (
         <div className="update-error">
-          <strong>检查更新失败</strong>
+          <strong>{updateErrorTitle(errorPhase ?? 'check')}</strong>
           <p>{error}</p>
           <p className="update-hint">
             请稍后重试；更新服务不可用时不会影响本地数据。
@@ -165,12 +177,18 @@ export function UpdateSettings() {
       {downloading && (
         <div className="update-progress-section">
           <p className="update-progress-label">
-            正在下载更新… {progress.toFixed(0)}%
+            {progress.percent == null
+              ? `正在下载更新… 已下载 ${formatDownloadedSize(progress.downloaded)}`
+              : `正在下载更新… ${progress.percent.toFixed(0)}%`}
           </p>
           <div className="update-progress-bar">
             <div
-              className="update-progress-fill"
-              style={{ width: `${progress}%` }}
+              className={`update-progress-fill${progress.percent == null ? ' update-progress-fill--indeterminate' : ''}`}
+              style={
+                progress.percent == null
+                  ? undefined
+                  : { width: `${Math.min(100, Math.max(0, progress.percent))}%` }
+              }
             />
           </div>
           <p className="update-hint">

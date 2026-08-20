@@ -80,45 +80,61 @@ fn build_vision_helper() {
 
     fs::create_dir_all(&binaries).expect("failed to create native binary directory");
 
-    let status = Command::new("xcrun")
-        .args([
-            "swiftc",
-            source.to_str().unwrap(),
-            "-o",
-            temporary_output.to_str().unwrap(),
-            "-parse-as-library",
-            "-O",
-            "-framework",
-            "Vision",
-            "-framework",
-            "CoreImage",
-            "-framework",
-            "ImageIO",
-            "-framework",
-            "AVFoundation",
-            "-framework",
-            "PDFKit",
-        ])
-        .status()
-        .expect("failed to invoke swiftc for the Vision helper");
+    let build_script = manifest_dir.join("build.rs");
+    if vision_helper_needs_rebuild(&output, &[&source, &build_script]) {
+        let status = Command::new("xcrun")
+            .args([
+                "swiftc",
+                source.to_str().unwrap(),
+                "-o",
+                temporary_output.to_str().unwrap(),
+                "-parse-as-library",
+                "-O",
+                "-framework",
+                "Vision",
+                "-framework",
+                "CoreImage",
+                "-framework",
+                "ImageIO",
+                "-framework",
+                "AVFoundation",
+                "-framework",
+                "PDFKit",
+            ])
+            .status()
+            .expect("failed to invoke swiftc for the Vision helper");
 
-    assert!(status.success(), "failed to compile the Vision helper");
+        assert!(status.success(), "failed to compile the Vision helper");
+        fs::copy(&temporary_output, &output).expect("failed to update native helper");
+    } else {
+        // Debug commands execute from Cargo's OUT_DIR while packaged builds
+        // consume the stable externalBin. Keep both paths byte-identical
+        // without touching the watched externalBin on every Cargo rebuild.
+        fs::copy(&output, &temporary_output).expect("failed to stage native helper for debug");
+    }
+    // Both Tauri's externalBin source and Cargo's debug helper must retain an
+    // executable mode after a fresh checkout or copy.
+    for helper in [&output, &temporary_output] {
+        let metadata = fs::metadata(helper).expect("failed to inspect native helper");
+        if metadata.permissions().mode() & 0o111 == 0 {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(helper, permissions)
+                .expect("failed to mark native helper executable");
+        }
+    }
+}
 
-    let compiled = fs::read(&temporary_output).expect("failed to read native helper");
-    let unchanged = fs::read(&output)
-        .map(|current| current == compiled)
-        .unwrap_or(false);
-    if !unchanged {
-        fs::write(&output, compiled).expect("failed to update native helper");
-    }
-    // Tauri externalBin only preserves an executable sidecar when the generated
-    // source file itself is executable. A fresh checkout has no ignored binary,
-    // so fs::write would otherwise create it as 0644 and every native workflow
-    // would fail with EACCES in the installed app.
-    let metadata = fs::metadata(&output).expect("failed to inspect native helper");
-    if metadata.permissions().mode() & 0o111 == 0 {
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&output, permissions).expect("failed to mark native helper executable");
-    }
+#[cfg(target_os = "macos")]
+fn vision_helper_needs_rebuild(output: &std::path::Path, inputs: &[&std::path::Path]) -> bool {
+    let Ok(output_modified) = std::fs::metadata(output).and_then(|metadata| metadata.modified())
+    else {
+        return true;
+    };
+    inputs.iter().any(|input| {
+        std::fs::metadata(input)
+            .and_then(|metadata| metadata.modified())
+            .map(|modified| modified > output_modified)
+            .unwrap_or(true)
+    })
 }

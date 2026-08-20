@@ -1,5 +1,5 @@
 import { Icon } from './Icon'
-import axiomWordmark from '../../../icons/axiom_text.png'
+import axiomWordmark from '../../src-tauri/icons/source/axiom-wordmark.png'
 
 export type AppSection =
   | 'today'
@@ -34,7 +34,7 @@ export function Sidebar({
       <div className="brand">
         <img
           alt="Axiom"
-          className="brand-wordmark"
+          className="brand-icon"
           src={axiomWordmark}
         />
       </div>

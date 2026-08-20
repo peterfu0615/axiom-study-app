@@ -1,7 +1,8 @@
 import { Channel, convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
-  CameraOrientationInfo,
+  CameraOrientationUpdate,
+  DocumentProcessingProgress,
   DocumentProcessingResult,
   NativeCapabilities,
   NormalizedRect,
@@ -81,9 +82,42 @@ export async function getNativeCapabilities(): Promise<NativeCapabilities | null
   return invoke<NativeCapabilities>('platform_capabilities')
 }
 
-export async function getCameraOrientation(deviceLabel: string) {
-  if (!isDesktopRuntime()) return null
-  return invoke<CameraOrientationInfo>('camera_orientation', { deviceLabel })
+export type DocumentProcessingProgressListener = (
+  progress: DocumentProcessingProgress,
+) => void
+
+export async function startCameraOrientationWatch(
+  deviceLabel: string,
+  onUpdate: (update: CameraOrientationUpdate) => void,
+): Promise<UnlistenFn> {
+  if (!isDesktopRuntime()) return () => undefined
+  const watchId = crypto.randomUUID()
+  const unlisten = await listen<CameraOrientationUpdate>(
+    'camera://orientation',
+    (event) => {
+      if (event.payload.watchId === watchId) onUpdate(event.payload)
+    },
+  )
+  try {
+    await invoke<void>('start_camera_orientation_watch', {
+      deviceLabel,
+      watchId,
+    })
+  } catch (error) {
+    unlisten()
+    throw error
+  }
+  return () => {
+    unlisten()
+    void invoke<void>('stop_camera_orientation_watch', { watchId }).catch(
+      () => undefined,
+    )
+  }
+}
+
+export async function warmUpDocumentProcessor(): Promise<void> {
+  if (!isDesktopRuntime()) return
+  await invoke<void>('warm_up_document_processor')
 }
 
 export async function importImage(sourcePath: string): Promise<PersistedMedia> {
@@ -137,12 +171,27 @@ export async function processDocument(
   sourceDocumentId: string,
   sourcePath: string,
   mode: 'color' | 'grayscale',
+  onProgress?: DocumentProcessingProgressListener,
 ) {
-  return invoke<DocumentProcessingResult>('process_document', {
-    sourceDocumentId,
-    sourcePath,
-    mode,
-  })
+  const unlisten = onProgress
+    ? await listen<DocumentProcessingProgress>(
+        'document-processing-progress',
+        (event) => {
+          if (event.payload.sourceDocumentId === sourceDocumentId) {
+            onProgress(event.payload)
+          }
+        },
+      )
+    : null
+  try {
+    return await invoke<DocumentProcessingResult>('process_document', {
+      sourceDocumentId,
+      sourcePath,
+      mode,
+    })
+  } finally {
+    unlisten?.()
+  }
 }
 
 export async function cropProblemImage(
@@ -238,8 +287,12 @@ export interface PracticePdfPagePreview {
   pixelHeight: number
 }
 
-export function renderPracticePdfPage(path: string, pageNumber: number) {
-  return invoke<PracticePdfPagePreview>('render_practice_pdf_page', { path, pageNumber })
+export function renderPracticePdfPage(path: string, pageNumber: number, practiceSetId?: string) {
+  return invoke<PracticePdfPagePreview>('render_practice_pdf_page', {
+    path,
+    pageNumber,
+    practiceSetId,
+  })
 }
 
 export function practicePdfExists(path: string) {
@@ -488,8 +541,8 @@ export interface UpdateInfo {
   publishedAt: string
   /** `.app.zip` 下载 URL */
   downloadUrl: string
-  /** 下载文件大小（字节） */
-  downloadSize: number
+  /** 下载文件大小（字节）；无法从远端元数据确定时为 null */
+  downloadSize: number | null
   /** `.sha256` 校验文件 URL（可能为空） */
   sha256Url: string | null
 }
@@ -497,8 +550,8 @@ export interface UpdateInfo {
 /** 下载进度事件 payload。 */
 export interface DownloadProgress {
   downloaded: number
-  total: number
-  percent: number
+  total: number | null
+  percent: number | null
 }
 
 /** 获取当前应用版本号。 */

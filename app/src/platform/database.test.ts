@@ -8,14 +8,17 @@ import {
   cancelProblemAI,
   extractReferencedMediaPaths,
   isSameDatabasePath,
+  listAIProviderProfiles,
   parseJSON,
   parseNullableSQLiteBoolean,
   parseSQLiteBoolean,
   recordProcessingModelRunOutput,
   recoverProblemAITasks,
+  saveAIProviderProfiles,
   scanOrphanedMedia,
   deleteOrphanedMedia,
 } from './database'
+import { persistAIProviderProfiles } from './native'
 
 // Fake single-connection database used by recordProcessingModelRunOutput tests.
 // The real app funnels every statement through db_execute / db_select, so a
@@ -197,6 +200,24 @@ describe('assertAIProviderKeySaveStatuses', () => {
       [{ id: 'gemini', name: 'Gemini 3.6 Flash High', apiKey: '' }],
       [{ id: 'gemini', hasApiKey: false }],
     )).not.toThrow()
+  })
+})
+
+describe('empty AI Provider configuration', () => {
+  it('saves and reloads an empty desktop configuration without restoring Mock', async () => {
+    fakeDb.reset()
+    fakeDb.selectHandlers.push({
+      match: (sql) => sql.includes('FROM ai_provider_profiles'),
+      rows: () => [],
+    })
+    const persist = vi.mocked(persistAIProviderProfiles)
+    persist.mockClear()
+    persist.mockResolvedValueOnce([])
+
+    await expect(listAIProviderProfiles()).resolves.toEqual([])
+    await expect(saveAIProviderProfiles([])).resolves.toEqual([])
+    expect(persist).toHaveBeenCalledWith([])
+    await expect(listAIProviderProfiles()).resolves.toEqual([])
   })
 })
 

@@ -38,11 +38,29 @@ export interface CameraDevice {
   label: string
 }
 
-export interface CameraOrientationInfo {
+export interface CameraOrientationUpdate {
+  watchId: string
   deviceName: string
   isContinuityCamera: boolean
-  previewRotationAngle: number
-  captureRotationAngle: number
+  rotationAngle: number
+}
+
+export type DocumentProcessingStage =
+  | 'starting'
+  | 'detecting_page'
+  | 'correcting_page'
+  | 'corrected_ready'
+  | 'recognizing_text'
+  | 'generating_blocks'
+  | 'completed'
+  | 'failed'
+
+export interface DocumentProcessingProgress {
+  sourceDocumentId: string
+  stage: DocumentProcessingStage
+  correctedPath?: string
+  width?: number
+  height?: number
 }
 
 export interface NormalizedRect {

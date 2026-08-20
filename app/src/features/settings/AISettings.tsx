@@ -304,16 +304,14 @@ export function AISettings() {
                         </p>
                       </div>
                       <div className="provider-detail-actions">
-                        {selectedProfile.provider !== 'mock' && (
-                          <button
-                            className="secondary-action"
-                            disabled={saving}
-                            onClick={() => removeProvider(selectedProfile.id)}
-                            type="button"
-                          >
-                            移除
-                          </button>
-                        )}
+                        <button
+                          className="secondary-action"
+                          disabled={saving}
+                          onClick={() => removeProvider(selectedProfile.id)}
+                          type="button"
+                        >
+                          移除
+                        </button>
                       </div>
                     </header>
 
@@ -554,7 +552,7 @@ export function AISettings() {
               <span className={message?.tone === 'error' ? 'is-error' : ''} role={message?.tone === 'error' ? 'alert' : 'status'}>{message?.text}</span>
               <button
                 className="primary-button"
-                disabled={loading || saving || profiles.length === 0}
+                disabled={loading || saving}
                 onClick={() => void save()}
                 type="button"
               >
