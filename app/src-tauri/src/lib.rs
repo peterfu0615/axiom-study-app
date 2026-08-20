@@ -363,6 +363,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0053_problem_library_enhancements.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 54,
+            description: "model_run_usage_cost",
+            sql: include_str!("../migrations/0054_model_run_usage_cost.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

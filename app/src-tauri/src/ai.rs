@@ -77,6 +77,10 @@ pub struct PersistedAIProviderProfile {
     credential_ref: String,
     command_path: String,
     model: String,
+    #[serde(default)]
+    input_cost_per_million_usd: Option<f64>,
+    #[serde(default)]
+    output_cost_per_million_usd: Option<f64>,
     supports_vision: bool,
     supports_text: bool,
     #[serde(default)]
@@ -139,6 +143,17 @@ fn provider_profile_error(profile: &PersistedAIProviderProfile) -> Result<(), St
     {
         return Err(format!("“{}”启用前请填写 CLI 路径和 Model", profile.name));
     }
+    for price in [
+        profile.input_cost_per_million_usd,
+        profile.output_cost_per_million_usd,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !price.is_finite() || price < 0.0 {
+            return Err(format!("“{}”的 Token 单价必须是非负数字", profile.name));
+        }
+    }
     let mut task_types = std::collections::HashSet::new();
     for task_type in &profile.task_types {
         if !AI_PROVIDER_TASK_TYPES.contains(&task_type.as_str()) {
@@ -160,8 +175,9 @@ async fn upsert_ai_provider_profile(
     sqlx::query(
         "INSERT INTO ai_provider_profiles (
            id, name, provider, base_url, api_key, credential_ref, command_path, model,
+           input_cost_per_million_usd, output_cost_per_million_usd,
            supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            provider = excluded.provider,
@@ -177,6 +193,8 @@ async fn upsert_ai_provider_profile(
            END,
            command_path = excluded.command_path,
            model = excluded.model,
+           input_cost_per_million_usd = excluded.input_cost_per_million_usd,
+           output_cost_per_million_usd = excluded.output_cost_per_million_usd,
            supports_vision = excluded.supports_vision,
            supports_text = excluded.supports_text,
            task_types_json = excluded.task_types_json,
@@ -192,6 +210,8 @@ async fn upsert_ai_provider_profile(
     .bind(profile.credential_ref.trim())
     .bind(profile.command_path.trim())
     .bind(profile.model.trim())
+    .bind(profile.input_cost_per_million_usd)
+    .bind(profile.output_cost_per_million_usd)
     .bind(profile.supports_vision)
     .bind(profile.supports_text)
     .bind(task_types_json)
@@ -668,6 +688,32 @@ fn provider_error_message(body: &str) -> String {
     body.trim().chars().take(1200).collect()
 }
 
+fn normalized_ai_usage(value: &Value) -> Option<Value> {
+    let usage = value.get("usage")?;
+    let token = |primary: &str, fallback: &str| {
+        usage
+            .get(primary)
+            .or_else(|| usage.get(fallback))
+            .and_then(Value::as_i64)
+            .filter(|value| *value >= 0)
+    };
+    let prompt_tokens = token("prompt_tokens", "input_tokens");
+    let completion_tokens = token("completion_tokens", "output_tokens");
+    let total_tokens = token("total_tokens", "total_token_count").or_else(|| {
+        prompt_tokens
+            .zip(completion_tokens)
+            .map(|(input, output)| input + output)
+    });
+    if prompt_tokens.is_none() && completion_tokens.is_none() && total_tokens.is_none() {
+        return None;
+    }
+    Some(json!({
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": total_tokens,
+    }))
+}
+
 fn is_vision_unsupported(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     [
@@ -919,6 +965,7 @@ pub async fn analyze_problem_with_openai_compatible(
         let mut buffer = String::new();
         let mut stream = response.bytes_stream();
         let mut total_bytes: usize = 0;
+        let mut usage: Option<Value> = None;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|error| format!("读取 SSE 流失败：{error}"))?;
@@ -944,6 +991,9 @@ pub async fn analyze_problem_with_openai_compatible(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
+                if let Some(chunk_usage) = normalized_ai_usage(&chunk_json) {
+                    usage = Some(chunk_usage);
+                }
                 let delta = chunk_json
                     .pointer("/choices/0/delta/content")
                     .and_then(Value::as_str)
@@ -969,7 +1019,8 @@ pub async fn analyze_problem_with_openai_compatible(
         }
         return Ok(json!({
             "rawOutput": accumulated,
-            "errorMessage": null
+            "errorMessage": null,
+            "usage": usage
         }));
     }
 
@@ -1027,6 +1078,7 @@ pub async fn analyze_problem_with_openai_compatible(
             }));
         }
     };
+    let usage = normalized_ai_usage(&response_json);
     if is_vision_unsupported(&content) {
         return Ok(json!({
             "rawOutput": content,
@@ -1036,7 +1088,8 @@ pub async fn analyze_problem_with_openai_compatible(
     }
     Ok(json!({
         "rawOutput": content,
-        "errorMessage": null
+        "errorMessage": null,
+        "usage": usage
     }))
 }
 
@@ -1212,7 +1265,7 @@ mod tests {
     use super::{
         antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
         http_ai_error, is_vision_unsupported, load_provider_api_key_from_connection,
-        persist_ai_provider_profiles_in_connection, provider_error_message,
+        normalized_ai_usage, persist_ai_provider_profiles_in_connection, provider_error_message,
         read_ai_provider_save_statuses, run_command_with_file_capture, upsert_ai_provider_profile,
         validate_provider_save_statuses, PersistedAIProviderProfile,
     };
@@ -1221,6 +1274,28 @@ mod tests {
         process::Command,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn normalizes_openai_and_responses_usage_without_inventing_missing_values() {
+        let openai = normalized_ai_usage(&serde_json::json!({
+            "usage": { "prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150 }
+        }))
+        .unwrap();
+        assert_eq!(openai["promptTokens"], 120);
+        assert_eq!(openai["completionTokens"], 30);
+        assert_eq!(openai["totalTokens"], 150);
+
+        let responses = normalized_ai_usage(&serde_json::json!({
+            "usage": { "input_tokens": 9, "output_tokens": 4 }
+        }))
+        .unwrap();
+        assert_eq!(responses["totalTokens"], 13);
+        assert!(normalized_ai_usage(&serde_json::json!({ "usage": {} })).is_none());
+        assert!(normalized_ai_usage(&serde_json::json!({
+            "usage": { "total_tokens": -1 }
+        }))
+        .is_none());
+    }
 
     #[test]
     fn builds_compatible_chat_completion_endpoint() {
@@ -1411,6 +1486,8 @@ mod tests {
                    credential_ref TEXT NOT NULL DEFAULT '',
                    command_path TEXT NOT NULL DEFAULT '',
                    model TEXT NOT NULL,
+                   input_cost_per_million_usd REAL,
+                   output_cost_per_million_usd REAL,
                    supports_vision INTEGER NOT NULL,
                    supports_text INTEGER NOT NULL,
                    task_types_json TEXT NOT NULL DEFAULT '[]',
@@ -1460,6 +1537,8 @@ mod tests {
                    credential_ref TEXT NOT NULL DEFAULT '',
                    command_path TEXT NOT NULL DEFAULT '',
                    model TEXT NOT NULL,
+                   input_cost_per_million_usd REAL,
+                   output_cost_per_million_usd REAL,
                    supports_vision INTEGER NOT NULL,
                    supports_text INTEGER NOT NULL,
                    task_types_json TEXT NOT NULL DEFAULT '[]',
@@ -1480,6 +1559,8 @@ mod tests {
                 credential_ref: "legacy-a".to_string(),
                 command_path: "".to_string(),
                 model: "model-a".to_string(),
+                input_cost_per_million_usd: Some(0.15),
+                output_cost_per_million_usd: Some(0.6),
                 supports_vision: true,
                 supports_text: true,
                 task_types: vec!["problem_understanding".to_string()],

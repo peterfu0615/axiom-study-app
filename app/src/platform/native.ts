@@ -8,6 +8,7 @@ import type {
   NormalizedRect,
   PersistedMedia,
   AIProviderProfile,
+  AIUsageMetrics,
 } from '../domain/models'
 import { classifyAIError, type AIErrorEnvelope } from '../domain/aiError'
 import type { DiagramValidationContract, TikzRenderResult } from '../domain/diagram'
@@ -23,6 +24,7 @@ export interface NativeAIResponse {
   rawOutput: string
   errorMessage: string | null
   error?: AIErrorEnvelope | null
+  usage?: AIUsageMetrics | null
 }
 
 export interface AIProviderSaveStatus {

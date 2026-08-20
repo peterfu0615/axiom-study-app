@@ -81,6 +81,27 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 })
 
+function modelRunMetrics(run: ModelRun) {
+  const metrics: string[] = []
+  if (run.latencyMs != null) {
+    metrics.push(run.latencyMs >= 1000
+      ? `${(run.latencyMs / 1000).toFixed(1)} 秒`
+      : `${run.latencyMs} ms`)
+  }
+  if (run.usage?.totalTokens != null) {
+    const breakdown = run.usage.promptTokens != null && run.usage.completionTokens != null
+      ? `（输入 ${run.usage.promptTokens.toLocaleString('zh-CN')} / 输出 ${run.usage.completionTokens.toLocaleString('zh-CN')}）`
+      : ''
+    metrics.push(`${run.usage.totalTokens.toLocaleString('zh-CN')} tokens${breakdown}`)
+  }
+  if (run.estimatedCostUsd != null) {
+    metrics.push(`约 $${run.estimatedCostUsd.toFixed(6)}`)
+  } else if (run.usage?.totalTokens != null) {
+    metrics.push('成本未配置')
+  }
+  return metrics.join(' · ')
+}
+
 const aiStatusLabels: Record<ProblemAIStatus, string> = {
   not_started: 'AI 未处理',
   pending: 'AI 解析中…',
@@ -1570,6 +1591,9 @@ export function ProblemLibrary() {
                                   <small>
                                     {dateFormatter.format(run.createdAt)}
                                   </small>
+                                  {modelRunMetrics(run) && (
+                                    <small>{modelRunMetrics(run)}</small>
+                                  )}
                                 </div>
                                 <span className={run.status}>
                                   {run.status}

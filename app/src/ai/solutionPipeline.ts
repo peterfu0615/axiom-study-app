@@ -63,11 +63,16 @@ async function drainPendingSolutions() {
             activeRun.input,
             (chunk) => notifySolutionStream(run.problemId, activeRun.id, chunk.accumulated),
           )
-          await recordProcessingModelRunOutput(
-            activeRun,
-            providerResult.rawOutput,
-            providerResult.repairStrategy,
-          )
+          if (providerResult.usage) {
+            await recordProcessingModelRunOutput(
+              activeRun, providerResult.rawOutput, providerResult.repairStrategy,
+              null, providerResult.usage,
+            )
+          } else {
+            await recordProcessingModelRunOutput(
+              activeRun, providerResult.rawOutput, providerResult.repairStrategy,
+            )
+          }
           await completeSolutionModelRun(
             activeRun,
             providerResult.solution,
@@ -76,12 +81,15 @@ async function drainPendingSolutions() {
           break
         } catch (error) {
           if (error instanceof AIProviderFailure) {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              error.rawOutput,
-              error.repairStrategy,
-              String(error),
-            )
+            if (error.usage) {
+              await recordProcessingModelRunOutput(
+                activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
+              )
+            } else {
+              await recordProcessingModelRunOutput(
+                activeRun, error.rawOutput, error.repairStrategy, String(error),
+              )
+            }
           } else {
             await recordProcessingModelRunOutput(
               activeRun,

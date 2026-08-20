@@ -27,6 +27,7 @@ import type {
   AIProviderProfile,
   AIProblemAnalysis,
   AIProblemInput,
+  AIUsageMetrics,
   DocumentProcessingResult,
   GeneratedSolution,
   ExplainModelRun,
@@ -1444,6 +1445,15 @@ function rowToModelRun(row: Record<string, unknown>): ModelRun {
     status: String(row.status) as ModelRun['status'],
     errorMessage: nullableString(row.error_message),
     error: isAIErrorEnvelope(structuredError) ? structuredError : null,
+    latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
+    usage: {
+      promptTokens: row.prompt_tokens == null ? null : Number(row.prompt_tokens),
+      completionTokens: row.completion_tokens == null ? null : Number(row.completion_tokens),
+      totalTokens: row.token_usage == null ? null : Number(row.token_usage),
+    },
+    estimatedCostUsd: row.estimated_cost_usd == null
+      ? null
+      : Number(row.estimated_cost_usd),
     createdAt: Number(row.created_at),
   }
 }
@@ -2983,6 +2993,7 @@ export async function recordProcessingModelRunOutput(
   rawOutput: string,
   repairStrategy: string | null,
   errorInput: string | AIErrorEnvelope | null = null,
+  usageInput: AIUsageMetrics | null = null,
 ) {
   const db = await database()
   // 读改写必须原子：SELECT provider_attempts_json → JS 追加 → UPDATE。
@@ -2990,8 +3001,13 @@ export async function recordProcessingModelRunOutput(
   // attempt 记录被后提交者整体覆盖丢失。事务锁保证串行化。
   await inDatabaseTransaction(db, async () => {
     const rows = await db.select<Record<string, unknown>[]>(
-      'SELECT provider_attempts_json FROM model_runs WHERE id = $1 LIMIT 1',
-      [run.id],
+      `SELECT mr.provider_attempts_json,
+              profile.input_cost_per_million_usd,
+              profile.output_cost_per_million_usd
+       FROM model_runs mr
+       LEFT JOIN ai_provider_profiles profile ON profile.id = $2
+       WHERE mr.id = $1 LIMIT 1`,
+      [run.id, run.provider],
     )
     const attempts = parseJSON<Array<Record<string, unknown>>>(
       rows[0]?.provider_attempts_json,
@@ -3000,6 +3016,25 @@ export async function recordProcessingModelRunOutput(
     )
     const attemptId = crypto.randomUUID()
     const recordedAt = Date.now()
+    const nonNegativeInteger = (value: number | null | undefined) =>
+      Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null
+    const usage = usageInput == null ? null : {
+      promptTokens: nonNegativeInteger(usageInput.promptTokens),
+      completionTokens: nonNegativeInteger(usageInput.completionTokens),
+      totalTokens: nonNegativeInteger(usageInput.totalTokens),
+    }
+    const inputPrice = rows[0]?.input_cost_per_million_usd == null
+      ? null
+      : Number(rows[0].input_cost_per_million_usd)
+    const outputPrice = rows[0]?.output_cost_per_million_usd == null
+      ? null
+      : Number(rows[0].output_cost_per_million_usd)
+    const estimatedCostUsd = usage?.promptTokens != null
+      && usage.completionTokens != null
+      && inputPrice != null
+      && outputPrice != null
+      ? (usage.promptTokens * inputPrice + usage.completionTokens * outputPrice) / 1_000_000
+      : null
     const error = errorInput == null ? null : classifyAIError(errorInput, {
       providerId: run.provider,
       model: run.model,
@@ -3017,6 +3052,8 @@ export async function recordProcessingModelRunOutput(
       repairStrategy,
       errorMessage,
       error,
+      usage,
+      estimatedCostUsd,
       recordedAt,
     })
     const retainedAttempts = attempts.slice(-12)
@@ -3024,12 +3061,20 @@ export async function recordProcessingModelRunOutput(
       `UPDATE model_runs
        SET raw_output = $1,
            repair_strategy = $2,
-           provider_attempts_json = $3
-       WHERE id = $4 AND status = 'processing'`,
+           provider_attempts_json = $3,
+           prompt_tokens = CASE WHEN $4 IS NULL THEN prompt_tokens ELSE COALESCE(prompt_tokens, 0) + $4 END,
+           completion_tokens = CASE WHEN $5 IS NULL THEN completion_tokens ELSE COALESCE(completion_tokens, 0) + $5 END,
+           token_usage = CASE WHEN $6 IS NULL THEN token_usage ELSE COALESCE(token_usage, 0) + $6 END,
+           estimated_cost_usd = CASE WHEN $7 IS NULL THEN estimated_cost_usd ELSE COALESCE(estimated_cost_usd, 0) + $7 END
+       WHERE id = $8 AND status = 'processing'`,
       [
         rawOutput.slice(0, 2 * 1024 * 1024),
         repairStrategy,
         JSON.stringify(retainedAttempts),
+        usage?.promptTokens ?? null,
+        usage?.completionTokens ?? null,
+        usage?.totalTokens ?? null,
+        estimatedCostUsd,
         run.id,
       ],
     )
@@ -3039,13 +3084,16 @@ export async function recordProcessingModelRunOutput(
     await db.execute(
       `INSERT INTO provider_attempts (
         id, model_run_id, attempt_index, provider, model, status, error_code,
-        error_json, raw_output_excerpt, repair_strategy, started_at, completed_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
+        error_json, raw_output_excerpt, repair_strategy, started_at, completed_at,
+        prompt_tokens, completion_tokens, token_usage, estimated_cost_usd
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15)`,
       [
         attemptId, run.id, attempts.length, run.provider, run.model,
         error ? (error.code === 'CANCELLED' ? 'cancelled' : 'failed') : 'completed',
         error?.code ?? null, error ? JSON.stringify(error) : null,
         rawOutput.slice(0, 128 * 1024), repairStrategy, recordedAt,
+        usage?.promptTokens ?? null, usage?.completionTokens ?? null,
+        usage?.totalTokens ?? null, estimatedCostUsd,
       ],
     )
   })
@@ -3617,6 +3665,8 @@ const defaultAIProviderProfiles: AIProviderProfile[] = [{
   credentialRef: '',
   commandPath: '',
   model: 'mock-vision-v1',
+  inputCostPerMillionUsd: null,
+  outputCostPerMillionUsd: null,
   supportsVision: true,
   supportsText: true,
   taskTypes: [],
@@ -3647,6 +3697,12 @@ function rowToAIProviderProfile(
     credentialRef: String(row.credential_ref || ''),
     commandPath: String(row.command_path || ''),
     model: String(row.model || ''),
+    inputCostPerMillionUsd: row.input_cost_per_million_usd == null
+      ? null
+      : Number(row.input_cost_per_million_usd),
+    outputCostPerMillionUsd: row.output_cost_per_million_usd == null
+      ? null
+      : Number(row.output_cost_per_million_usd),
     supportsVision: parseSQLiteBoolean(row.supports_vision),
     supportsText: parseSQLiteBoolean(row.supports_text),
     taskTypes: parseJSON<AIProviderProfile['taskTypes']>(
@@ -3665,6 +3721,7 @@ export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   if (!isDesktopRuntime()) return defaultAIProviderProfiles
   const rows = await (await database()).select<Record<string, unknown>[]>(
     `SELECT id, name, provider, base_url, credential_ref, command_path, model,
+       input_cost_per_million_usd, output_cost_per_million_usd,
        supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at,
        CAST(CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS INTEGER) AS has_api_key,
        CASE
@@ -3725,6 +3782,11 @@ export async function saveAIProviderProfiles(
       (!profile.commandPath.trim() || !profile.model.trim())
     ) {
       throw new Error(`“${profile.name}”启用前请填写 CLI 路径和 Model`)
+    }
+    for (const price of [profile.inputCostPerMillionUsd, profile.outputCostPerMillionUsd]) {
+      if (price != null && (!Number.isFinite(price) || price < 0)) {
+        throw new Error(`“${profile.name}”的 Token 单价必须是非负数字`)
+      }
     }
   }
   const now = Date.now()

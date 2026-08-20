@@ -43,6 +43,8 @@ function newProvider(index: number): AIProviderProfile {
     credentialRef: '',
     commandPath: '',
     model: '',
+    inputCostPerMillionUsd: null,
+    outputCostPerMillionUsd: null,
     supportsVision: true,
     supportsText: true,
     taskTypes: [],
@@ -413,6 +415,44 @@ export function AISettings() {
                             value={selectedProfile.model}
                           />
                         </label>
+                        {selectedProfile.provider === 'openai_compatible' && (
+                          <div className="provider-pricing-fields">
+                            <label>
+                              <span>输入单价 <small>USD / 100 万 tokens</small></span>
+                              <input
+                                disabled={saving}
+                                inputMode="decimal"
+                                min="0"
+                                onChange={(event) => update(selectedProfile.id, {
+                                  inputCostPerMillionUsd: event.target.value === ''
+                                    ? null
+                                    : Number(event.target.value),
+                                })}
+                                placeholder="未配置"
+                                step="0.000001"
+                                type="number"
+                                value={selectedProfile.inputCostPerMillionUsd ?? ''}
+                              />
+                            </label>
+                            <label>
+                              <span>输出单价 <small>USD / 100 万 tokens</small></span>
+                              <input
+                                disabled={saving}
+                                inputMode="decimal"
+                                min="0"
+                                onChange={(event) => update(selectedProfile.id, {
+                                  outputCostPerMillionUsd: event.target.value === ''
+                                    ? null
+                                    : Number(event.target.value),
+                                })}
+                                placeholder="未配置"
+                                step="0.000001"
+                                type="number"
+                                value={selectedProfile.outputCostPerMillionUsd ?? ''}
+                              />
+                            </label>
+                          </div>
+                        )}
                         {selectedProfile.provider === 'openai_compatible' && (
                           <>
                             <label className="provider-api-key-field">

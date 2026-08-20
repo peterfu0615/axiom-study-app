@@ -116,7 +116,16 @@ async function drainPendingProblemAI() {
                   })
                 })()
               : await provider.analyzeProblemImage(activeRun.input)
-            await recordProcessingModelRunOutput(activeRun, providerResult.rawOutput, providerResult.repairStrategy)
+            if (providerResult.usage) {
+              await recordProcessingModelRunOutput(
+                activeRun, providerResult.rawOutput, providerResult.repairStrategy,
+                null, providerResult.usage,
+              )
+            } else {
+              await recordProcessingModelRunOutput(
+                activeRun, providerResult.rawOutput, providerResult.repairStrategy,
+              )
+            }
             completedProviderResult = providerResult
             errors.length = 0
             break
@@ -124,12 +133,17 @@ async function drainPendingProblemAI() {
             const envelope = error instanceof AIProviderFailure
               ? { ...error.error, providerId: provider.id, model: provider.model, runId: activeRun.id }
               : classifyAIError(error, { providerId: provider.id, model: provider.model, runId: activeRun.id })
-            await recordProcessingModelRunOutput(
-              activeRun,
-              error instanceof AIProviderFailure ? error.rawOutput : '',
-              error instanceof AIProviderFailure ? error.repairStrategy : null,
-              envelope,
-            )
+            const rawOutput = error instanceof AIProviderFailure ? error.rawOutput : ''
+            const repairStrategy = error instanceof AIProviderFailure ? error.repairStrategy : null
+            if (error instanceof AIProviderFailure && error.usage) {
+              await recordProcessingModelRunOutput(
+                activeRun, rawOutput, repairStrategy, envelope, error.usage,
+              )
+            } else {
+              await recordProcessingModelRunOutput(
+                activeRun, rawOutput, repairStrategy, envelope,
+              )
+            }
             errors.push(envelope)
             if (!envelope.retryable || retry === 1) break
             await new Promise((resolve) => setTimeout(resolve, retry === 0 ? 300 : 900))

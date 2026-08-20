@@ -86,9 +86,13 @@ vi.mock('@tauri-apps/api/core', () => ({
       throw new Error(`injected statement failure: ${sql.slice(0, 80)}`)
     }
     if (command === 'db_select') {
-      if (sql.includes('SELECT provider_attempts_json FROM model_runs')) {
+      if (sql.includes('provider_attempts_json') && sql.includes('FROM model_runs mr')) {
         const row = fakeDb.modelRuns.get(String(params[0]))
-        return row ? [{ provider_attempts_json: row.providerAttemptsJson }] : []
+        return row ? [{
+          provider_attempts_json: row.providerAttemptsJson,
+          input_cost_per_million_usd: 0.15,
+          output_cost_per_million_usd: 0.6,
+        }] : []
       }
       for (const handler of fakeDb.selectHandlers) {
         if (handler.match(sql)) return handler.rows()
@@ -105,10 +109,14 @@ vi.mock('@tauri-apps/api/core', () => ({
         }
       }
       if (sql.includes('UPDATE model_runs') && sql.includes('provider_attempts_json = $3')) {
-        const [rawOutput, repairStrategy, attemptsJson, runId] = params as [
+        const [rawOutput, repairStrategy, attemptsJson, , , , , runId] = params as [
           string,
           string | null,
           string,
+          number | null,
+          number | null,
+          number | null,
+          number | null,
           string,
         ]
         const row = fakeDb.modelRuns.get(runId)
@@ -563,14 +571,32 @@ describe('recordProcessingModelRunOutput', () => {
     )
     const sequence = fakeDb.statements
     expect(sequence[0]).toBe('BEGIN IMMEDIATE')
-    expect(sequence.some((sql) => sql.includes('SELECT provider_attempts_json'))).toBe(true)
+    expect(sequence.some((sql) => sql.includes('provider_attempts_json'))).toBe(true)
     expect(sequence.some((sql) => sql.includes('UPDATE model_runs'))).toBe(true)
     expect(sequence.at(-1)).toBe('COMMIT')
     // SELECT 必须先于 UPDATE，否则读改写退化为盲写
-    const selectIndex = sequence.findIndex((sql) => sql.includes('SELECT provider_attempts_json'))
+    const selectIndex = sequence.findIndex((sql) => sql.includes('provider_attempts_json'))
     const updateIndex = sequence.findIndex((sql) => sql.includes('UPDATE model_runs'))
     expect(selectIndex).toBeGreaterThan(0)
     expect(updateIndex).toBeGreaterThan(selectIndex)
+  })
+
+  it('records reported tokens and only estimates cost from configured prices', async () => {
+    seedRun()
+    await recordProcessingModelRunOutput(
+      { id: 'run-1', provider: 'priced-provider', model: 'model-a' },
+      'output',
+      null,
+      null,
+      { promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 },
+    )
+    const attempts = JSON.parse(
+      fakeDb.modelRuns.get('run-1')!.providerAttemptsJson ?? '[]',
+    ) as Array<Record<string, unknown>>
+    expect(attempts[0]).toMatchObject({
+      usage: { promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 },
+      estimatedCostUsd: 0.00045,
+    })
   })
 
   it('surfaces a conflict when the run is no longer processing', async () => {

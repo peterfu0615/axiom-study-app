@@ -318,6 +318,7 @@ export interface ExplainProviderResult {
   result: ExplainResult
   rawOutput: string
   repairStrategy: string | null
+  usage?: AIUsageMetrics | null
 }
 
 /**
@@ -403,6 +404,12 @@ export type ModelRunStatus =
   | 'failed'
   | 'cancelled'
 
+export interface AIUsageMetrics {
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+}
+
 export interface ModelRun {
   id: string
   problemId: string
@@ -416,6 +423,10 @@ export interface ModelRun {
   status: ModelRunStatus
   errorMessage: string | null
   error?: import('./aiError').AIErrorEnvelope | null
+  latencyMs?: number | null
+  usage?: AIUsageMetrics
+  /** Estimated from the provider profile's user-supplied USD pricing. */
+  estimatedCostUsd?: number | null
   createdAt: number
 }
 
@@ -595,6 +606,9 @@ export interface AIProviderProfile {
   credentialRef: string
   commandPath: string
   model: string
+  /** Optional USD prices per one million tokens; null means unconfigured. */
+  inputCostPerMillionUsd?: number | null
+  outputCostPerMillionUsd?: number | null
   supportsVision: boolean
   supportsText: boolean
   /** Empty/omitted keeps backward-compatible capability-based routing. */

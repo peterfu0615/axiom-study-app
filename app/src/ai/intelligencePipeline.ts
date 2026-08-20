@@ -76,19 +76,28 @@ async function drainPendingIntelligence() {
               activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
             }
             const result = await provider.extractStudentAttempt(activeRun.input)
-            await recordProcessingModelRunOutput(activeRun, result.rawOutput, result.repairStrategy)
+            if (result.usage) {
+              await recordProcessingModelRunOutput(
+                activeRun, result.rawOutput, result.repairStrategy, null, result.usage,
+              )
+            } else {
+              await recordProcessingModelRunOutput(activeRun, result.rawOutput, result.repairStrategy)
+            }
             await completeStudentAttemptModelRun(activeRun, result.attempt)
             completed = true
             errors.length = 0
             break
           } catch (error) {
             if (error instanceof AIProviderFailure) {
-              await recordProcessingModelRunOutput(
-                activeRun,
-                error.rawOutput,
-                error.repairStrategy,
-                String(error),
-              )
+              if (error.usage) {
+                await recordProcessingModelRunOutput(
+                  activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
+                )
+              } else {
+                await recordProcessingModelRunOutput(
+                  activeRun, error.rawOutput, error.repairStrategy, String(error),
+                )
+              }
             } else {
               await recordProcessingModelRunOutput(
                 activeRun,
@@ -133,18 +142,27 @@ async function drainPendingIntelligence() {
             activeRun.input,
             (chunk) => notifyReasoningStream(reasoning.problemId, activeRun.id, chunk.accumulated),
           )
-          await recordProcessingModelRunOutput(activeRun, result.rawOutput, result.repairStrategy)
+          if (result.usage) {
+            await recordProcessingModelRunOutput(
+              activeRun, result.rawOutput, result.repairStrategy, null, result.usage,
+            )
+          } else {
+            await recordProcessingModelRunOutput(activeRun, result.rawOutput, result.repairStrategy)
+          }
           await completeReasoningModelRun(activeRun, result.analysis)
           errors.length = 0
           break
         } catch (error) {
           if (error instanceof AIProviderFailure) {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              error.rawOutput,
-              error.repairStrategy,
-              String(error),
-            )
+            if (error.usage) {
+              await recordProcessingModelRunOutput(
+                activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
+              )
+            } else {
+              await recordProcessingModelRunOutput(
+                activeRun, error.rawOutput, error.repairStrategy, String(error),
+              )
+            }
           } else {
             await recordProcessingModelRunOutput(
               activeRun,
@@ -209,17 +227,26 @@ export async function explainSelection(
           activeRun.input,
           (chunk) => notifyExplainStream(activeRun.id, chunk.accumulated),
         )
-        await recordProcessingModelRunOutput(activeRun, response.rawOutput, response.repairStrategy)
+        if (response.usage) {
+          await recordProcessingModelRunOutput(
+            activeRun, response.rawOutput, response.repairStrategy, null, response.usage,
+          )
+        } else {
+          await recordProcessingModelRunOutput(activeRun, response.rawOutput, response.repairStrategy)
+        }
         await completeExplainModelRun(activeRun, response.result)
         return response.result
       } catch (error) {
         if (error instanceof AIProviderFailure) {
-          await recordProcessingModelRunOutput(
-            activeRun,
-            error.rawOutput,
-            error.repairStrategy,
-            String(error),
-          )
+          if (error.usage) {
+            await recordProcessingModelRunOutput(
+              activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
+            )
+          } else {
+            await recordProcessingModelRunOutput(
+              activeRun, error.rawOutput, error.repairStrategy, String(error),
+            )
+          }
         } else {
           await recordProcessingModelRunOutput(
             activeRun,

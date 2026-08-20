@@ -1,6 +1,7 @@
 import type {
   AIProviderProfile,
   AIProviderTaskType,
+  AIUsageMetrics,
   AIProblemAnalysis,
   AIProblemInput,
   ExplainProviderResult,
@@ -119,18 +120,21 @@ export interface AIProviderResult {
   analysis: AIProblemAnalysis
   rawOutput: string
   repairStrategy: string | null
+  usage?: AIUsageMetrics | null
 }
 
 export interface SolutionProviderResult {
   solution: GeneratedSolution
   rawOutput: string
   repairStrategy: string | null
+  usage?: AIUsageMetrics | null
 }
 
 export interface StudentAttemptProviderResult {
   attempt: Pick<StudentAttempt, 'rawMarkdown' | 'steps'>
   rawOutput: string
   repairStrategy: string | null
+  usage?: AIUsageMetrics | null
 }
 
 export interface ReasoningProviderResult {
@@ -146,6 +150,7 @@ export interface ReasoningProviderResult {
   >
   rawOutput: string
   repairStrategy: string | null
+  usage?: AIUsageMetrics | null
 }
 
 export interface SubjectivePracticeGradingProviderResult {
@@ -180,11 +185,13 @@ export class AIProviderFailure extends Error {
   readonly rawOutput: string
   readonly repairStrategy: string | null
   readonly error: AIErrorEnvelope
+  readonly usage: AIUsageMetrics | null
 
   constructor(
     error: string | AIErrorEnvelope,
     rawOutput = '',
     repairStrategy: string | null = null,
+    usage: AIUsageMetrics | null = null,
   ) {
     const envelope = typeof error === 'string' ? classifyAIError(error) : error
     super(envelope.userMessage)
@@ -192,6 +199,7 @@ export class AIProviderFailure extends Error {
     this.rawOutput = rawOutput
     this.repairStrategy = repairStrategy
     this.error = envelope
+    this.usage = usage
   }
 }
 
@@ -461,17 +469,18 @@ export class OpenAICompatibleProvider implements AIProvider {
         jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
       })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseProblemAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof ProblemAnalysisParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
@@ -501,17 +510,18 @@ export class OpenAICompatibleProvider implements AIProvider {
       jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
     })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseProblemAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof ProblemAnalysisParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
@@ -534,17 +544,18 @@ export class OpenAICompatibleProvider implements AIProvider {
       jsonSchema: JSON.stringify(studentAttemptAntigravityJSONSchema),
     })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseStudentAttempt(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof IntelligenceParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
@@ -612,17 +623,18 @@ export class OpenAICompatibleProvider implements AIProvider {
       onChunk,
     })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseReasoningAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof IntelligenceParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
@@ -648,17 +660,18 @@ export class OpenAICompatibleProvider implements AIProvider {
       onChunk,
     })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseExplainSelection(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof IntelligenceParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
@@ -692,17 +705,18 @@ ${JSON.stringify(structuredProblem)}
       onChunk,
     })
     if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
     }
     try {
       const parsed = parseSolution(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput }
+      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
     } catch (error) {
       if (error instanceof SolutionParseError) {
         throw new AIProviderFailure(
           error.message,
           response.rawOutput,
           error.repairStrategy,
+          response.usage ?? null,
         )
       }
       throw error
