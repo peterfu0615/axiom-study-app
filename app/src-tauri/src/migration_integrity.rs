@@ -268,6 +268,39 @@ mod tests {
     }
 
     #[test]
+    fn review_session_lifecycle_preserves_same_day_legacy_sessions() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("review-session-legacy-duplicates");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(48))
+                .await
+                .expect("version 48 fixture must migrate");
+            conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,created_at) VALUES ('today','2026-08-20','generated','standard',2,600,10)")
+                .await
+                .expect("canonical Today session");
+            conn.execute("INSERT INTO review_sessions(id,session_date,status,mode,planned_problem_count,estimated_duration_seconds,created_at) VALUES ('legacy','2026-08-20','completed','legacy',2,600,20)")
+                .await
+                .expect("legacy duplicate remains legal before migration 49");
+
+            migrate_embedded_schema(&mut conn, &migrations_up_to(49))
+                .await
+                .expect("migration 49 must preserve and classify duplicate sessions");
+            let rows: Vec<(String, String)> =
+                sqlx::query_as("SELECT id,session_kind FROM review_sessions ORDER BY id")
+                    .fetch_all(&mut conn)
+                    .await
+                    .expect("sessions must remain readable");
+            assert_eq!(
+                rows,
+                vec![
+                    ("legacy".into(), "practice".into()),
+                    ("today".into(), "today".into()),
+                ]
+            );
+        });
+    }
+
+    #[test]
     fn provider_task_routes_are_backward_compatible_and_json_bounded() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("provider-task-routing");

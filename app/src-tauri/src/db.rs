@@ -263,6 +263,45 @@ fn migration_body_for_execution(sql: &str) -> &str {
 /// record the checksum of the immutable source text.
 fn migration_sql_for_execution<'a>(migration: &'a Migration) -> Result<Cow<'a, str>, String> {
     let body = migration_body_for_execution(migration.sql);
+    if migration.version == 49 {
+        const INDEX_STATEMENT: &str = r#"CREATE UNIQUE INDEX idx_today_one_session
+  ON review_sessions(session_date)
+  WHERE session_kind = 'today';"#;
+        const LEGACY_SESSION_REPAIR: &str = r#"-- Older private builds can retain readable mode='legacy' rows on the same
+-- date as the canonical standard Today session. Preserve every row, but only
+-- the preferred standard/earliest row remains a Today container; the others
+-- become independent practice sessions before installing the new invariant.
+UPDATE review_sessions AS candidate
+SET session_kind = 'practice'
+WHERE EXISTS (
+  SELECT 1 FROM review_sessions AS keeper
+  WHERE keeper.session_date = candidate.session_date
+    AND (
+      CASE keeper.mode WHEN 'standard' THEN 0 ELSE 1 END
+        < CASE candidate.mode WHEN 'standard' THEN 0 ELSE 1 END
+      OR (
+        CASE keeper.mode WHEN 'standard' THEN 0 ELSE 1 END
+          = CASE candidate.mode WHEN 'standard' THEN 0 ELSE 1 END
+        AND (
+          keeper.created_at < candidate.created_at
+          OR (keeper.created_at = candidate.created_at AND keeper.id < candidate.id)
+        )
+      )
+    )
+);
+
+CREATE UNIQUE INDEX idx_today_one_session
+  ON review_sessions(session_date)
+  WHERE session_kind = 'today';"#;
+        if body.matches(INDEX_STATEMENT).count() != 1 {
+            return Err("migration 49 的兼容修复目标与已知源文件不一致".to_string());
+        }
+        return Ok(Cow::Owned(body.replacen(
+            INDEX_STATEMENT,
+            LEGACY_SESSION_REPAIR,
+            1,
+        )));
+    }
     if migration.version != 24 {
         return Ok(Cow::Borrowed(body));
     }
