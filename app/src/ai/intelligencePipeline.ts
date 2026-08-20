@@ -26,6 +26,8 @@ import {
   getReasoningProvidersForRun,
   getStudentAttemptProvidersForRun,
 } from './provider'
+import type { AIErrorEnvelope } from '../domain/aiError'
+import { runWithAIBackoff } from './retryPolicy'
 
 export const INTELLIGENCE_STATUS_EVENT = 'axiom:intelligence-status'
 /** 流式输出事件：推理分析过程中实时推送累积文本 */
@@ -61,12 +63,32 @@ function notifyExplainStream(runId: string, accumulated: string) {
 let activeWorker: Promise<void> | null = null
 let workerRequested = false
 
+async function recordFailedProviderAttempt(
+  run: { id: string; provider: string; model: string },
+  error: unknown,
+  envelope: AIErrorEnvelope,
+) {
+  if (error instanceof AIProviderFailure && error.usage) {
+    await recordProcessingModelRunOutput(
+      run, error.rawOutput, error.repairStrategy, envelope, error.usage,
+    )
+    return
+  }
+  await recordProcessingModelRunOutput(
+    run,
+    error instanceof AIProviderFailure ? error.rawOutput : '',
+    error instanceof AIProviderFailure ? error.repairStrategy : null,
+    envelope,
+  )
+}
+
 async function drainPendingIntelligence() {
   while (true) {
     const before = await claimNextStudentAttemptModelRun()
     if (before) {
       let activeRun: StudentAttemptModelRun = before
       const errors: string[] = []
+      let lastProviderError: unknown = null
       let completed = false
       try {
         const providers = getStudentAttemptProvidersForRun(before.provider, before.model)
@@ -75,7 +97,11 @@ async function drainPendingIntelligence() {
             if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
               activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
             }
-            const result = await provider.extractStudentAttempt(activeRun.input)
+            const result = await runWithAIBackoff({
+              context: { providerId: provider.id, model: provider.model, runId: activeRun.id },
+              operation: () => provider.extractStudentAttempt(activeRun.input),
+              onFailure: (error, envelope) => recordFailedProviderAttempt(activeRun, error, envelope),
+            })
             if (result.usage) {
               await recordProcessingModelRunOutput(
                 activeRun, result.rawOutput, result.repairStrategy, null, result.usage,
@@ -88,28 +114,11 @@ async function drainPendingIntelligence() {
             errors.length = 0
             break
           } catch (error) {
-            if (error instanceof AIProviderFailure) {
-              if (error.usage) {
-                await recordProcessingModelRunOutput(
-                  activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
-                )
-              } else {
-                await recordProcessingModelRunOutput(
-                  activeRun, error.rawOutput, error.repairStrategy, String(error),
-                )
-              }
-            } else {
-              await recordProcessingModelRunOutput(
-                activeRun,
-                '',
-                null,
-                String(error),
-              )
-            }
+            lastProviderError = error
             errors.push(`${provider.id}/${provider.model}：${String(error)}`)
           }
         }
-        if (errors.length) throw new Error(`所有用户解答 Provider 均失败：${errors.join('；')}`)
+        if (errors.length) throw lastProviderError ?? new Error(`所有用户解答 Provider 均失败：${errors.join('；')}`)
       } catch (error) {
         try {
           await failStudentAttemptModelRun(activeRun, error)
@@ -131,6 +140,7 @@ async function drainPendingIntelligence() {
     if (!reasoning) return
     let activeRun: ReasoningModelRun = reasoning
     const errors: string[] = []
+    let lastProviderError: unknown = null
     try {
       const providers = getReasoningProvidersForRun(reasoning.provider, reasoning.model)
       for (const provider of providers) {
@@ -138,10 +148,14 @@ async function drainPendingIntelligence() {
           if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
             activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
           }
-          const result = await provider.analyzeStudentReasoning(
-            activeRun.input,
-            (chunk) => notifyReasoningStream(reasoning.problemId, activeRun.id, chunk.accumulated),
-          )
+          const result = await runWithAIBackoff({
+            context: { providerId: provider.id, model: provider.model, runId: activeRun.id },
+            operation: () => provider.analyzeStudentReasoning(
+              activeRun.input,
+              (chunk) => notifyReasoningStream(reasoning.problemId, activeRun.id, chunk.accumulated),
+            ),
+            onFailure: (error, envelope) => recordFailedProviderAttempt(activeRun, error, envelope),
+          })
           if (result.usage) {
             await recordProcessingModelRunOutput(
               activeRun, result.rawOutput, result.repairStrategy, null, result.usage,
@@ -153,28 +167,11 @@ async function drainPendingIntelligence() {
           errors.length = 0
           break
         } catch (error) {
-          if (error instanceof AIProviderFailure) {
-            if (error.usage) {
-              await recordProcessingModelRunOutput(
-                activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
-              )
-            } else {
-              await recordProcessingModelRunOutput(
-                activeRun, error.rawOutput, error.repairStrategy, String(error),
-              )
-            }
-          } else {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              '',
-              null,
-              String(error),
-            )
-          }
+          lastProviderError = error
           errors.push(`${provider.id}/${provider.model}：${String(error)}`)
         }
       }
-      if (errors.length) throw new Error(`所有推理分析 Provider 均失败：${errors.join('；')}`)
+      if (errors.length) throw lastProviderError ?? new Error(`所有推理分析 Provider 均失败：${errors.join('；')}`)
     } catch (error) {
       try {
         await failReasoningModelRun(activeRun, error)
@@ -216,6 +213,7 @@ export async function explainSelection(
   const created = await createExplainModelRun(input)
   let activeRun = await beginExplainModelRun(created)
   const errors: string[] = []
+  let lastProviderError: unknown = null
   try {
     const providers = getExplainProvidersForRun(activeRun.provider, activeRun.model)
     for (const provider of providers) {
@@ -223,10 +221,14 @@ export async function explainSelection(
         if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
           activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
         }
-        const response = await provider.explainSelection(
-          activeRun.input,
-          (chunk) => notifyExplainStream(activeRun.id, chunk.accumulated),
-        )
+        const response = await runWithAIBackoff({
+          context: { providerId: provider.id, model: provider.model, runId: activeRun.id },
+          operation: () => provider.explainSelection(
+            activeRun.input,
+            (chunk) => notifyExplainStream(activeRun.id, chunk.accumulated),
+          ),
+          onFailure: (error, envelope) => recordFailedProviderAttempt(activeRun, error, envelope),
+        })
         if (response.usage) {
           await recordProcessingModelRunOutput(
             activeRun, response.rawOutput, response.repairStrategy, null, response.usage,
@@ -237,28 +239,11 @@ export async function explainSelection(
         await completeExplainModelRun(activeRun, response.result)
         return response.result
       } catch (error) {
-        if (error instanceof AIProviderFailure) {
-          if (error.usage) {
-            await recordProcessingModelRunOutput(
-              activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
-            )
-          } else {
-            await recordProcessingModelRunOutput(
-              activeRun, error.rawOutput, error.repairStrategy, String(error),
-            )
-          }
-        } else {
-          await recordProcessingModelRunOutput(
-            activeRun,
-            '',
-            null,
-            String(error),
-          )
-        }
+        lastProviderError = error
         errors.push(`${provider.id}/${provider.model}：${String(error)}`)
       }
     }
-    throw new Error(`所有解释 Provider 均失败：${errors.join('；')}`)
+    throw lastProviderError ?? new Error(`所有解释 Provider 均失败：${errors.join('；')}`)
   } catch (error) {
     await failExplainModelRun(activeRun, error)
     throw error

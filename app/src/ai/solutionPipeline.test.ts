@@ -130,7 +130,10 @@ describe('solution worker', () => {
     expect(failSolutionModelRun).toHaveBeenCalledWith(
       run,
       expect.objectContaining({
-        message: expect.stringContaining('Gemini CLI unavailable'),
+        envelope: expect.objectContaining({
+          code: 'PROVIDER_ERROR',
+          detailSafe: 'Gemini CLI unavailable',
+        }),
       }),
     )
   })

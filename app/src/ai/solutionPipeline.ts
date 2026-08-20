@@ -10,6 +10,7 @@ import {
   AIProviderFailure,
   getSolutionProvidersForRun,
 } from './provider'
+import { runWithAIBackoff } from './retryPolicy'
 
 export const SOLUTION_STATUS_EVENT = 'axiom:solution-status'
 /** 流式输出事件：正解生成过程中实时推送累积文本 */
@@ -42,6 +43,7 @@ async function drainPendingSolutions() {
 
     let activeRun = run
     const errors: string[] = []
+    let lastProviderError: unknown = null
     try {
       const providers = getSolutionProvidersForRun(
         run.provider,
@@ -59,10 +61,27 @@ async function drainPendingSolutions() {
               provider.model,
             )
           }
-          const providerResult = await provider.generateSolution(
-            activeRun.input,
-            (chunk) => notifySolutionStream(run.problemId, activeRun.id, chunk.accumulated),
-          )
+          const providerResult = await runWithAIBackoff({
+            context: { providerId: provider.id, model: provider.model, runId: activeRun.id },
+            operation: () => provider.generateSolution(
+              activeRun.input,
+              (chunk) => notifySolutionStream(run.problemId, activeRun.id, chunk.accumulated),
+            ),
+            onFailure: async (error, envelope) => {
+              if (error instanceof AIProviderFailure && error.usage) {
+                await recordProcessingModelRunOutput(
+                  activeRun, error.rawOutput, error.repairStrategy, envelope, error.usage,
+                )
+              } else {
+                await recordProcessingModelRunOutput(
+                  activeRun,
+                  error instanceof AIProviderFailure ? error.rawOutput : '',
+                  error instanceof AIProviderFailure ? error.repairStrategy : null,
+                  envelope,
+                )
+              }
+            },
+          })
           if (providerResult.usage) {
             await recordProcessingModelRunOutput(
               activeRun, providerResult.rawOutput, providerResult.repairStrategy,
@@ -80,31 +99,14 @@ async function drainPendingSolutions() {
           errors.length = 0
           break
         } catch (error) {
-          if (error instanceof AIProviderFailure) {
-            if (error.usage) {
-              await recordProcessingModelRunOutput(
-                activeRun, error.rawOutput, error.repairStrategy, String(error), error.usage,
-              )
-            } else {
-              await recordProcessingModelRunOutput(
-                activeRun, error.rawOutput, error.repairStrategy, String(error),
-              )
-            }
-          } else {
-            await recordProcessingModelRunOutput(
-              activeRun,
-              '',
-              null,
-              String(error),
-            )
-          }
+          lastProviderError = error
           errors.push(
             `${provider.id}/${provider.model}：${String(error)}`,
           )
         }
       }
       if (errors.length) {
-        throw new Error(`所有 Solution Provider 均失败：${errors.join('；')}`)
+        throw lastProviderError ?? new Error(`所有 Solution Provider 均失败：${errors.join('；')}`)
       }
     } catch (error) {
       try {

@@ -33,6 +33,7 @@ import {
 } from '../domain/aiError'
 import { runSolutionWorker } from './solutionPipeline'
 import { runIntelligenceWorker } from './intelligencePipeline'
+import { runWithAIBackoff } from './retryPolicy'
 
 export const AI_STATUS_EVENT = 'axiom:problem-ai-status'
 
@@ -99,9 +100,10 @@ async function drainPendingProblemAI() {
         if (activeRun.provider !== provider.id || activeRun.model !== provider.model) {
           activeRun = await updateProcessingModelRunProvider(activeRun, provider.id, provider.model)
         }
-        for (let retry = 0; retry <= 1; retry += 1) {
-          try {
-            const providerResult = provider.analyzeProblem
+        try {
+          const providerResult = await runWithAIBackoff({
+            context: { providerId: provider.id, model: provider.model, runId: activeRun.id },
+            operation: async () => provider.analyzeProblem
               ? await (async () => {
                   const regions = await getProblemRegions(activeRun.problemId)
                   const questionRegion = regions.find((region) => region.type === 'question')
@@ -115,8 +117,23 @@ async function drainPendingProblemAI() {
                     ...(resolvedTextbookContext ? { resolvedTextbookContext } : {}),
                   })
                 })()
-              : await provider.analyzeProblemImage(activeRun.input)
-            if (providerResult.usage) {
+              : provider.analyzeProblemImage(activeRun.input),
+            onFailure: async (error, envelope) => {
+              const rawOutput = error instanceof AIProviderFailure ? error.rawOutput : ''
+              const repairStrategy = error instanceof AIProviderFailure ? error.repairStrategy : null
+              if (error instanceof AIProviderFailure && error.usage) {
+                await recordProcessingModelRunOutput(
+                  activeRun, rawOutput, repairStrategy, envelope, error.usage,
+                )
+              } else {
+                await recordProcessingModelRunOutput(
+                  activeRun, rawOutput, repairStrategy, envelope,
+                )
+              }
+              errors.push(envelope)
+            },
+          })
+          if (providerResult.usage) {
               await recordProcessingModelRunOutput(
                 activeRun, providerResult.rawOutput, providerResult.repairStrategy,
                 null, providerResult.usage,
@@ -126,28 +143,13 @@ async function drainPendingProblemAI() {
                 activeRun, providerResult.rawOutput, providerResult.repairStrategy,
               )
             }
-            completedProviderResult = providerResult
-            errors.length = 0
-            break
-          } catch (error) {
-            const envelope = error instanceof AIProviderFailure
-              ? { ...error.error, providerId: provider.id, model: provider.model, runId: activeRun.id }
-              : classifyAIError(error, { providerId: provider.id, model: provider.model, runId: activeRun.id })
-            const rawOutput = error instanceof AIProviderFailure ? error.rawOutput : ''
-            const repairStrategy = error instanceof AIProviderFailure ? error.repairStrategy : null
-            if (error instanceof AIProviderFailure && error.usage) {
-              await recordProcessingModelRunOutput(
-                activeRun, rawOutput, repairStrategy, envelope, error.usage,
-              )
-            } else {
-              await recordProcessingModelRunOutput(
-                activeRun, rawOutput, repairStrategy, envelope,
-              )
-            }
-            errors.push(envelope)
-            if (!envelope.retryable || retry === 1) break
-            await new Promise((resolve) => setTimeout(resolve, retry === 0 ? 300 : 900))
-          }
+          completedProviderResult = providerResult
+          errors.length = 0
+        } catch (error) {
+          const envelope = error instanceof AIExecutionError
+            ? error.envelope
+            : classifyAIError(error, { providerId: provider.id, model: provider.model, runId: activeRun.id })
+          if (!envelope.fallbackAllowed) throw new AIExecutionError(envelope)
         }
         if (completedProviderResult) break
         const lastError = errors.at(-1)
