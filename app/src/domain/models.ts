@@ -547,6 +547,8 @@ export interface SavedProblem extends Problem {
     masteryEstimate: number | null
     nextReviewAt: number | null
     confirmed: boolean
+    favorite: boolean
+    note: string
   }
 }
 

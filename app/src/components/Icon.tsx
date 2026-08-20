@@ -22,6 +22,7 @@ export type IconName =
   | 'moon'
   | 'download'
   | 'print'
+  | 'favorite'
 
 const paths: Record<IconName, React.ReactNode> = {
   today: (
@@ -123,6 +124,7 @@ const paths: Record<IconName, React.ReactNode> = {
   moon: <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />,
   download: <><path d="M12 3v12M7 10l5 5 5-5" /><path d="M5 20h14" /></>,
   print: <><path d="M7 9V4h10v5M7 16H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2" /><path d="M7 14h10v7H7z" /></>,
+  favorite: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z" />,
 }
 
 export function Icon({

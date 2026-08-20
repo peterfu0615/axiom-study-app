@@ -453,6 +453,8 @@ function rowToSavedProblem(row: Record<string, unknown>): SavedProblem {
       masteryEstimate: nullableNumber(row.library_mastery_estimate),
       nextReviewAt: nullableNumber(row.library_next_review_at),
       confirmed: problem.verificationStatus === 'verified',
+      favorite: Number(row.library_is_favorite ?? 0) === 1,
+      note: String(row.library_note ?? ''),
     },
   }
 }
@@ -904,6 +906,7 @@ const SAVED_PROBLEM_LIBRARY_COLUMNS = `p.*, d.original_image_path, d.corrected_i
          WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.mapping_status!='rejected'), '') || ' ' ||
        COALESCE((SELECT solution.content_markdown FROM problem_solutions solution
          WHERE solution.problem_id=p.id AND solution.status='completed' ORDER BY solution.updated_at DESC LIMIT 1), '') || ' ' ||
+       COALESCE((SELECT profile.note FROM problem_library_profiles profile WHERE profile.problem_id=p.id), '') || ' ' ||
        COALESCE(p.user_title,p.ai_title,p.title,'') || ' ' ||
        COALESCE(p.user_subject,p.ai_subject,p.subject,'') || ' ' ||
        COALESCE(p.user_stem_markdown,p.ai_stem_markdown,p.stem_markdown,'')) AS library_search_text,
@@ -925,7 +928,9 @@ const SAVED_PROBLEM_LIBRARY_COLUMNS = `p.*, d.original_image_path, d.corrected_i
          WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.tag_type!='error') AS library_mastery_estimate,
        (SELECT MIN(state.next_review_at) FROM problem_tags tag JOIN skill_states state
          ON state.tag_id=tag.tag_id AND state.subject=COALESCE(NULLIF(p.user_subject,''),NULLIF(p.ai_subject,''),p.subject)
-         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.tag_type!='error') AS library_next_review_at`
+         WHERE tag.problem_id=p.id AND tag.superseded_at IS NULL AND tag.tag_type!='error') AS library_next_review_at,
+       COALESCE((SELECT profile.is_favorite FROM problem_library_profiles profile WHERE profile.problem_id=p.id),0) AS library_is_favorite,
+       COALESCE((SELECT profile.note FROM problem_library_profiles profile WHERE profile.problem_id=p.id),'') AS library_note`
 
 async function selectSavedProblemsByIds(
   db: DatabaseLike,
@@ -1223,6 +1228,46 @@ export async function listSavedProblems(
      ORDER BY p.created_at DESC`,
   )
   return rows.map(rowToSavedProblem)
+}
+
+export async function searchSavedProblemIds(
+  query: string,
+  archived = false,
+  deleted = false,
+): Promise<string[]> {
+  if (!isDesktopRuntime()) return []
+  const normalized = query.normalize('NFKC').trim()
+  if (!normalized) return []
+  const db = await database()
+  const stateClause = `problem.deleted_at IS ${deleted ? 'NOT NULL' : 'NULL'}
+    ${deleted ? '' : `AND problem.archived_at IS ${archived ? 'NOT NULL' : 'NULL'}`}`
+  const fallback = async () => {
+    const rows = await db.select<Array<{ problem_id: string }>>(
+      `SELECT source.problem_id
+       FROM problem_library_search_source source
+       JOIN problems problem ON problem.id=source.problem_id
+       WHERE ${stateClause}
+         AND lower(source.subject || ' ' || source.title || ' ' || source.stem || ' ' ||
+           source.answer || ' ' || source.tags || ' ' || source.note) LIKE '%' || lower($1) || '%'`,
+      [normalized],
+    )
+    return rows.map((row) => row.problem_id)
+  }
+  if ([...normalized].length < 3) return fallback()
+  try {
+    const match = `"${normalized.replaceAll('"', '""')}"`
+    const rows = await db.select<Array<{ problem_id: string }>>(
+      `SELECT indexed.problem_id
+       FROM problem_library_fts indexed
+       JOIN problems problem ON problem.id=indexed.problem_id
+       WHERE problem_library_fts MATCH $1 AND ${stateClause}`,
+      [match],
+    )
+    return rows.map((row) => row.problem_id)
+  } catch (error) {
+    console.warn('FTS 搜索失败，回退到本地子串匹配', error)
+    return fallback()
+  }
 }
 
 export async function getSavedProblem(
@@ -3445,6 +3490,120 @@ export async function setProblemArchived(id: string, archived: boolean) {
   if (result.rowsAffected !== 1) {
     throw new Error('错题不存在或状态已发生变化')
   }
+}
+
+export async function setProblemFavorite(id: string, favorite: boolean) {
+  if (!isDesktopRuntime()) throw new Error('收藏需要在 Axiom 桌面 App 中运行')
+  const now = Date.now()
+  await (await database()).execute(
+    `INSERT INTO problem_library_profiles(problem_id,is_favorite,note,updated_at)
+     VALUES ($1,$2,'',$3)
+     ON CONFLICT(problem_id) DO UPDATE SET
+       is_favorite=excluded.is_favorite, updated_at=excluded.updated_at`,
+    [id, favorite ? 1 : 0, now],
+  )
+  const updated = await getSavedProblem(id)
+  if (!updated) throw new Error('收藏状态已保存，但无法重新读取错题')
+  return updated
+}
+
+export async function saveProblemNote(id: string, note: string) {
+  if (!isDesktopRuntime()) throw new Error('备注需要在 Axiom 桌面 App 中运行')
+  if (note.length > 20_000) throw new Error('备注不能超过 20000 个字符')
+  const now = Date.now()
+  await (await database()).execute(
+    `INSERT INTO problem_library_profiles(problem_id,is_favorite,note,updated_at)
+     VALUES ($1,0,$2,$3)
+     ON CONFLICT(problem_id) DO UPDATE SET
+       note=excluded.note, updated_at=excluded.updated_at`,
+    [id, note, now],
+  )
+  const updated = await getSavedProblem(id)
+  if (!updated) throw new Error('备注已保存，但无法重新读取错题')
+  return updated
+}
+
+export interface ProblemDuplicateDecision {
+  candidateProblemId: string
+  decision: 'keep_both' | 'merged'
+}
+
+export async function listProblemDuplicateDecisions(
+  problemId: string,
+): Promise<ProblemDuplicateDecision[]> {
+  if (!isDesktopRuntime()) return []
+  const rows = await (await database()).select<Array<{
+    first_problem_id: string
+    second_problem_id: string
+    decision: ProblemDuplicateDecision['decision']
+  }>>(
+    `SELECT first_problem_id,second_problem_id,decision
+     FROM problem_duplicate_decisions
+     WHERE first_problem_id=$1 OR second_problem_id=$1`,
+    [problemId],
+  )
+  return rows.map((row) => ({
+    candidateProblemId: row.first_problem_id === problemId
+      ? row.second_problem_id
+      : row.first_problem_id,
+    decision: row.decision,
+  }))
+}
+
+export async function decideProblemDuplicate(input: {
+  problemId: string
+  candidateProblemId: string
+  decision: ProblemDuplicateDecision['decision']
+  similarityScore: number
+  signals: string[]
+}) {
+  if (!isDesktopRuntime()) throw new Error('重复题处理需要在 Axiom 桌面 App 中运行')
+  if (input.problemId === input.candidateProblemId) throw new Error('不能把同一道题标记为重复')
+  if (!Number.isFinite(input.similarityScore) || input.similarityScore < 0 || input.similarityScore > 1) {
+    throw new Error('重复题相似度无效')
+  }
+  const db = await database()
+  const [firstProblemId, secondProblemId] = [input.problemId, input.candidateProblemId].sort()
+  const rows = await db.select<Array<{ id: string; subject: string | null }>>(
+    `SELECT id,COALESCE(NULLIF(user_subject,''),NULLIF(ai_subject,''),subject) AS subject
+     FROM problems WHERE id IN ($1,$2) AND status='saved' AND deleted_at IS NULL`,
+    [firstProblemId, secondProblemId],
+  )
+  if (rows.length !== 2) throw new Error('重复题候选已不存在或状态已变化')
+  const subjects = rows.map((row) => row.subject?.trim()).filter(Boolean)
+  if (subjects.length !== 2 || subjects[0] !== subjects[1]) {
+    throw new Error('只能处理同一科目的重复题')
+  }
+  const now = Date.now()
+  await inDatabaseTransaction(db, async () => {
+    await db.execute(
+      `INSERT INTO problem_duplicate_decisions(
+         first_problem_id,second_problem_id,decision,canonical_problem_id,
+         similarity_score,signals_json,created_at,updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+       ON CONFLICT(first_problem_id,second_problem_id) DO UPDATE SET
+         decision=excluded.decision,canonical_problem_id=excluded.canonical_problem_id,
+         similarity_score=excluded.similarity_score,signals_json=excluded.signals_json,
+         updated_at=excluded.updated_at`,
+      [
+        firstProblemId,
+        secondProblemId,
+        input.decision,
+        input.decision === 'merged' ? input.problemId : null,
+        input.similarityScore,
+        JSON.stringify(input.signals.slice(0, 12)),
+        now,
+      ],
+    )
+    if (input.decision === 'merged') {
+      const archived = await db.execute(
+        `UPDATE problems SET archived_at=$1,updated_at=$1
+         WHERE id=$2 AND status='saved' AND deleted_at IS NULL`,
+        [now, input.candidateProblemId],
+      )
+      if (archived.rowsAffected !== 1) throw new Error('重复项状态已变化，无法归档')
+    }
+  })
 }
 
 const defaultAIProviderProfiles: AIProviderProfile[] = [{

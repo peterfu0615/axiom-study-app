@@ -889,6 +889,49 @@ export async function setProblemTextbookMatch(
   })
 }
 
+export async function setProblemTextbookMatches(
+  problemIds: string[],
+  subject: string,
+  textbookId: string | null,
+) {
+  const ids = [...new Set(problemIds.filter(Boolean))]
+  if (!ids.length) throw new Error('请至少选择一道要迁移教材的错题')
+  const normalizedSubject = subject.trim()
+  if (!normalizedSubject) throw new Error('批量迁移前必须先确定科目')
+  const now = Date.now()
+  return transaction(async () => {
+    const placeholders = ids.map((_, index) => `$${index + 2}`).join(',')
+    const problems = await select<Array<{ id: string }>>(
+      `SELECT id FROM problems WHERE status='saved' AND deleted_at IS NULL
+       AND trim(COALESCE(NULLIF(user_subject,''),NULLIF(ai_subject,''),NULLIF(subject,'')))=$1
+       AND id IN (${placeholders})`,
+      [normalizedSubject, ...ids],
+    )
+    if (problems.length !== ids.length) {
+      throw new Error('所选错题必须全部属于当前科目且仍在错题库中')
+    }
+    if (textbookId) {
+      const textbooks = await select<Array<{ id: string }>>(
+        `SELECT id FROM textbooks WHERE id=$1 AND subject=$2 AND archived_at IS NULL
+         AND extraction_status IN ('completed','needs_review') LIMIT 1`,
+        [textbookId, normalizedSubject],
+      )
+      if (!textbooks[0]) throw new Error('只能迁移到当前科目的有效教材')
+    }
+    await execute(
+      `UPDATE problems SET matched_textbook_id=$1,
+         textbook_match_confidence=CASE WHEN $1 IS NULL THEN 0 ELSE 1 END,
+         textbook_match_reason=CASE WHEN $1 IS NULL THEN '用户批量清除教材匹配' ELSE '用户批量迁移教材' END,
+         textbook_match_source=CASE WHEN $1 IS NULL THEN 'unresolved' ELSE 'user' END,
+         textbook_match_locked=CASE WHEN $1 IS NULL THEN 0 ELSE 1 END,
+         textbook_match_updated_at=$2,updated_at=$2
+       WHERE id IN (${ids.map((_, index) => `$${index + 3}`).join(',')})`,
+      [textbookId, now, ...ids],
+    )
+    return ids.length
+  })
+}
+
 export async function setCurrentTextbook(textbook: Pick<Textbook, 'id' | 'subject'>) {
   // Kept only for legacy integrations. New flows never call this function and
   // no problem routing depends on the compatibility is_current column.
@@ -2647,22 +2690,35 @@ function redactRelabelError(value: unknown) {
     .slice(0, 1200)
 }
 
-export async function createRelabelBatch(subject: string): Promise<string> {
+export async function createRelabelBatch(
+  subject: string,
+  problemIds?: string[],
+): Promise<string> {
+  const scopedProblemIds = [...new Set((problemIds ?? []).filter(Boolean))]
+  if (problemIds && !scopedProblemIds.length) throw new Error('请至少选择一道要重新标注的错题')
   const batchId = id()
   const now = Date.now()
   await transaction(async () => {
-    const active = await select<Array<{ id: string }>>(
-      `SELECT id FROM tag_relabel_batches
-       WHERE subject = $1 AND status IN ('pending', 'processing')
-       ORDER BY updated_at DESC LIMIT 1`,
-      [subject],
-    )
-    if (active[0]) return
+    if (!scopedProblemIds.length) {
+      const active = await select<Array<{ id: string }>>(
+        `SELECT id FROM tag_relabel_batches
+         WHERE subject = $1 AND status IN ('pending', 'processing')
+         ORDER BY updated_at DESC LIMIT 1`,
+        [subject],
+      )
+      if (active[0]) return
+    }
+    const scopeSql = scopedProblemIds.length
+      ? ` AND id IN (${scopedProblemIds.map((_, index) => `$${index + 2}`).join(',')})`
+      : ''
     const problems = await select<Array<{ id: string }>>(
       `SELECT id FROM problems WHERE status = 'saved' AND deleted_at IS NULL
-       AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1`,
-      [subject],
+       AND trim(COALESCE(NULLIF(user_subject, ''), NULLIF(ai_subject, ''), NULLIF(subject, ''))) = $1${scopeSql}`,
+      [subject, ...scopedProblemIds],
     )
+    if (scopedProblemIds.length && problems.length !== scopedProblemIds.length) {
+      throw new Error('所选错题必须全部属于当前科目且仍在错题库中')
+    }
     const inserted = await execute(
       `INSERT OR IGNORE INTO tag_relabel_batches (id, subject, total_count, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4)`,
@@ -2677,6 +2733,7 @@ export async function createRelabelBatch(subject: string): Promise<string> {
       )
     }
   })
+  if (scopedProblemIds.length) return batchId
   const active = await select<Array<{ id: string }>>(
     `SELECT id FROM tag_relabel_batches
      WHERE subject = $1 AND status IN ('pending', 'processing')

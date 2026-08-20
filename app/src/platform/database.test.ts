@@ -16,6 +16,7 @@ import {
   recoverProblemAITasks,
   saveAIProviderProfiles,
   scanOrphanedMedia,
+  searchSavedProblemIds,
   deleteOrphanedMedia,
 } from './database'
 import { persistAIProviderProfiles } from './native'
@@ -139,6 +140,20 @@ vi.mock('./native', () => ({
   recoverRelabelBatchItems: vi.fn(async () => undefined),
   removeProblemImage: vi.fn(async () => undefined),
 }))
+
+describe('problem library full-text search', () => {
+  it('uses FTS for normal queries and a substring fallback for short Chinese terms', async () => {
+    fakeDb.reset()
+    fakeDb.selectHandlers.push(
+      { match: (sql) => sql.includes('FROM problem_library_fts indexed'), rows: () => [{ problem_id: 'problem-fts' }] },
+      { match: (sql) => sql.includes('FROM problem_library_search_source source'), rows: () => [{ problem_id: 'problem-short' }] },
+    )
+    await expect(searchSavedProblemIds('易漏条件')).resolves.toEqual(['problem-fts'])
+    await expect(searchSavedProblemIds('函数')).resolves.toEqual(['problem-short'])
+    expect(fakeDb.calls.some((call) => call.sql.includes('problem_library_fts MATCH $1'))).toBe(true)
+    expect(fakeDb.calls.some((call) => call.sql.includes("LIKE '%' || lower($1) || '%'"))).toBe(true)
+  })
+})
 
 describe('parseSQLiteBoolean', () => {
   it('returns true for canonical truthy values', () => {

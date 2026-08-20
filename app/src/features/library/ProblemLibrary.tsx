@@ -25,11 +25,16 @@ import {
   getReasoningAnalysis,
   getStudentAttempt,
   listProblemModelRuns,
+  listProblemDuplicateDecisions,
   listSavedProblems,
   queueProblemAI,
   queueProblemSolution,
   queueStudentAttempt,
   restoreProblem,
+  saveProblemNote,
+  searchSavedProblemIds,
+  setProblemFavorite,
+  decideProblemDuplicate,
   ProblemSubjectChangeConflict,
   ProblemSubjectChangeTagConflict,
   setProblemArchived,
@@ -40,7 +45,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState, PageHeader, SegmentedControl } from '../../components/ui'
+import { Button, Dialog, ErrorState, IconButton, PageHeader, SegmentedControl } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -56,6 +61,14 @@ import {
 import { ProblemTags } from './ProblemTags'
 import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../platform/problemHistoryDatabase'
 import { getProblemUnderstandingUploadDisclosure } from '../../ai/provider'
+import { findProblemDuplicateSuggestions } from '../../domain/problemDuplicates'
+import {
+  createRelabelBatch,
+  listTextbooks,
+  setProblemTextbookMatches,
+} from '../../platform/horizonDatabase'
+import { startRelabelBatchWorker } from '../curriculum/relabelWorker'
+import type { Textbook } from '../../domain/horizon'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
@@ -208,6 +221,7 @@ export function ProblemLibrary() {
   const [view, setView] = useState<LibraryView>('active')
   const [problems, setProblems] = useState<SavedProblem[]>([])
   const [query, setQuery] = useState('')
+  const [searchMatchIds, setSearchMatchIds] = useState<Set<string> | null>(null)
   const [subjectFilter, setSubjectFilter] = useState('all')
   const [difficultyFilter, setDifficultyFilter] = useState('all')
   const [textbookFilter, setTextbookFilter] = useState('all')
@@ -228,6 +242,13 @@ export function ProblemLibrary() {
   const [reasoning, setReasoning] = useState<ReasoningAnalysis | null>(null)
   const [selectedRegions, setSelectedRegions] = useState<ProblemRegion[]>([])
   const [reviewHistory, setReviewHistory] = useState<ProblemReviewHistoryEntry[]>([])
+  const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
+  const [noteDraft, setNoteDraft] = useState('')
+  const [batchMode, setBatchMode] = useState(false)
+  const [batchProblemIds, setBatchProblemIds] = useState<Set<string>>(new Set())
+  const [batchTextbookId, setBatchTextbookId] = useState('')
+  const [batchTextbooks, setBatchTextbooks] = useState<Textbook[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [editSubject, setEditSubject] = useState('')
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
@@ -363,7 +384,6 @@ export function ProblemLibrary() {
     }
   }, [problems])
   const filteredProblems = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
     return problems.filter((problem) => (subjectFilter === 'all' || problem.subject === subjectFilter)
       && (difficultyFilter === 'all' || problem.libraryMetadata.difficulty === difficultyFilter)
       && (textbookFilter === 'all' || problem.libraryMetadata.textbookTitle === textbookFilter)
@@ -372,12 +392,39 @@ export function ProblemLibrary() {
       && (methodFilter === 'all' || problem.libraryMetadata.tags.some((tag) => tag.type === 'method' && tag.name === methodFilter))
       && (modelFilter === 'all' || problem.libraryMetadata.tags.some((tag) => tag.type === 'model' && tag.name === modelFilter))
       && (reviewFilter === 'all'
+        || reviewFilter === 'favorite' && problem.libraryMetadata.favorite
         || reviewFilter === 'unconfirmed' && !problem.libraryMetadata.confirmed
         || reviewFilter === 'due' && problem.libraryMetadata.nextReviewAt !== null && problem.libraryMetadata.nextReviewAt <= Date.now()
         || reviewFilter === 'stable' && (problem.libraryMetadata.masteryEstimate ?? 0) >= .75
         || reviewFilter === 'attention' && problem.libraryMetadata.masteryEstimate !== null && problem.libraryMetadata.masteryEstimate < .5)
-      && (!normalizedQuery || problem.searchText.toLocaleLowerCase('zh-CN').includes(normalizedQuery)))
-  }, [chapterFilter, difficultyFilter, knowledgeFilter, methodFilter, modelFilter, problems, query, reviewFilter, subjectFilter, textbookFilter])
+      && (!query.trim() || searchMatchIds?.has(problem.id)))
+  }, [chapterFilter, difficultyFilter, knowledgeFilter, methodFilter, modelFilter, problems, query, reviewFilter, searchMatchIds, subjectFilter, textbookFilter])
+
+  useEffect(() => {
+    const normalized = query.normalize('NFKC').trim()
+    if (!normalized) {
+      setSearchMatchIds(null)
+      return
+    }
+    let cancelled = false
+    setSearchMatchIds(new Set())
+    const timeout = window.setTimeout(() => {
+      void searchSavedProblemIds(normalized, view === 'archived', view === 'trash')
+        .then((ids) => {
+          if (!cancelled) setSearchMatchIds(new Set(ids))
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.warn('错题全文搜索失败', error)
+            setSearchMatchIds(new Set())
+          }
+        })
+    }, 120)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+    }
+  }, [query, view])
   useEffect(() => {
     if (!filteredProblems.some((problem) => problem.id === selectedId)) setSelectedId(filteredProblems[0]?.id ?? null)
   }, [filteredProblems, selectedId])
@@ -401,6 +448,12 @@ export function ProblemLibrary() {
     modelRuns.find((run) => run.id === selected?.aiActiveModelRunId) ??
     modelRuns[0] ??
     null
+  const duplicateSuggestions = useMemo(
+    () => selected
+      ? findProblemDuplicateSuggestions(selected, problems, duplicateDecisionIds)
+      : [],
+    [duplicateDecisionIds, problems, selected],
+  )
 
   useEffect(() => {
     if (!selectedId) { setSelectedRegions([]); return }
@@ -411,6 +464,30 @@ export function ProblemLibrary() {
     if (!selectedId) { setReviewHistory([]); return }
     void getProblemReviewHistory(selectedId).then(setReviewHistory).catch(() => setReviewHistory([]))
   }, [selectedId])
+
+  useEffect(() => {
+    setNoteDraft(selected?.libraryMetadata.note ?? '')
+    if (!selectedId) {
+      setDuplicateDecisionIds(new Set())
+      return
+    }
+    void listProblemDuplicateDecisions(selectedId)
+      .then((decisions) => setDuplicateDecisionIds(new Set(decisions.map((decision) => decision.candidateProblemId))))
+      .catch(() => setDuplicateDecisionIds(new Set()))
+  }, [selected?.libraryMetadata.note, selectedId])
+
+  useEffect(() => {
+    setBatchProblemIds(new Set())
+    setBatchTextbookId('')
+    if (subjectFilter === 'all') {
+      setBatchMode(false)
+      setBatchTextbooks([])
+      return
+    }
+    void listTextbooks(subjectFilter)
+      .then((books) => setBatchTextbooks(books.filter((book) => !book.archivedAt)))
+      .catch(() => setBatchTextbooks([]))
+  }, [subjectFilter])
 
   useEffect(() => {
     let cancelled = false
@@ -562,6 +639,66 @@ export function ProblemLibrary() {
     }
   }
 
+  const toggleFavorite = async () => {
+    if (!selected) return
+    setUpdating(true)
+    try {
+      const updated = await setProblemFavorite(
+        selected.id,
+        !selected.libraryMetadata.favorite,
+      )
+      setProblems((current) => current.map((problem) =>
+        problem.id === updated.id ? updated : problem))
+      notify(updated.libraryMetadata.favorite ? '已收藏' : '已取消收藏', 'success')
+    } catch (error) {
+      notify(`收藏状态保存失败：${String(error)}`, 'error')
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const persistNote = async () => {
+    if (!selected) return
+    setUpdating(true)
+    try {
+      const updated = await saveProblemNote(selected.id, noteDraft)
+      setProblems((current) => current.map((problem) =>
+        problem.id === updated.id ? updated : problem))
+      notify('备注已保存', 'success')
+    } catch (error) {
+      notify(`备注保存失败：${String(error)}`, 'error')
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const decideDuplicate = async (
+    suggestion: (typeof duplicateSuggestions)[number],
+    decision: 'keep_both' | 'merged',
+  ) => {
+    if (!selected) return
+    setUpdating(true)
+    try {
+      await decideProblemDuplicate({
+        problemId: selected.id,
+        candidateProblemId: suggestion.candidate.id,
+        decision,
+        similarityScore: suggestion.score,
+        signals: suggestion.signals,
+      })
+      setDuplicateDecisionIds((current) => new Set(current).add(suggestion.candidate.id))
+      if (decision === 'merged') await refresh(view, true)
+      notify(
+        decision === 'merged' ? '重复项已归档，历史记录仍保留' : '已保留为两道独立错题',
+        'success',
+      )
+    } catch (error) {
+      notify(`重复题处理失败：${String(error)}`, 'error')
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!selected) return
     setDeleting(true)
@@ -673,6 +810,54 @@ export function ProblemLibrary() {
     }
   }
 
+  const toggleBatchProblem = (problemId: string) => {
+    setBatchProblemIds((current) => {
+      const next = new Set(current)
+      if (next.has(problemId)) next.delete(problemId)
+      else next.add(problemId)
+      return next
+    })
+  }
+
+  const startSelectedRelabel = async () => {
+    if (subjectFilter === 'all' || !batchProblemIds.size) return
+    setBatchRunning(true)
+    try {
+      const batchId = await createRelabelBatch(subjectFilter, [...batchProblemIds])
+      void startRelabelBatchWorker(batchId)
+      notify(`已为 ${batchProblemIds.size} 道${subjectFilter}错题启动重新标注`, 'success')
+      setBatchProblemIds(new Set())
+    } catch (error) {
+      notify(`批量重新标注失败：${String(error)}`, 'error')
+    } finally {
+      setBatchRunning(false)
+    }
+  }
+
+  const migrateSelectedTextbook = async () => {
+    if (subjectFilter === 'all' || !batchProblemIds.size) return
+    setBatchRunning(true)
+    try {
+      await setProblemTextbookMatches(
+        [...batchProblemIds],
+        subjectFilter,
+        batchTextbookId || null,
+      )
+      await refresh(view, true)
+      notify(
+        batchTextbookId
+          ? `已迁移 ${batchProblemIds.size} 道错题的教材体系`
+          : `已清除 ${batchProblemIds.size} 道错题的教材匹配`,
+        'success',
+      )
+      setBatchProblemIds(new Set())
+    } catch (error) {
+      notify(`批量迁移教材失败：${String(error)}`, 'error')
+    } finally {
+      setBatchRunning(false)
+    }
+  }
+
   if (recropping && selected) {
     return (
       <ProblemCropEditor
@@ -690,7 +875,11 @@ export function ProblemLibrary() {
       <PageHeader
         actions={<SegmentedControl
           ariaLabel="错题库视图"
-          onChange={setView}
+          onChange={(nextView) => {
+            setView(nextView)
+            setBatchMode(false)
+            setBatchProblemIds(new Set())
+          }}
           options={[
             { value: 'active', label: '错题', disabled: editing },
             { value: 'archived', label: '已归档', disabled: editing },
@@ -707,10 +896,23 @@ export function ProblemLibrary() {
           <div className="problem-list-heading">
             <strong>{view === 'active' ? '全部错题' : view === 'archived' ? '归档错题' : '已删除错题'}</strong>
             <span>{filteredProblems.length} / {problems.length} 道</span>
+            {view === 'active' && (
+              <button
+                disabled={subjectFilter === 'all'}
+                onClick={() => {
+                  setBatchMode((current) => !current)
+                  setBatchProblemIds(new Set())
+                }}
+                title={subjectFilter === 'all' ? '请先选择一个科目' : undefined}
+                type="button"
+              >
+                {batchMode ? '退出批量' : '批量操作'}
+              </button>
+            )}
           </div>
 
           <div className="problem-list-filters">
-            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案或标签" type="search" value={query} /></label>
+            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案、标签或备注" type="search" value={query} /></label>
             <label><span className="sr-only">筛选科目</span><select onChange={(event) => setSubjectFilter(event.target.value)} value={subjectFilter}>
               <option value="all">全部科目</option>
               {subjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
@@ -724,10 +926,46 @@ export function ProblemLibrary() {
                 <select aria-label="知识点" onChange={(event) => setKnowledgeFilter(event.target.value)} value={knowledgeFilter}><option value="all">全部知识点</option>{metadataOptions.knowledge.map((value) => <option key={value}>{value}</option>)}</select>
                 <select aria-label="方法" onChange={(event) => setMethodFilter(event.target.value)} value={methodFilter}><option value="all">全部方法</option>{metadataOptions.methods.map((value) => <option key={value}>{value}</option>)}</select>
                 <select aria-label="题型模型" onChange={(event) => setModelFilter(event.target.value)} value={modelFilter}><option value="all">全部模型</option>{metadataOptions.models.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="复习状态" onChange={(event) => setReviewFilter(event.target.value)} value={reviewFilter}><option value="all">全部复习状态</option><option value="due">已到复习时间</option><option value="stable">掌握较稳定</option><option value="attention">需要关注</option><option value="unconfirmed">尚未确认</option></select>
+                <select aria-label="复习状态" onChange={(event) => setReviewFilter(event.target.value)} value={reviewFilter}><option value="all">全部复习状态</option><option value="favorite">我的收藏</option><option value="due">已到复习时间</option><option value="stable">掌握较稳定</option><option value="attention">需要关注</option><option value="unconfirmed">尚未确认</option></select>
               </div>
             </details>
           </div>
+
+          {batchMode && subjectFilter !== 'all' && (
+            <div className="problem-batch-toolbar" role="region" aria-label="错题批量操作">
+              <strong>已选 {batchProblemIds.size} 道 · {subjectFilter}</strong>
+              <button
+                disabled={batchRunning || !filteredProblems.length}
+                onClick={() => setBatchProblemIds(new Set(filteredProblems.map((problem) => problem.id)))}
+                type="button"
+              >
+                选择当前结果
+              </button>
+              <button
+                disabled={batchRunning || !batchProblemIds.size}
+                onClick={() => void startSelectedRelabel()}
+                type="button"
+              >
+                批量重新标注
+              </button>
+              <select
+                aria-label="批量迁移到教材"
+                disabled={batchRunning}
+                onChange={(event) => setBatchTextbookId(event.target.value)}
+                value={batchTextbookId}
+              >
+                <option value="">清除教材匹配</option>
+                {batchTextbooks.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
+              </select>
+              <button
+                disabled={batchRunning || !batchProblemIds.size}
+                onClick={() => void migrateSelectedTextbook()}
+                type="button"
+              >
+                应用教材迁移
+              </button>
+            </div>
+          )}
 
           <div className="problem-card-list">
             {loading ? (
@@ -735,12 +973,17 @@ export function ProblemLibrary() {
             ) : filteredProblems.length ? (
               filteredProblems.map((problem) => (
                 <button
+                  aria-pressed={batchMode ? batchProblemIds.has(problem.id) : undefined}
                   className={`problem-card ${
                     selectedId === problem.id ? 'active' : ''
-                  }`}
+                  } ${batchProblemIds.has(problem.id) ? 'batch-selected' : ''}`}
                   key={problem.id}
                   disabled={editing}
                   onClick={() => {
+                    if (batchMode) {
+                      toggleBatchProblem(problem.id)
+                      return
+                    }
                     setSelectedId(problem.id)
                     setDetailTab('content')
                   }}
@@ -752,7 +995,7 @@ export function ProblemLibrary() {
                     path={problem.cropImagePath}
                   />
                   <span className="problem-card-copy">
-                    <strong>{problem.title}</strong>
+                    <strong>{problem.libraryMetadata.favorite && <span aria-label="已收藏" className="problem-card-favorite">★</span>}{problem.title}</strong>
                     <small>{dateFormatter.format(problem.createdAt)}</small>
                     <span className="problem-card-statuses">
                       <span className="problem-status">
@@ -816,6 +1059,15 @@ export function ProblemLibrary() {
                     </>
                   ) : (
                     <>
+                      <IconButton
+                        aria-pressed={selected.libraryMetadata.favorite}
+                        className={selected.libraryMetadata.favorite ? 'is-favorite' : ''}
+                        disabled={updating}
+                        label={selected.libraryMetadata.favorite ? '取消收藏' : '收藏错题'}
+                        onClick={() => void toggleFavorite()}
+                      >
+                        <Icon name="favorite" size={18} />
+                      </IconButton>
                       <button
                         className="secondary-action"
                         disabled={updating}
@@ -1100,6 +1352,70 @@ export function ProblemLibrary() {
                         subjectId={selected.subjectId}
                         subject={selected.subject}
                       />
+
+                      <section className="problem-note-section">
+                        <div>
+                          <p className="eyebrow">个人备注</p>
+                          <h3>复习时提醒自己</h3>
+                        </div>
+                        <textarea
+                          aria-label="错题备注"
+                          disabled={updating}
+                          maxLength={20_000}
+                          onChange={(event) => setNoteDraft(event.target.value)}
+                          placeholder="例如：容易漏掉定义域；下次先画辅助线。备注会参与错题库搜索。"
+                          rows={3}
+                          value={noteDraft}
+                        />
+                        <div>
+                          <small>{noteDraft.length} / 20000</small>
+                          <Button
+                            disabled={updating || noteDraft === selected.libraryMetadata.note}
+                            onClick={() => void persistNote()}
+                          >
+                            保存备注
+                          </Button>
+                        </div>
+                      </section>
+
+                      {duplicateSuggestions.length > 0 && (
+                        <section className="problem-duplicate-section">
+                          <div>
+                            <p className="eyebrow">可能重复</p>
+                            <h3>请确认是否为同一道题</h3>
+                            <p>只比较同一科目的题目；Axiom 不会自动删除或合并。</p>
+                          </div>
+                          <ul>
+                            {duplicateSuggestions.slice(0, 3).map((suggestion) => (
+                              <li key={suggestion.candidate.id}>
+                                <ProblemImage
+                                  alt="可能重复的题块"
+                                  className="problem-duplicate-image"
+                                  path={suggestion.candidate.cropImagePath}
+                                />
+                                <div>
+                                  <strong>{suggestion.candidate.title}</strong>
+                                  <small>
+                                    相似度 {Math.round(suggestion.score * 100)}%
+                                    {suggestion.signals.length ? ` · ${suggestion.signals.join('、')}` : ''}
+                                  </small>
+                                  <div className="problem-duplicate-actions">
+                                    <Button disabled={updating} onClick={() => setSelectedId(suggestion.candidate.id)}>
+                                      查看候选
+                                    </Button>
+                                    <Button disabled={updating} onClick={() => void decideDuplicate(suggestion, 'keep_both')}>
+                                      保留两题
+                                    </Button>
+                                    <Button disabled={updating} onClick={() => void decideDuplicate(suggestion, 'merged')} variant="primary">
+                                      合并并归档重复项
+                                    </Button>
+                                  </div>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
 
                       <SolutionComparison
                         attempt={studentAttempt}

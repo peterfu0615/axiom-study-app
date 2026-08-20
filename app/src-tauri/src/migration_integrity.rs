@@ -6,8 +6,8 @@
 //! 触发 "cannot start a transaction within a transaction"。因此生产路径由
 //! db::migrate_embedded_schema 在启动期执行：剥离最外层事务后运行，并按
 //! 原文 SHA-384 写入/校验 _sqlx_migrations。本测试全部走同一 runner：
-//!   1. 全新库一路跑到 52，且与 sqlx Migrator 校验兼容（幂等重跑）；
-//!   2. 27 状态的库可以升级到 52；
+//!   1. 全新库一路跑到 53，且与 sqlx Migrator 校验兼容（幂等重跑）；
+//!   2. 27 状态的库可以升级到 53；
 //!   3. 用户真实库副本（/tmp/axiom-verify.db，人工预置）能通过 checksum
 //!      校验并推进到 51；
 //!   4. 0028 对同层重复节点完成清理、子节点重指与幂等重放；
@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 52（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 53（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_52_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_53_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(52);
+            let migrations = migrations_up_to(53);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 52（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 52);
+                .expect("全新库必须能完整迁移到 53（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 53);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 52);
+            assert_eq!(max_applied_version(&mut conn).await, 53);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=52 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=53 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_52_exactly() {
+    fn migration_list_covers_versions_1_through_53_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=52).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=52");
+        let expected: Vec<i64> = (1..=53).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=53");
     }
 
     #[test]
@@ -291,6 +291,43 @@ mod tests {
                 )
                 .await
                 .is_err());
+        });
+    }
+
+    #[test]
+    fn problem_library_profiles_and_duplicate_decisions_are_bounded() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("problem-library-enhancements");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(53))
+                .await
+                .expect("problem library schema must migrate");
+            conn.execute("INSERT INTO source_documents(id,original_image_path,content_hash,source_type,captured_at,created_at) VALUES ('source','/tmp/source.png','hash','import',1,1)")
+                .await
+                .expect("source fixture");
+            for id in ["problem-a", "problem-b"] {
+                sqlx::query("INSERT INTO problems(id,source_document_id,status,subject,stem_markdown,created_at,updated_at) VALUES ($1,'source','saved','数学','一次函数求交点',1,1)")
+                    .bind(id)
+                    .execute(&mut conn)
+                    .await
+                    .expect("problem fixture");
+            }
+            conn.execute("INSERT INTO problem_library_profiles(problem_id,is_favorite,note,updated_at) VALUES ('problem-a',1,'易漏条件',2)")
+                .await
+                .expect("favorite and note must persist");
+            let indexed: String = sqlx::query_scalar(
+                "SELECT problem_id FROM problem_library_fts WHERE problem_library_fts MATCH '\"易漏条件\"'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("note trigger must update the full-text index");
+            assert_eq!(indexed, "problem-a");
+            conn.execute("INSERT INTO problem_duplicate_decisions(first_problem_id,second_problem_id,decision,canonical_problem_id,similarity_score,signals_json,created_at,updated_at) VALUES ('problem-a','problem-b','keep_both',NULL,0.8,'[\"stem\"]',2,2)")
+                .await
+                .expect("same-subject decision shape must persist");
+            assert!(conn.execute("UPDATE problem_library_profiles SET is_favorite=2 WHERE problem_id='problem-a'").await.is_err());
+            assert!(conn.execute("UPDATE problem_duplicate_decisions SET similarity_score=2 WHERE first_problem_id='problem-a'").await.is_err());
+            assert!(conn.execute("UPDATE problem_duplicate_decisions SET decision='merged',canonical_problem_id=NULL WHERE first_problem_id='problem-a'").await.is_err());
         });
     }
 

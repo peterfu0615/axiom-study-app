@@ -51,6 +51,7 @@ import {
   addProblemTag,
   archiveTextbook,
   cancelRelabelBatch,
+  createRelabelBatch,
   getAvailableHorizonTags,
   getCurriculumImportJob,
   getTextbookDeletionImpact,
@@ -61,6 +62,7 @@ import {
   resolveProblemTextbookBeforeAnalysis,
   resolveProblemTextbookContextBeforeAnalysis,
   runCurriculumImportJob,
+  setProblemTextbookMatches,
   writeControlledProblemAnalysis,
 } from './horizonDatabase'
 import { verifyTextbookSource } from './native'
@@ -293,6 +295,38 @@ describe('cancelRelabelBatch', () => {
           sql.includes('paused_at = NULL'),
       ),
     ).toBe(true)
+  })
+})
+
+describe('subject-scoped library batch operations', () => {
+  beforeEach(() => {
+    recorded.calls.length = 0
+    recorded.executeOverrides.length = 0
+    recorded.selectOverrides.length = 0
+  })
+
+  it('creates a relabel batch containing only the selected same-subject problems', async () => {
+    recorded.selectOverrides.push({
+      match: /SELECT id FROM problems WHERE status = 'saved'/,
+      rows: [{ id: 'problem-1' }, { id: 'problem-2' }],
+    })
+    recorded.executeOverrides.push({ match: /INSERT OR IGNORE INTO tag_relabel_batches/, rowsAffected: 1 })
+    await createRelabelBatch('数学', ['problem-1', 'problem-2'])
+    const scope = recorded.calls.find((call) => call.sql.startsWith('SELECT id FROM problems WHERE status'))
+    expect(scope?.params).toEqual(['数学', 'problem-1', 'problem-2'])
+    expect(recorded.calls.filter((call) => call.sql.startsWith('INSERT INTO tag_relabel_items'))).toHaveLength(2)
+  })
+
+  it('validates one subject before applying a textbook migration atomically', async () => {
+    recorded.selectOverrides.push(
+      { match: /SELECT id FROM problems WHERE status='saved'/, rows: [{ id: 'problem-1' }, { id: 'problem-2' }] },
+      { match: /SELECT id FROM textbooks WHERE id=/, rows: [{ id: 'book-1' }] },
+    )
+    await expect(setProblemTextbookMatches(['problem-1', 'problem-2'], '数学', 'book-1')).resolves.toBe(2)
+    const update = recorded.calls.find((call) => call.sql.startsWith('UPDATE problems SET matched_textbook_id'))
+    expect(update?.params).toEqual(['book-1', expect.any(Number), 'problem-1', 'problem-2'])
+    expect(recorded.calls[0]?.sql).toBe('BEGIN IMMEDIATE')
+    expect(recorded.calls.at(-1)?.sql).toBe('COMMIT')
   })
 })
 describe('knowledge node import dedupe contract', () => {
