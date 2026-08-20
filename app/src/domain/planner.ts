@@ -227,8 +227,10 @@ export function buildPlannerSchedule(input: BuildPlannerScheduleInput): PlannerS
       while (remaining > 0) {
         const target = [...range]
           .filter((day) => day.remainingMinutes > 0)
-          .sort((left, right) => left.scheduledMinutes / Math.max(1, left.capacityMinutes) - right.scheduledMinutes / Math.max(1, right.capacityMinutes)
-            || left.date.localeCompare(right.date))[0]
+          .sort((left, right) => task.taskType === 'review'
+            ? right.date.localeCompare(left.date)
+            : left.scheduledMinutes / Math.max(1, left.capacityMinutes) - right.scheduledMinutes / Math.max(1, right.capacityMinutes)
+              || left.date.localeCompare(right.date))[0]
         if (!target) break
         const minutes = Math.min(remaining, target.remainingMinutes, chunkLimit)
         addSegment(task, target, minutes)

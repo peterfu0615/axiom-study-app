@@ -72,7 +72,7 @@ function AppRuntimeShell({
       ) : section === 'insights' ? (
         <InsightsWorkspace />
       ) : section === 'planner' ? (
-        <PlannerWorkspace />
+        <PlannerWorkspace onNavigate={setSection} />
       ) : (
         <ModulePlaceholder section={section} />
       )}

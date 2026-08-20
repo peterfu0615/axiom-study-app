@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, useEffect } from 'react'
 import { Button, Dialog, EmptyState, InlineNotice, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
+import type { AppSection } from '../../components/Sidebar'
 import { plannerDate, type PlannerAvailabilityDay, type PlannerTaskType } from '../../domain/planner'
 import {
   cancelPlannerTask,
@@ -36,7 +37,7 @@ function formatDay(date: string, index: number) {
   }
 }
 
-export function PlannerWorkspace() {
+export function PlannerWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [data, setData] = useState<PlannerWorkspaceData | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -44,6 +45,7 @@ export function PlannerWorkspace() {
   const [taskDialog, setTaskDialog] = useState(false)
   const [capacityDialog, setCapacityDialog] = useState<PlannerAvailabilityDay | null>(null)
   const [settingsDialog, setSettingsDialog] = useState(false)
+  const [completion, setCompletion] = useState<{ id: string; title: string; actualMinutes: number } | null>(null)
   const [draft, setDraft] = useState(defaultDraft)
 
   const load = useCallback(async () => {
@@ -117,9 +119,9 @@ export function PlannerWorkspace() {
                   <strong>{task.title}</strong>
                   <small>{task.subject || 'Horizon'}{task.dueDate === day.date ? ' · 今日截止' : ` · ${task.dueDate.slice(5).replace('-', '/')} 截止`}</small>
                   {task.sourceType === 'user' || task.sourceType === 'exam' ? <div>
-                    <button disabled={busy} onClick={() => void mutate(() => completePlannerTask(task.id, task.estimatedMinutes))} type="button">完成</button>
+                    <button disabled={busy} onClick={() => setCompletion({ id: task.id, title: task.title, actualMinutes: task.estimatedMinutes })} type="button">完成</button>
                     <button disabled={busy} onClick={() => void mutate(() => cancelPlannerTask(task.id))} type="button">取消</button>
-                  </div> : null}
+                  </div> : <div><button onClick={() => onNavigate('today')} type="button">{task.taskType === 'correction' ? '去订正' : '去复习'}</button></div>}
                 </div>
               })}
               {!day.segments.length && <span className="planner-day__empty">{day.unavailable ? day.note || '当天不安排学习' : '保留时间'}</span>}
@@ -177,6 +179,13 @@ export function PlannerWorkspace() {
         <label>同科连续上限（分钟）<input max="180" min="10" onChange={(event) => setData({ ...data, preferences: { ...data.preferences, maxSubjectBlockMinutes: Number(event.target.value) } })} type="number" value={data.preferences.maxSubjectBlockMinutes} /></label>
         <label>排程范围（天）<input max="42" min="7" onChange={(event) => setData({ ...data, preferences: { ...data.preferences, horizonDays: Number(event.target.value) } })} type="number" value={data.preferences.horizonDays} /></label>
         <div className="planner-form__actions"><Button onClick={() => setSettingsDialog(false)} variant="ghost">取消</Button><Button onClick={() => void mutate(async () => { await savePlannerPreferences(data.preferences); setSettingsDialog(false) })} variant="primary">保存并重排</Button></div>
+      </div>}
+    </Dialog>
+    <Dialog onClose={() => setCompletion(null)} open={Boolean(completion)} title="记录实际用时">
+      {completion && <div className="planner-form">
+        <p className="planner-form__summary">{completion.title}</p>
+        <label>实际用时（分钟）<input autoFocus max="1440" min="0" onChange={(event) => setCompletion({ ...completion, actualMinutes: Number(event.target.value) })} type="number" value={completion.actualMinutes} /></label>
+        <div className="planner-form__actions"><Button onClick={() => setCompletion(null)} variant="ghost">取消</Button><Button onClick={() => void mutate(async () => { await completePlannerTask(completion.id, completion.actualMinutes); setCompletion(null) })} variant="primary">确认完成</Button></div>
       </div>}
     </Dialog>
   </main>

@@ -58,4 +58,12 @@ describe('planner scheduler', () => {
     })
     expect(schedule.days[0].segments[0].taskId).toBe('exam-task')
   })
+
+  it('keeps future review on its due day and only pulls it earlier when that day is full', () => {
+    const schedule = buildPlannerSchedule({
+      startDate: '2026-08-21', preferences, availability: [], exams: [], subjectSpeedRatios: {},
+      tasks: [task({ id: 'review', taskType: 'review', sourceType: 'review', sourceRef: '2026-08-23', dueDate: '2026-08-23', estimatedMinutes: 25, priority: 5 })],
+    })
+    expect(schedule.days.flatMap((day) => day.segments).map((segment) => segment.date)).toEqual(['2026-08-23'])
+  })
 })
