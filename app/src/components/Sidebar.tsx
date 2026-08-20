@@ -1,7 +1,5 @@
 import { Icon } from './Icon'
-import axiomIconLight from '../../../icons/Axiom-Icon-GR/axiom-icon-gr/Default/axiom-icon-gr-iOS-Default-1024@1x.png'
-import axiomIconDark from '../../../icons/Axiom-Icon-GR/axiom-icon-gr/Default/axiom-icon-gr-iOS-Dark-1024@1x.png'
-import { useTheme } from '../platform/theme'
+import axiomWordmark from '../../src-tauri/icons/source/axiom-wordmark.png'
 
 export type AppSection =
   | 'today'
@@ -30,8 +28,6 @@ export function Sidebar({
   active: AppSection
   onChange: (section: AppSection) => void
 }) {
-  const { resolvedAppearance } = useTheme()
-
   return (
     <aside className="sidebar">
       <div className="traffic-light-space" data-tauri-drag-region />
@@ -39,7 +35,7 @@ export function Sidebar({
         <img
           alt="Axiom"
           className="brand-icon"
-          src={resolvedAppearance === 'dark' ? axiomIconDark : axiomIconLight}
+          src={axiomWordmark}
         />
       </div>
 

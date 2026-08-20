@@ -1,13 +1,14 @@
 # Axiom App Icon sources
 
-These are the untouched 1024×1024 source exports supplied for Axiom:
+These are the canonical source exports supplied for Axiom:
 
-- `axiom-icon-light-1024.png` — light appearance source used by the in-app brand mark and current Tauri bundle.
-- `axiom-icon-dark-1024.png` — dark appearance source used by the in-app brand mark.
+- `axiom-icon-light-1024.png` — GR Default 1024×1024 source used to generate the Tauri bundle, Finder/Dock icon, and favicon.
+- `axiom-icon-dark-1024.png` — GR Dark 1024×1024 source retained for future native appearance support.
+- `axiom-wordmark.png` — transparent horizontal Axiom wordmark used only in the in-app Sidebar.
 
-The sidebar selects these sources from the resolved Axiom appearance, so the
-brand mark follows either the system appearance or the user's explicit light /
-dark choice.
+The Sidebar deliberately uses the same wordmark in light and dark appearances.
+Do not import assets from the repository-level design-export directory at
+runtime; production UI must reference these tracked canonical sources.
 
 The macOS Finder/Dock application icon remains a single static `.icns` asset:
 Tauri's bundle configuration does not support changing the native application

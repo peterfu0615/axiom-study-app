@@ -46,10 +46,11 @@
 }
 
 .brand-icon {
-  width: 42px;
-  height: 42px;
+  width: 112px;
+  height: 28px;
   display: block;
   object-fit: contain;
+  object-position: left center;
 }
 
 .sidebar nav {
