@@ -69,6 +69,12 @@ import {
 } from '../../platform/horizonDatabase'
 import { startRelabelBatchWorker } from '../curriculum/relabelWorker'
 import type { Textbook } from '../../domain/horizon'
+import type { PersistedGeometryScene } from '../../domain/geometryScene'
+import { GeometrySceneView } from '../../components/GeometrySceneView'
+import {
+  getLatestGeometryScene,
+  reconstructGeometryScene,
+} from '../../platform/geometrySceneDatabase'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
@@ -263,6 +269,8 @@ export function ProblemLibrary() {
   const [reasoning, setReasoning] = useState<ReasoningAnalysis | null>(null)
   const [selectedRegions, setSelectedRegions] = useState<ProblemRegion[]>([])
   const [reviewHistory, setReviewHistory] = useState<ProblemReviewHistoryEntry[]>([])
+  const [geometryScene, setGeometryScene] = useState<PersistedGeometryScene | null>(null)
+  const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
   const [noteDraft, setNoteDraft] = useState('')
   const [batchMode, setBatchMode] = useState(false)
@@ -482,6 +490,18 @@ export function ProblemLibrary() {
   }, [selectedId, problems])
 
   useEffect(() => {
+    let cancelled = false
+    if (!selectedId) {
+      setGeometryScene(null)
+      return
+    }
+    void getLatestGeometryScene(selectedId)
+      .then((scene) => { if (!cancelled) setGeometryScene(scene) })
+      .catch(() => { if (!cancelled) setGeometryScene(null) })
+    return () => { cancelled = true }
+  }, [selectedId])
+
+  useEffect(() => {
     if (!selectedId) { setReviewHistory([]); return }
     void getProblemReviewHistory(selectedId).then(setReviewHistory).catch(() => setReviewHistory([]))
   }, [selectedId])
@@ -641,6 +661,30 @@ export function ProblemLibrary() {
       void runSolutionWorker()
     } catch (error) {
       notify(`无法重新生成：${String(error)}`, 'error')
+    }
+  }
+
+  const rebuildGeometryScene = async () => {
+    const imagePath = selectedDiagramPath || selected?.cropImagePath
+    if (!selected || !imagePath) return
+    setGeometrySceneBusy(true)
+    try {
+      const scene = await reconstructGeometryScene({
+        problemId: selected.id,
+        imagePath,
+        stemMarkdown: selected.stemMarkdown ?? '',
+      })
+      setGeometryScene(scene)
+      notify(
+        scene.validationStatus === 'validated'
+          ? '几何图已重建；可随时回看原图'
+          : '几何图置信度不足，已安全保留原图',
+        scene.validationStatus === 'validated' ? 'success' : 'info',
+      )
+    } catch (error) {
+      notify(`几何图重建失败，已保留原图：${String(error)}`, 'error')
+    } finally {
+      setGeometrySceneBusy(false)
     }
   }
 
@@ -1290,13 +1334,41 @@ export function ProblemLibrary() {
                           </div>
 
                           {selectedDiagramRect && selectedHasDisplayDiagram && (
-                            <ProblemDiagramImage
-                              alt={`${selected.title}中的题目图形`}
-                              croppedPath={selectedDiagramPath}
-                              path={selected.cropImagePath}
-                              rect={selectedDiagramRect}
-                              source={selectedDiagramRegion?.source ?? 'auto'}
-                            />
+                            <div className="problem-geometry-scene">
+                              <GeometrySceneView
+                                alt={`${selected.title}的结构化几何图`}
+                                fallback={(
+                                  <ProblemDiagramImage
+                                    alt={`${selected.title}中的题目图形`}
+                                    croppedPath={selectedDiagramPath}
+                                    path={selected.cropImagePath}
+                                    rect={selectedDiagramRect}
+                                    source={selectedDiagramRegion?.source ?? 'auto'}
+                                  />
+                                )}
+                                scene={geometryScene?.validationStatus === 'validated'
+                                  ? geometryScene.scene
+                                  : null}
+                              />
+                              {selected.aiDiagramKind === 'geometry' && (
+                                <div className="problem-geometry-scene__actions">
+                                  <Button
+                                    disabled={geometrySceneBusy}
+                                    onClick={() => void rebuildGeometryScene()}
+                                    variant="secondary"
+                                  >
+                                    {geometrySceneBusy
+                                      ? '正在重建…'
+                                      : geometryScene?.validationStatus === 'validated'
+                                        ? '重新重建几何图'
+                                        : '重建几何图（实验）'}
+                                  </Button>
+                                  {geometryScene?.validationStatus === 'rejected' && (
+                                    <small>{geometryScene.validationErrors[0]}</small>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           )}
                           {selectedIsProcessing && (
                             <div

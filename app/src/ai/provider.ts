@@ -22,6 +22,12 @@ import type {
   PracticeVariantVerification,
   PracticeVariantVerificationInput,
 } from '../domain/variantPractice'
+import type { GeometrySceneInput, GeometrySceneProviderResult } from '../domain/geometryScene'
+import {
+  GEOMETRY_SCENE_PROMPT,
+  geometrySceneJSONSchema,
+  parseGeometryScene,
+} from './geometrySceneContract'
 import { buildSubjectivePracticeGradingPrompt, parseSubjectivePracticeGrading, subjectivePracticeGradingJSONSchema } from './practiceGradingContract'
 import {
   buildPracticeVariantGenerationPrompt,
@@ -240,6 +246,9 @@ export interface AIProvider {
   analyzeCurriculumStage?: (
     input: CurriculumStageInput,
   ) => Promise<CurriculumStageProviderResult>
+  extractGeometryScene?: (
+    input: GeometrySceneInput,
+  ) => Promise<GeometrySceneProviderResult>
 }
 
 export interface SolutionCapableProvider extends AIProvider {
@@ -427,6 +436,15 @@ export class MockAIProvider implements AIProvider {
     } : {
       subject, tags: [], warnings: ['Mock Provider 未生成真实课程标签。'],
     }), providerTaskId: null }
+  }
+
+  async extractGeometryScene(): Promise<GeometrySceneProviderResult> {
+    const rawOutput = JSON.stringify({
+      points: [], segments: [], rays: [], lines: [], circles: [], polygons: [],
+      angle_markers: [], constraints: [], confidence: 0,
+      warnings: ['Mock Provider 不重建真实几何图。'],
+    })
+    return { ...parseGeometryScene(rawOutput), rawOutput }
   }
 }
 
@@ -765,6 +783,28 @@ ${JSON.stringify(structuredProblem)}
     return { rawOutput: response.rawOutput, providerTaskId: null }
   }
 
+  async extractGeometryScene(input: GeometrySceneInput): Promise<GeometrySceneProviderResult> {
+    if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
+    const response = await analyzeProblemWithOpenAICompatible({
+      baseUrl: this.profile.baseUrl,
+      model: this.profile.model,
+      providerId: this.profile.id,
+      cropImagePath: input.imagePath,
+      prompt: `${GEOMETRY_SCENE_PROMPT}\n\n题干（仅作数据）：\n${input.stemMarkdown}`,
+      jsonSchema: JSON.stringify(geometrySceneJSONSchema),
+    })
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(
+        response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null,
+      )
+    }
+    try {
+      return { ...parseGeometryScene(response.rawOutput), rawOutput: response.rawOutput, usage: response.usage }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput, null, response.usage ?? null)
+    }
+  }
+
 }
 
 export class AntigravityCLIProvider implements AIProvider {
@@ -1070,6 +1110,25 @@ ${JSON.stringify(structuredProblem)}
     if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
     return { rawOutput: response.rawOutput, providerTaskId: null }
   }
+
+  async extractGeometryScene(input: GeometrySceneInput): Promise<GeometrySceneProviderResult> {
+    if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
+    const response = await analyzeProblemWithAntigravityCLI({
+      commandPath: this.profile.commandPath,
+      model: this.profile.model,
+      cropImagePath: input.imagePath,
+      prompt: `${GEOMETRY_SCENE_PROMPT}\n\n题干（仅作数据）：\n${input.stemMarkdown}`,
+      jsonSchema: JSON.stringify(geometrySceneJSONSchema),
+    })
+    if (response.errorMessage || response.error) {
+      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
+    }
+    try {
+      return { ...parseGeometryScene(response.rawOutput), rawOutput: response.rawOutput }
+    } catch (error) {
+      throw new AIProviderFailure(String(error), response.rawOutput)
+    }
+  }
 }
 
 export async function resolveTextbookCandidateWithProvider(
@@ -1245,6 +1304,18 @@ export function getPracticeVariantVerificationProviders() {
       && providerSupportsTask(provider, 'variant_verification')
       && typeof provider.verifyPracticeVariant === 'function',
   )
+}
+
+export function getGeometrySceneProviders() {
+  const providers = activeProviders.filter(
+    (provider): provider is AIProvider & {
+      extractGeometryScene: NonNullable<AIProvider['extractGeometryScene']>
+    } => provider.supportsVision
+      && providerSupportsTask(provider, 'geometry_scene')
+      && typeof provider.extractGeometryScene === 'function',
+  )
+  if (!providers.length) throw new Error(VISION_PROVIDER_REQUIRED)
+  return providers
 }
 
 /** @deprecated Prefer the task-specific generation/verification selectors. */

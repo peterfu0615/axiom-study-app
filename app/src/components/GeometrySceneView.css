@@ -1,0 +1,38 @@
+.geometry-scene-view {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.geometry-scene-view svg {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.geometry-scene-view line,
+.geometry-scene-view polygon,
+.geometry-scene-view > svg > circle {
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.geometry-scene-view__point {
+  fill: currentColor;
+}
+
+.geometry-scene-view text {
+  fill: currentColor;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.geometry-scene-view figcaption {
+  color: var(--muted);
+  font-size: 11px;
+}

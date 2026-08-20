@@ -2266,6 +2266,27 @@
   text-align: right;
 }
 
+.problem-geometry-scene {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.problem-geometry-scene__actions {
+  display: grid;
+  gap: 6px;
+}
+
+.problem-geometry-scene__actions .ax-button {
+  justify-self: start;
+}
+
+.problem-geometry-scene__actions small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .problem-choice-list {
   display: grid;
   gap: 10px;

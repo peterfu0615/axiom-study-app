@@ -10,6 +10,6 @@ describe('provider task routing settings', () => {
     expect(source).toContain("value: 'submission_grading'")
     expect(source).not.toContain("value: 'solution_review'")
     expect(source).not.toContain("value: 'variant_planning'")
-    expect(source).not.toContain("value: 'geometry_scene'")
+    expect(source).toContain("value: 'geometry_scene'")
   })
 })

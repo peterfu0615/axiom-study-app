@@ -369,6 +369,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0054_model_run_usage_cost.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 55,
+            description: "geometry_scenes",
+            sql: include_str!("../migrations/0055_geometry_scenes.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

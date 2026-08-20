@@ -78,6 +78,7 @@ const PROVIDER_TASK_OPTIONS: Array<{ value: AIProviderTaskType; label: string }>
   { value: 'explain_selection', label: '局部解释' },
   { value: 'textbook_recognition', label: '教材识别' },
   { value: 'curriculum_analysis', label: '课程分析' },
+  { value: 'geometry_scene', label: '几何图重建（实验）' },
 ]
 
 export function AISettings() {
