@@ -25,6 +25,8 @@ interface RecordRow {
   completed_at: number | null
   source_problem_id: string
   rating: ReviewRating | null
+  source_mode: ReviewInsightRecord['sourceMode']
+  difficulty: DifficultyLevel
   target_tags_json: string
 }
 
@@ -64,7 +66,7 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
   const [rows, skillRows, changeRows] = await Promise.all([
     select<RecordRow[]>(`
       SELECT module.id AS module_id, module.subject, session.session_date, module.status,
-        module.completed_at, instance.source_problem_id,
+        module.completed_at, instance.source_problem_id, instance.source_mode, instance.difficulty,
         CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
           THEN CASE json_extract(effective.effective_grading_json, '$.correctness')
             WHEN 'correct' THEN 'good' WHEN 'partial' THEN 'hard' ELSE 'again' END
@@ -111,7 +113,8 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
     return {
       moduleId: row.module_id, subject: row.subject, sessionDate: row.session_date, status: row.status,
       completedAt: nullable(row.completed_at), sourceProblemId: row.source_problem_id,
-      rating: row.rating, tags: snapshot.tags ?? [], errorCategories: snapshot.errorCategories ?? [],
+      rating: row.rating, sourceMode: row.source_mode, difficulty: row.difficulty,
+      tags: snapshot.tags ?? [], errorCategories: snapshot.errorCategories ?? [],
     }
   })
   const skills: InsightSkill[] = skillRows.map((row) => ({

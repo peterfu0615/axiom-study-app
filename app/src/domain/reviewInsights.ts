@@ -1,4 +1,4 @@
-import type { HorizonTagType } from './models'
+import type { DifficultyLevel, HorizonTagType } from './models'
 import {
   addLocalReviewDays,
   localReviewDate,
@@ -18,6 +18,8 @@ export interface ReviewInsightRecord {
   completedAt: number | null
   sourceProblemId: string
   rating: ReviewRating | null
+  sourceMode: 'original' | 'variant'
+  difficulty: DifficultyLevel
   tags: ReviewTag[]
   errorCategories: ReviewTag[]
 }
@@ -57,6 +59,20 @@ export interface ReviewInsights {
   mastery: Record<'stable' | 'consolidating' | 'attention' | 'insufficient', InsightSkill[]>
   themes: Array<{ type: HorizonTagType; name: string; count: number }>
   recurringErrors: Array<{ name: string; count: number; difficultCount: number }>
+  skillDetails: InsightSkillDetail[]
+}
+
+export interface InsightEvidenceSplit {
+  attempts: number
+  difficultAttempts: number
+  successRate: number | null
+}
+
+export interface InsightSkillDetail extends InsightSkill {
+  conclusionEligible: boolean
+  reerrorRate: number | null
+  original: InsightEvidenceSplit
+  variant: InsightEvidenceSplit
 }
 
 function masteryGroup(skill: InsightSkill) {
@@ -138,6 +154,31 @@ export function buildReviewInsights(input: {
   Object.values(mastery).forEach((items) => items.sort((left, right) =>
     left.subject.localeCompare(right.subject, 'zh-CN') || left.name.localeCompare(right.name, 'zh-CN')))
 
+  const evidenceSplit = (skill: InsightSkill, sourceMode: ReviewInsightRecord['sourceMode']): InsightEvidenceSplit => {
+    const attempts = completed.filter((record) => record.sourceMode === sourceMode
+      && record.tags.some((tag) => tag.type === skill.type && (tag.id === skill.tagId || (!tag.id && tag.name === skill.name))))
+    const rated = attempts.filter((record) => record.rating !== null)
+    const successful = rated.filter((record) => record.rating === 'good' || record.rating === 'easy')
+    return {
+      attempts: attempts.length,
+      difficultAttempts: rated.filter((record) => record.rating === 'again' || record.rating === 'hard').length,
+      successRate: rated.length ? successful.length / rated.length : null,
+    }
+  }
+  const skillDetails: InsightSkillDetail[] = skills.map((skill) => {
+    const attempts = skill.state.successCount + skill.state.failureCount
+    return {
+      ...skill,
+      conclusionEligible: skill.state.evidenceCount >= 3,
+      reerrorRate: attempts ? skill.state.failureCount / attempts : null,
+      original: evidenceSplit(skill, 'original'),
+      variant: evidenceSplit(skill, 'variant'),
+    }
+  }).sort((left, right) =>
+    Number(right.conclusionEligible) - Number(left.conclusionEligible)
+    || (right.reerrorRate ?? -1) - (left.reerrorRate ?? -1)
+    || left.name.localeCompare(right.name, 'zh-CN'))
+
   return {
     rangeDays: input.rangeDays, subject: selectedSubject, subjects, fromDate, toDate,
     overview: {
@@ -150,7 +191,7 @@ export function buildReviewInsights(input: {
       overdueSkills: skills.filter((skill) => skill.state.nextReviewAt !== null
         && skill.state.nextReviewAt < toStart).length,
     },
-    trend, ratings, mastery,
+    trend, ratings, mastery, skillDetails,
     themes: [...themeCounts.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name, 'zh-CN')).slice(0, 10),
     recurringErrors: [...errorCounts.values()].filter((item) => item.count >= 3)
       .sort((left, right) => right.count - left.count || right.difficultCount - left.difficultCount || left.name.localeCompare(right.name, 'zh-CN')).slice(0, 6),

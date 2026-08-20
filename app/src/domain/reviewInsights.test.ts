@@ -6,7 +6,7 @@ const now = new Date(2026, 8, 2, 10).getTime()
 const tag = (type: ReviewTag['type'], name: string): ReviewTag => ({ id: `${type}-${name}`, name, type, role: 'primary' })
 const record = (id: string, date: string, rating: ReviewInsightRecord['rating'] = 'good', overrides: Partial<ReviewInsightRecord> = {}): ReviewInsightRecord => ({
   moduleId: id, subject: '数学', sessionDate: date, status: 'completed', completedAt: now,
-  sourceProblemId: id, rating,
+  sourceProblemId: id, rating, sourceMode: 'original', difficulty: 'intermediate',
   tags: [tag('knowledge', '函数'), tag('method', '数形结合'), tag('model', '图像交点')],
   errorCategories: [tag('error', '漏条件')], ...overrides,
 })
@@ -58,6 +58,39 @@ describe('review insights', () => {
     expect(result.mastery.attention).toHaveLength(1)
     expect(result.mastery.insufficient).toHaveLength(1)
     expect(result.trend.every((day) => day.masteryDelta === null)).toBe(true)
+  })
+
+  it('shows evidence-backed re-error, stability, transfer and original/variant splits', () => {
+    const base = initialReviewSkillState()
+    const skill = {
+      subject: '数学', tagId: 'knowledge-函数', name: '函数', type: 'knowledge' as const,
+      state: {
+        ...base,
+        evidenceCount: 5,
+        successCount: 3,
+        failureCount: 2,
+        stability: 8,
+        transferScore: .64,
+        maxStableDifficulty: 'intermediate' as const,
+      },
+    }
+    const result = buildReviewInsights({
+      records: [
+        record('original-good', '2026-09-02', 'good'),
+        record('variant-hard', '2026-09-02', 'hard', { sourceMode: 'variant' }),
+        record('variant-good', '2026-09-02', 'good', { sourceMode: 'variant' }),
+      ],
+      rangeDays: 7, now, changes: [], skills: [skill],
+    })
+    expect(result.skillDetails[0]).toMatchObject({
+      conclusionEligible: true,
+      reerrorRate: .4,
+      original: { attempts: 1, successRate: 1 },
+      variant: { attempts: 2, difficultAttempts: 1, successRate: .5 },
+    })
+    expect(result.skillDetails[0].state).toMatchObject({
+      stability: 8, transferScore: .64, maxStableDifficulty: 'intermediate',
+    })
   })
 
   it('isolates mastery and trends by subject', () => {

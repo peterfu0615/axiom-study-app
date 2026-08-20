@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AsyncState, Badge, Button, EmptyState, ListboxSelect, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
+import type { InsightEvidenceSplit } from '../../domain/reviewInsights'
 import { getReviewInsights } from '../../platform/insightsDatabase'
 import './Insights.css'
 
 const ratingLabels = { again: '忘记', hard: '困难', good: '掌握', easy: '轻松' }
 const typeLabels = { knowledge: '知识', method: '方法', model: '模型', error: '错因' }
+const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
 
 function percent(value: number | null) {
   return value === null ? '—' : `${Math.round(value * 100)}%`
@@ -43,6 +45,67 @@ function Mastery({ insights }: { insights: ReviewInsights }) {
           {insights.mastery[group.key].slice(0, 6).map((skill) => <Badge key={`${skill.subject}:${skill.tagId}`}>{insights.subject ? skill.name : `${skill.subject} · ${skill.name}`}</Badge>)}
           {!insights.mastery[group.key].length && <span>暂无</span>}
         </div>
+      </article>)}
+    </div>
+  </section>
+}
+
+function evidenceCopy(value: InsightEvidenceSplit, eligible: boolean) {
+  if (!value.attempts) return '暂无作答'
+  if (!eligible || value.successRate === null) return `${value.attempts} 次 · 待更多证据`
+  return `${value.attempts} 次 · 成功 ${percent(value.successRate)}`
+}
+
+function SkillDetails({ insights }: { insights: ReviewInsights }) {
+  return <section className="insights-section">
+    <header>
+      <div><p className="eyebrow">能力证据</p><h2>稳定性与迁移明细</h2></div>
+      <span>至少 3 次有效证据才给出结论</span>
+    </header>
+    {insights.skillDetails.length ? <div className="insights-skill-table" role="table" aria-label="能力证据明细">
+      <div className="insights-skill-table__header" role="row">
+        <span role="columnheader">能力</span><span role="columnheader">再次答错率</span>
+        <span role="columnheader">稳定性</span><span role="columnheader">迁移分数</span>
+        <span role="columnheader">稳定难度上限</span><span role="columnheader">原题证据</span>
+        <span role="columnheader">变式证据</span>
+      </div>
+      {insights.skillDetails.slice(0, 18).map((detail) => <div className="insights-skill-table__row" role="row" key={`${detail.subject}:${detail.tagId}`}>
+        <span role="cell"><b>{detail.name}</b><small>{insights.subject ? typeLabels[detail.type] : `${detail.subject} · ${typeLabels[detail.type]}`} · {detail.state.evidenceCount} 条证据</small></span>
+        <strong role="cell">{detail.conclusionEligible ? percent(detail.reerrorRate) : '证据不足'}</strong>
+        <strong role="cell">{detail.conclusionEligible ? `${detail.state.stability.toFixed(1)} 天` : '—'}</strong>
+        <strong role="cell">{detail.conclusionEligible ? percent(detail.state.transferScore) : '—'}</strong>
+        <strong role="cell">{detail.conclusionEligible && detail.state.maxStableDifficulty ? difficultyLabels[detail.state.maxStableDifficulty] : '—'}</strong>
+        <span role="cell">{evidenceCopy(detail.original, detail.conclusionEligible)}</span>
+        <span role="cell" className={detail.variant.attempts ? 'has-variant-evidence' : ''}>{evidenceCopy(detail.variant, detail.conclusionEligible)}</span>
+      </div>)}
+    </div> : <p className="insights-change-copy">完成带标签的原题或变式练习后，这里会显示逐项能力证据。</p>}
+  </section>
+}
+
+function MethodModelDiagnostics({ insights }: { insights: ReviewInsights }) {
+  const eligible = insights.skillDetails.filter((detail) => detail.conclusionEligible)
+  const methodTransfer = eligible.filter((detail) => detail.type === 'method'
+    && detail.state.masteryEstimate >= .55 && detail.state.transferScore < .45)
+  const methodErrors = eligible.filter((detail) => detail.type === 'method'
+    && (detail.reerrorRate ?? 0) >= .35)
+  const unstableModels = eligible.filter((detail) => detail.type === 'model'
+    && ((detail.reerrorRate ?? 0) >= .35 || detail.state.retrievability < .55))
+  const advancedModels = eligible.filter((detail) => detail.type === 'model'
+    && detail.state.maxStableDifficulty === 'advanced')
+  const groups = [
+    { label: '知道但迁移不足的方法', items: methodTransfer, metric: (item: typeof methodTransfer[number]) => `迁移 ${percent(item.state.transferScore)}` },
+    { label: '再次出错较多的方法', items: methodErrors, metric: (item: typeof methodErrors[number]) => `再错 ${percent(item.reerrorRate)}` },
+    { label: '中高难度仍不稳定的模型', items: unstableModels, metric: (item: typeof unstableModels[number]) => `稳定性 ${item.state.stability.toFixed(1)} 天` },
+    { label: '已稳定到进阶难度的模型', items: advancedModels, metric: (item: typeof advancedModels[number]) => `掌握 ${percent(item.state.masteryEstimate)}` },
+  ]
+  return <section className="insights-section">
+    <header><div><p className="eyebrow">诊断视角</p><h2>方法与题型模型</h2></div><span>仅使用有效证据</span></header>
+    <div className="insights-diagnostics">
+      {groups.map((group) => <article key={group.label}>
+        <h3>{group.label}</h3>
+        {group.items.length ? <ul>{group.items.slice(0, 5).map((item) => <li key={`${item.subject}:${item.tagId}`}>
+          <span>{insights.subject ? item.name : `${item.subject} · ${item.name}`}</span><strong>{group.metric(item)}</strong>
+        </li>)}</ul> : <p>暂无满足条件的能力证据</p>}
       </article>)}
     </div>
   </section>
@@ -107,6 +170,8 @@ export function InsightsWorkspace() {
           </article>
         </section>
         <Mastery insights={insights} />
+        <SkillDetails insights={insights} />
+        <MethodModelDiagnostics insights={insights} />
         <section className="insights-split">
           <article className="insights-section insights-section--compact">
             <header><div><p className="eyebrow">高频主题</p><h2>最近反复复习</h2></div></header>
