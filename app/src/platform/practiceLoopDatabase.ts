@@ -308,7 +308,9 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
   } catch {
     await execute(`UPDATE practice_loops SET status='stopped',stop_reason='no_distinct_items',updated_at=$1 WHERE id=$2`, [Date.now(), finalized.id])
   }
-  return (await getPracticeLoopForSet(practiceSet.id))!
+  const refreshed = await getPracticeLoopForSet(practiceSet.id)
+  if (!refreshed) throw new Error('练习循环状态刚刚更新但无法读取，请重试')
+  return refreshed
 }
 
 export async function stopPracticeLoop(loopId: string) {

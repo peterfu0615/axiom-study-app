@@ -664,12 +664,12 @@ export async function loadCandidateBlocks(
     [sourceDocumentId],
   )
   return rows.map((row) => {
-    const metadata = row.structured_content_json
-      ? (JSON.parse(String(row.structured_content_json)) as {
-          lineIds?: string[]
-          source?: ProblemBlock['source']
-        })
-      : {}
+    // Tolerant parsing: a corrupted field must not break loading every
+    // candidate block on the capture editing page.
+    const metadata = parseJSON<{
+      lineIds?: string[]
+      source?: ProblemBlock['source']
+    }>(row.structured_content_json, {}, 'problems.structured_content_json')
     return {
       id: String(row.id),
       title: String(row.user_title ?? row.title ?? row.stem_markdown ?? '未命名题目'),
@@ -1699,6 +1699,7 @@ export async function getProblemSolution(
     `SELECT *
      FROM problem_solutions
      WHERE problem_id = $1
+     ORDER BY created_at DESC, id
      LIMIT 1`,
     [problemId],
   )
@@ -3618,8 +3619,11 @@ export async function decideProblemDuplicate(input: {
     [firstProblemId, secondProblemId],
   )
   if (rows.length !== 2) throw new Error('重复题候选已不存在或状态已变化')
-  const subjects = rows.map((row) => row.subject?.trim()).filter(Boolean)
-  if (subjects.length !== 2 || subjects[0] !== subjects[1]) {
+  // Compare with the same normalization the duplicate-suggestion scan uses
+  // (NFKC + casefold + whitespace collapse); a plain trim() would reject
+  // merges across full-width/case subject variants that the UI offered.
+  const subjects = rows.map((row) => normalizedSubjectKey(row.subject))
+  if (subjects.some((subject) => !subject) || subjects[0] !== subjects[1]) {
     throw new Error('只能处理同一科目的重复题')
   }
   const now = Date.now()

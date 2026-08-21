@@ -215,28 +215,38 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     if (range) setCurrentPage(range.startPage)
   }
   const saveCurrent = async () => {
-    const record = document ?? await ensureDocument()
-    const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(practiceSet.createdAt)
-    const safeSubject = practiceSet.subject.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '').slice(0, 24) || '练习'
-    const destination = await save({
-      defaultPath: `Axiom-${safeSubject}练习-${date}.pdf`,
-      filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
-    })
-    if (!destination) return
-    await saveExportedPracticePdf(record, destination)
-    setFeedback({ tone: 'success', message: 'PDF 已保存。' })
+    try {
+      const record = document ?? await ensureDocument()
+      // Use the system local timezone so the file name date matches the dates
+      // shown elsewhere in the app (review/planner both use local dates).
+      const date = new Intl.DateTimeFormat('sv-SE').format(practiceSet.createdAt)
+      const safeSubject = practiceSet.subject.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '').slice(0, 24) || '练习'
+      const destination = await save({
+        defaultPath: `Axiom-${safeSubject}练习-${date}.pdf`,
+        filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
+      })
+      if (!destination) return
+      await saveExportedPracticePdf(record, destination)
+      setFeedback({ tone: 'success', message: 'PDF 已保存。' })
+    } catch (reason) {
+      setFeedback({ tone: 'danger', message: `保存 PDF 失败：${practiceErrorMessage(reason)}` })
+    }
   }
   const printCurrent = async () => {
-    const record = document ?? await ensureDocument()
-    await printExportedPracticePdf(record)
-    const exercise = record.sectionPageRanges.exercise
-    const answerSheet = record.sectionPageRanges.answer_sheet
-    setFeedback({
-      tone: 'success',
-      message: answerSheet
-        ? `已在系统预览中打开。模拟练习请打印第 ${exercise.startPage}–${answerSheet.endPage} 页；解析位于其后。`
-        : `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
-    })
+    try {
+      const record = document ?? await ensureDocument()
+      await printExportedPracticePdf(record)
+      const exercise = record.sectionPageRanges.exercise
+      const answerSheet = record.sectionPageRanges.answer_sheet
+      setFeedback({
+        tone: 'success',
+        message: answerSheet
+          ? `已在系统预览中打开。模拟练习请打印第 ${exercise.startPage}–${answerSheet.endPage} 页；解析位于其后。`
+          : `已在系统预览中打开。打印作答页请选择第 ${exercise.startPage}–${exercise.endPage} 页；如需解析，可打印完整文档。`,
+      })
+    } catch (reason) {
+      setFeedback({ tone: 'danger', message: `打开打印预览失败：${practiceErrorMessage(reason)}` })
+    }
   }
   const processSubmissions = async (submissions: PracticeAnswerSubmission[]) => {
     setMode('processing')
@@ -343,8 +353,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   }
   const openNextRound = async () => {
     if (!loop?.nextPracticeSetId || !onOpenPracticeSet) return
-    const next = await getPracticeSet(loop.nextPracticeSetId)
-    if (next) onOpenPracticeSet(next)
+    try {
+      const next = await getPracticeSet(loop.nextPracticeSetId)
+      if (next) onOpenPracticeSet(next)
+    } catch (reason) {
+      setFeedback({ tone: 'danger', message: `打开下一组练习失败：${practiceErrorMessage(reason)}` })
+    }
   }
 
   const results = useMemo(() => attempt?.responses.flatMap((response) => response.gradingResult ? [response.gradingResult] : []) ?? [], [attempt])

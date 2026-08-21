@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Toast } from '../../components/Toast'
 import { useToast } from '../../platform/useToast'
 import type {
@@ -131,6 +131,13 @@ export function DocumentEditor({
     useState<DocumentProcessingProgress['stage']>('starting')
   const [saving, setSaving] = useState(false)
   const { toast, notify, dismiss } = useToast()
+  // Tracks whether this editor instance is still mounted so late async
+  // completions (page processing outliving a navigation) skip UI writes.
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
 
   const applyProcessingResult = useCallback(
     (result: DocumentProcessingResult) => {
@@ -181,7 +188,9 @@ export function DocumentEditor({
         setProcessingStage('failed')
         notify(`页面处理失败：${String(error)}`, 'error')
       } finally {
-        setProcessing(false)
+        // The user may have navigated back to capture mid-processing; the
+        // backend run still completes and persists, only the UI writes stop.
+        if (aliveRef.current) setProcessing(false)
       }
     },
     [

@@ -85,8 +85,12 @@ export function CaptureWorkspace() {
   }, [notify])
 
   useEffect(() => {
-    void getNativeCapabilities().then(setCapabilities).catch(() => null)
+    let cancelled = false
+    void getNativeCapabilities()
+      .then((next) => { if (!cancelled) setCapabilities(next) })
+      .catch(() => null)
     void refreshRecent()
+    return () => { cancelled = true }
   }, [refreshRecent])
 
   useEffect(() => {

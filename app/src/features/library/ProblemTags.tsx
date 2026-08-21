@@ -40,10 +40,16 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
     setMessage(null)
   }, [problemId, subjectId])
 
-  useEffect(() => { void refresh().catch((error) => {
-    console.error('Horizon tag query failed', { problemId, subjectId, error })
-    setMessage('标签加载失败，请稍后重试。')
-  }) }, [problemId, refresh, subjectId])
+  useEffect(() => {
+    // Guard against out-of-order responses when switching problems quickly.
+    let cancelled = false
+    void refresh().catch((error) => {
+      if (cancelled) return
+      console.error('Horizon tag query failed', { problemId, subjectId, error })
+      setMessage('标签加载失败，请稍后重试。')
+    })
+    return () => { cancelled = true }
+  }, [problemId, refresh, subjectId])
   useEffect(() => {
     const listener = (event: Event) => {
       if ((event as CustomEvent<{ problemId?: string }>).detail?.problemId === problemId) void refresh()
@@ -65,9 +71,15 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
     if (!picker || !subjectId) return
     const definition = definitions.find((item) => item.id === selectedDefinitionId)
     if (!definition) return
-    await addProblemTag(problemId, subjectId, definition)
-    setPicker(null)
-    await refresh()
+    try {
+      await addProblemTag(problemId, subjectId, definition)
+      setPicker(null)
+      await refresh()
+    } catch (error) {
+      // Surface the failure inside the picker instead of swallowing it as an
+      // unhandled rejection (e.g. cross-subject tag rejections).
+      setMessage(`添加标签失败：${String(error)}`)
+    }
   }
 
   const pickerOptions = picker
@@ -88,7 +100,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
         <div className="problem-tag-collection">
           {grouped[type].map((tag) => <article className="controlled-problem-tag" key={tag.id}>
             <Badge>{tag.canonicalName}</Badge>
-            <IconButton appearance="plain" className="problem-tag-remove" label={`移除${tag.canonicalName}`} onClick={() => void removeProblemTag(tag.id).then(refresh)} tone="danger"><Icon name="close" size={16} /></IconButton>
+            <IconButton appearance="plain" className="problem-tag-remove" label={`移除${tag.canonicalName}`} onClick={() => void removeProblemTag(tag.id).then(() => refresh()).catch((error) => setMessage(`移除标签失败：${String(error)}`))} tone="danger"><Icon name="close" size={16} /></IconButton>
           </article>)}
           {!grouped[type].length && <small className="empty-tag-dimension">暂无</small>}
         </div>

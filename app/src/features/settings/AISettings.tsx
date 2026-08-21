@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { configureAIProviders } from '../../ai/provider'
 import { useTheme, type Appearance } from '../../platform/theme'
 import { getAppVersion } from '../../platform/native'
@@ -92,18 +92,35 @@ export function AISettings() {
     null,
   )
   const [appVersion, setAppVersion] = useState('…')
+  const messageTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     void listAIProviderProfiles()
       .then((next) => {
+        if (cancelled) return
         setProfiles(next)
         setSelectedProviderId(next[0]?.id ?? null)
       })
-      .catch((error) => setMessage({ text: `读取设置失败：${readableError(error)}`, tone: 'error' }))
-      .finally(() => setLoading(false))
+      .catch((error) => { if (!cancelled) setMessage({ text: `读取设置失败：${readableError(error)}`, tone: 'error' }) })
+      .finally(() => { if (!cancelled) setLoading(false) })
     void getAppVersion()
-      .then(setAppVersion)
-      .catch(() => setAppVersion('未知'))
+      .then((version) => { if (!cancelled) setAppVersion(version) })
+      .catch(() => { if (!cancelled) setAppVersion('未知') })
+    return () => { cancelled = true }
+  }, [])
+
+  // Auto-dismiss the transient message; tracked so a second save does not
+  // inherit a stale timer and so unmount never fires a late setState.
+  const scheduleMessageClear = useCallback(() => {
+    if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current)
+    messageTimerRef.current = window.setTimeout(() => {
+      messageTimerRef.current = null
+      setMessage(null)
+    }, 3200)
+  }, [])
+  useEffect(() => () => {
+    if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current)
   }, [])
 
   const update = (
@@ -138,7 +155,7 @@ export function AISettings() {
       configureAIProviders(saved)
       setProfiles(saved)
       setMessage({ text: 'AI 服务设置已保存并立即生效', tone: 'success' })
-      window.setTimeout(() => setMessage(null), 3200)
+      scheduleMessageClear()
     } catch (error) {
       setMessage({ text: `保存失败：${readableError(error)}`, tone: 'error' })
     } finally {
@@ -153,13 +170,12 @@ export function AISettings() {
   }
 
   const removeProvider = (id: string) => {
-    setProfiles((current) => {
-      const next = current.filter((item) => item.id !== id)
-      if (selectedProviderId === id) {
-        setSelectedProviderId(next[0]?.id ?? null)
-      }
-      return next
-    })
+    // Keep the state updater pure: derive the next selection outside of it.
+    const next = profiles.filter((item) => item.id !== id)
+    setProfiles(next)
+    if (selectedProviderId === id) {
+      setSelectedProviderId(next[0]?.id ?? null)
+    }
   }
 
   const deleteApiKey = async (profile: AIProviderProfile) => {

@@ -21,10 +21,9 @@ function bigrams(value: string) {
   return grams
 }
 
-function dice(left: string, right: string) {
+function dice(left: string, leftGrams: Set<string>, right: string) {
   if (!left || !right) return 0
   if (left === right) return 1
-  const leftGrams = bigrams(left)
   const rightGrams = bigrams(right)
   if (!leftGrams.size || !rightGrams.size) return 0
   let overlap = 0
@@ -52,6 +51,8 @@ export function findProblemDuplicateSuggestions(
   const subject = normalizedText(problem.subject)
   const stem = normalizedText(problem.stemMarkdown || problem.title)
   if (!subject || stem.length < 8) return []
+  // The query stem is constant across candidates; build its bigrams once.
+  const stemGrams = bigrams(stem)
   return candidates.flatMap((candidate) => {
     if (
       candidate.id === problem.id
@@ -60,7 +61,7 @@ export function findProblemDuplicateSuggestions(
     ) return []
     const candidateStem = normalizedText(candidate.stemMarkdown || candidate.title)
     if (candidateStem.length < 8) return []
-    const textScore = dice(stem, candidateStem)
+    const textScore = dice(stem, stemGrams, candidateStem)
     const tagsScore = tagJaccard(problem, candidate)
     const sameSource = problem.sourceDocumentId === candidate.sourceDocumentId
     const score = stem === candidateStem

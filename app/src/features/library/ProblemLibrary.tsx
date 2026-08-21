@@ -347,7 +347,11 @@ export function ProblemLibrary() {
       if (!problemId) return
       if (problemId === selectedIdRef.current) {
         void getProblemSolution(problemId)
-          .then(setSolution)
+          .then((nextSolution) => {
+            // The user may have switched problems while the request was in
+            // flight; only apply the result if it is still the selection.
+            if (selectedIdRef.current === problemId) setSolution(nextSolution)
+          })
           .catch((error) => {
             dirtyRef.current = true
             console.warn(
@@ -374,8 +378,10 @@ export function ProblemLibrary() {
           getReasoningAnalysis(problemId),
         ])
           .then(([attempt, analysis]) => {
-            setStudentAttempt(attempt)
-            setReasoning(analysis)
+            if (selectedIdRef.current === problemId) {
+              setStudentAttempt(attempt)
+              setReasoning(analysis)
+            }
           })
           .catch((error) => {
             dirtyRef.current = true
@@ -485,8 +491,15 @@ export function ProblemLibrary() {
   )
 
   useEffect(() => {
+    // Guard against out-of-order responses when switching problems quickly:
+    // a slow response for the previous problem must not overwrite the
+    // regions of the newly selected one.
+    let cancelled = false
     if (!selectedId) { setSelectedRegions([]); return }
-    void getProblemRegions(selectedId).then(setSelectedRegions).catch(() => setSelectedRegions([]))
+    void getProblemRegions(selectedId)
+      .then((regions) => { if (!cancelled) setSelectedRegions(regions) })
+      .catch(() => { if (!cancelled) setSelectedRegions([]) })
+    return () => { cancelled = true }
   }, [selectedId, problems])
 
   useEffect(() => {
@@ -502,19 +515,29 @@ export function ProblemLibrary() {
   }, [selectedId])
 
   useEffect(() => {
+    let cancelled = false
     if (!selectedId) { setReviewHistory([]); return }
-    void getProblemReviewHistory(selectedId).then(setReviewHistory).catch(() => setReviewHistory([]))
+    void getProblemReviewHistory(selectedId)
+      .then((history) => { if (!cancelled) setReviewHistory(history) })
+      .catch(() => { if (!cancelled) setReviewHistory([]) })
+    return () => { cancelled = true }
   }, [selectedId])
 
   useEffect(() => {
+    let cancelled = false
     setNoteDraft(selected?.libraryMetadata.note ?? '')
     if (!selectedId) {
       setDuplicateDecisionIds(new Set())
       return
     }
     void listProblemDuplicateDecisions(selectedId)
-      .then((decisions) => setDuplicateDecisionIds(new Set(decisions.map((decision) => decision.candidateProblemId))))
-      .catch(() => setDuplicateDecisionIds(new Set()))
+      .then((decisions) => {
+        if (!cancelled) {
+          setDuplicateDecisionIds(new Set(decisions.map((decision) => decision.candidateProblemId)))
+        }
+      })
+      .catch(() => { if (!cancelled) setDuplicateDecisionIds(new Set()) })
+    return () => { cancelled = true }
   }, [selected?.libraryMetadata.note, selectedId])
 
   useEffect(() => {
@@ -842,9 +865,15 @@ export function ProblemLibrary() {
     )
     setRecropping(false)
     notify('新裁图已保存', 'success')
-    setSolution(await getProblemSolution(updated.id))
-    setStudentAttempt(await getStudentAttempt(updated.id))
-    setReasoning(await getReasoningAnalysis(updated.id))
+    try {
+      setSolution(await getProblemSolution(updated.id))
+      setStudentAttempt(await getStudentAttempt(updated.id))
+      setReasoning(await getReasoningAnalysis(updated.id))
+    } catch (error) {
+      // The crop itself is already saved; only the detail-panel refresh
+      // failed, so report it without discarding the success.
+      notify(`刷新解答详情失败：${String(error)}`, 'error')
+    }
 
     try {
       const needsProblemAnalysis =

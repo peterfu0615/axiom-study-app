@@ -149,6 +149,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   }, [refreshSubjects])
 
   useEffect(() => {
+    // Guard against out-of-order responses when switching subjects quickly.
+    let cancelled = false
     if (!subject) {
       setTextbooks([])
       setTextbookId(null)
@@ -158,13 +160,15 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     setLoading(true)
     void listTextbooks(subject)
       .then((next) => {
+        if (cancelled) return
         setTextbooks(next)
         setTextbookId((current) => current && next.some((book) => book.id === current)
           ? current
           : next[0]?.id ?? null)
       })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setLoading(false))
+      .catch((reason) => { if (!cancelled) setError(String(reason)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [subject])
 
   const refreshTree = useCallback(async () => {
@@ -180,7 +184,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     setExpanded((current) => new Set([...current, ...nextNodes.filter((node) => node.parentId === null).map((node) => node.id)]))
   }, [textbookId])
 
-  useEffect(() => { void refreshTree().catch((reason) => setError(String(reason))) }, [refreshTree])
+  useEffect(() => {
+    // Switching textbooks triggers overlapping loads; only the latest one may
+    // paint the tree, otherwise a slow older response replaces it wholesale.
+    let cancelled = false
+    void refreshTree().catch((reason) => { if (!cancelled) setError(String(reason)) })
+    return () => { cancelled = true }
+  }, [refreshTree])
 
   const refreshReviewCount = useCallback(async () => {
     if (!subject) {
@@ -194,7 +204,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     }
   }, [subject, textbookId])
 
-  useEffect(() => { void refreshReviewCount() }, [refreshReviewCount])
+  useEffect(() => {
+    let cancelled = false
+    void refreshReviewCount().catch((reason) => { if (!cancelled) setError(String(reason)) })
+    return () => { cancelled = true }
+  }, [refreshReviewCount])
 
   const handleReviewDataChanged = useCallback(() => {
     void refreshReviewCount()
