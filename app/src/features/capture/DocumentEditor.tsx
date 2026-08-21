@@ -609,6 +609,21 @@ export function DocumentEditor({
     void saveBlocks(true)
   }
 
+  // Cmd/Ctrl+S mirrors the primary save button; the external-upload
+  // disclosure dialog still applies.
+  const canSave =
+    !saving && !processing && Boolean(correctedPath) && saveSelectedBlocks.length > 0
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (!canSave) return
+      requestSave()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   const displayedPath =
     previewMode === 'corrected' && correctedPath
       ? correctedPath

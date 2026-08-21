@@ -165,6 +165,21 @@ export function AISettings() {
     }
   }
 
+  // Cmd/Ctrl+S saves the provider settings from anywhere on the page.
+  // Latest-ref pattern keeps the listener armed once for the page lifetime.
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        void saveRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const addProvider = () => {
     const created = newProvider(profiles.length + 1)
     setProfiles((current) => [...current, created])

@@ -547,6 +547,18 @@ export function ExplainableProblemMarkdown({
   const requestId = useRef(0)
   const ownerId = useRef(crypto.randomUUID())
 
+  // Escape closes the floating explanation panel, consistent with dialogs.
+  useEffect(() => {
+    if (explanation.status === 'idle') return undefined
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      requestId.current += 1
+      setExplanation({ status: 'idle' })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [explanation.status])
+
   useEffect(() => {
     requestId.current += 1
     setExplanation({ status: 'idle' })
@@ -635,6 +647,18 @@ export function SolutionComparison({
   const [solutionStreamChars, setSolutionStreamChars] = useState(0)
   const explanationRequestId = useRef(0)
   const explanationOwnerId = useRef(crypto.randomUUID())
+
+  // Escape closes the floating explanation panel, consistent with dialogs.
+  useEffect(() => {
+    if (explanation.status === 'idle') return undefined
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      explanationRequestId.current += 1
+      setExplanation({ status: 'idle' })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [explanation.status])
 
   // 流式订阅：正解生成时实时显示已接收字符数。
   // SSE chunk 频率很高，与 ExplanationPanel 相同用 ~100ms 尾部节流合帧，

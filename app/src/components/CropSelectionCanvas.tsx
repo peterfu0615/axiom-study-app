@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
@@ -131,6 +132,8 @@ export function CropSelectionCanvas({
     const frame = frameRef.current?.getBoundingClientRect()
     if (!frame || frame.width <= 0 || frame.height <= 0) return
     onActivate?.(region.id)
+    // Focus the frame so subsequent arrow keys nudge the active region.
+    frameRef.current?.focus({ preventScroll: true })
     setDrag({
       id: region.id,
       kind,
@@ -142,10 +145,33 @@ export function CropSelectionCanvas({
     })
   }
 
+  // Keyboard nudging: arrow keys move the active region by 1% of the frame
+  // (Shift = 5%) so precise crop adjustments do not require pointer precision.
+  const nudgeActiveRegion = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (disabled || !onRectChange) return
+    const arrows = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']
+    if (!arrows.includes(event.key)) return
+    const region = regions.find((item) => item.active)
+    if (!region) return
+    event.preventDefault()
+    const step = event.shiftKey ? 0.05 : 0.01
+    const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+    const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+    const rect: NormalizedRect = {
+      x: clamp(region.rect.x + dx, 0, 1 - region.rect.width),
+      y: clamp(region.rect.y + dy, 0, 1 - region.rect.height),
+      width: region.rect.width,
+      height: region.rect.height,
+    }
+    onRectChange(region.id, rect)
+  }
+
   return (
     <div
       className={`document-canvas ${className}`.trim()}
+      onKeyDown={nudgeActiveRegion}
       ref={frameRef}
+      tabIndex={disabled ? -1 : 0}
     >
       <img alt={alt} src={mediaAssetUrl(imagePath)} />
       {regions.map((region) => (

@@ -780,6 +780,54 @@ export function ProblemLibrary() {
     }
   }
 
+  // Keyboard operation: ↑/↓ move through the filtered list, Cmd/Ctrl+S saves
+  // whatever context is active (the edit form, or a dirty note).  High-volume
+  // review workflows should not require the mouse for either.
+  const keyboardNavRef = useRef(false)
+  const keyboardSaveRef = useRef<() => void>(() => undefined)
+  keyboardSaveRef.current = () => {
+    if (editing) void saveEdits()
+    else if (selected && noteDraft !== selected.libraryMetadata.note) void persistNote()
+  }
+  useEffect(() => {
+    if (keyboardNavRef.current || !selectedId) return
+    keyboardNavRef.current = false
+    document
+      .querySelector(`[data-problem-id="${CSS.escape(selectedId)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        keyboardSaveRef.current()
+        return
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      const target = event.target
+      const typing = target instanceof HTMLElement
+        && (target.tagName === 'INPUT'
+          || target.tagName === 'TEXTAREA'
+          || target.tagName === 'SELECT'
+          || target.isContentEditable)
+      if (typing) return
+      if (!filteredProblems.length) return
+      event.preventDefault()
+      const currentIndex = filteredProblems.findIndex((problem) => problem.id === selectedIdRef.current)
+      const nextIndex = event.key === 'ArrowDown'
+        ? Math.min(filteredProblems.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1)
+      const nextId = filteredProblems[nextIndex]?.id ?? null
+      if (nextId && nextId !== selectedIdRef.current) {
+        keyboardNavRef.current = true
+        setSelectedId(nextId)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [filteredProblems])
+
   const decideDuplicate = async (
     suggestion: (typeof duplicateSuggestions)[number],
     decision: 'keep_both' | 'merged',
@@ -1091,6 +1139,7 @@ export function ProblemLibrary() {
                   className={`problem-card ${
                     selectedId === problem.id ? 'active' : ''
                   } ${batchProblemIds.has(problem.id) ? 'batch-selected' : ''}`}
+                  data-problem-id={problem.id}
                   key={problem.id}
                   disabled={editing}
                   onClick={() => {
