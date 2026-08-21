@@ -45,7 +45,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState, IconButton, PageHeader, SegmentedControl } from '../../components/ui'
+import { Button, Dialog, ErrorState, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -1093,20 +1093,22 @@ export function ProblemLibrary() {
 
           <div className="problem-list-filters">
             <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案、标签或备注" type="search" value={query} /></label>
-            <label><span className="sr-only">筛选科目</span><select onChange={(event) => setSubjectFilter(event.target.value)} value={subjectFilter}>
-              <option value="all">全部科目</option>
-              {subjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-            </select></label>
+            <ListboxSelect
+              ariaLabel="筛选科目"
+              onValueChange={setSubjectFilter}
+              options={[{ value: 'all', label: '全部科目' }, ...subjects.map((subject) => ({ value: subject, label: subject }))]}
+              value={subjectFilter}
+            />
             <details>
               <summary>更多筛选</summary>
               <div className="problem-list-filter-grid">
-                <select aria-label="难度" onChange={(event) => setDifficultyFilter(event.target.value)} value={difficultyFilter}><option value="all">全部难度</option><option value="basic">基础</option><option value="intermediate">中档</option><option value="advanced">进阶</option></select>
-                <select aria-label="教材" onChange={(event) => setTextbookFilter(event.target.value)} value={textbookFilter}><option value="all">全部教材</option>{metadataOptions.textbooks.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="章节" onChange={(event) => setChapterFilter(event.target.value)} value={chapterFilter}><option value="all">全部章节</option>{metadataOptions.chapters.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="知识点" onChange={(event) => setKnowledgeFilter(event.target.value)} value={knowledgeFilter}><option value="all">全部知识点</option>{metadataOptions.knowledge.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="方法" onChange={(event) => setMethodFilter(event.target.value)} value={methodFilter}><option value="all">全部方法</option>{metadataOptions.methods.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="题型模型" onChange={(event) => setModelFilter(event.target.value)} value={modelFilter}><option value="all">全部模型</option>{metadataOptions.models.map((value) => <option key={value}>{value}</option>)}</select>
-                <select aria-label="复习状态" onChange={(event) => setReviewFilter(event.target.value)} value={reviewFilter}><option value="all">全部复习状态</option><option value="favorite">我的收藏</option><option value="due">已到复习时间</option><option value="stable">掌握较稳定</option><option value="attention">需要关注</option><option value="unconfirmed">尚未确认</option></select>
+                <ListboxSelect ariaLabel="难度" onValueChange={setDifficultyFilter} options={[{ value: 'all', label: '全部难度' }, { value: 'basic', label: '基础' }, { value: 'intermediate', label: '中档' }, { value: 'advanced', label: '进阶' }]} value={difficultyFilter} />
+                <ListboxSelect ariaLabel="教材" onValueChange={setTextbookFilter} options={[{ value: 'all', label: '全部教材' }, ...metadataOptions.textbooks.map((value) => ({ value, label: value }))]} value={textbookFilter} />
+                <ListboxSelect ariaLabel="章节" onValueChange={setChapterFilter} options={[{ value: 'all', label: '全部章节' }, ...metadataOptions.chapters.map((value) => ({ value, label: value }))]} value={chapterFilter} />
+                <ListboxSelect ariaLabel="知识点" onValueChange={setKnowledgeFilter} options={[{ value: 'all', label: '全部知识点' }, ...metadataOptions.knowledge.map((value) => ({ value, label: value }))]} value={knowledgeFilter} />
+                <ListboxSelect ariaLabel="方法" onValueChange={setMethodFilter} options={[{ value: 'all', label: '全部方法' }, ...metadataOptions.methods.map((value) => ({ value, label: value }))]} value={methodFilter} />
+                <ListboxSelect ariaLabel="题型模型" onValueChange={setModelFilter} options={[{ value: 'all', label: '全部模型' }, ...metadataOptions.models.map((value) => ({ value, label: value }))]} value={modelFilter} />
+                <ListboxSelect ariaLabel="复习状态" onValueChange={setReviewFilter} options={[{ value: 'all', label: '全部复习状态' }, { value: 'favorite', label: '我的收藏' }, { value: 'due', label: '已到复习时间' }, { value: 'stable', label: '掌握较稳定' }, { value: 'attention', label: '需要关注' }, { value: 'unconfirmed', label: '尚未确认' }]} value={reviewFilter} />
               </div>
             </details>
           </div>
@@ -1128,15 +1130,13 @@ export function ProblemLibrary() {
               >
                 批量重新标注
               </button>
-              <select
-                aria-label="批量迁移到教材"
+              <ListboxSelect
+                ariaLabel="批量迁移到教材"
                 disabled={batchRunning}
-                onChange={(event) => setBatchTextbookId(event.target.value)}
+                onValueChange={setBatchTextbookId}
+                options={[{ value: '', label: '清除教材匹配' }, ...batchTextbooks.map((book) => ({ value: book.id, label: book.title }))]}
                 value={batchTextbookId}
-              >
-                <option value="">清除教材匹配</option>
-                {batchTextbooks.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
-              </select>
+              />
               <button
                 disabled={batchRunning || !batchProblemIds.size}
                 onClick={() => void migrateSelectedTextbook()}
@@ -1176,7 +1176,7 @@ export function ProblemLibrary() {
                     path={problem.cropImagePath}
                   />
                   <span className="problem-card-copy">
-                    <strong>{problem.libraryMetadata.favorite && <span aria-label="已收藏" className="problem-card-favorite">★</span>}{problem.title}</strong>
+                    <strong>{problem.libraryMetadata.favorite && <span aria-label="已收藏" className="problem-card-favorite"><Icon name="favorite" size={12} /></span>}{problem.title}</strong>
                     <small>{dateFormatter.format(problem.createdAt)}</small>
                     <span className="problem-card-statuses">
                       <span className="problem-status">
@@ -1314,30 +1314,22 @@ export function ProblemLibrary() {
                         value={editSubject}
                       />
                     </label>
-                    <label>
-                      <span>题干 / 备注</span>
-                      <textarea
-                        disabled={updating}
-                        onChange={(event) =>
-                          setEditStemMarkdown(event.target.value)
-                        }
-                        placeholder="补充题干、解题背景或个人备注"
-                        rows={6}
-                        value={editStemMarkdown}
-                      />
-                    </label>
-                    <label>
-                      <span>知识点</span>
-                      <textarea
-                        disabled={updating}
-                        onChange={(event) =>
-                          setEditKnowledgePoints(event.target.value)
-                        }
-                        placeholder="多个知识点用逗号或换行分隔"
-                        rows={3}
-                        value={editKnowledgePoints}
-                      />
-                    </label>
+                    <Textarea
+                      disabled={updating}
+                      label="题干 / 备注"
+                      onChange={(event) => setEditStemMarkdown(event.target.value)}
+                      placeholder="补充题干、解题背景或个人备注"
+                      rows={6}
+                      value={editStemMarkdown}
+                    />
+                    <Textarea
+                      disabled={updating}
+                      label="知识点"
+                      onChange={(event) => setEditKnowledgePoints(event.target.value)}
+                      placeholder="多个知识点用逗号或换行分隔"
+                      rows={3}
+                      value={editKnowledgePoints}
+                    />
                   </div>
                 </div>
               ) : (
@@ -1567,7 +1559,7 @@ export function ProblemLibrary() {
                           <p className="eyebrow">个人备注</p>
                           <h3>复习时提醒自己</h3>
                         </div>
-                        <textarea
+                        <Textarea
                           aria-label="错题备注"
                           disabled={updating}
                           maxLength={20_000}

@@ -481,14 +481,9 @@ function ExplanationPanel({
         }}
       >
         <span><Icon name="ai" size={15} /> 向我解释</span>
-        <button
-          aria-label="关闭解释"
-          onClick={onClose}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          ×
-        </button>
+        <IconButton appearance="plain" label="关闭解释" onClick={onClose} onPointerDown={(event) => event.stopPropagation()}>
+          <Icon name="close" size={14} />
+        </IconButton>
       </header>
       <div className="explain-floating-body">
         <MathMarkdown className="explain-selection-quote">{target.text}</MathMarkdown>

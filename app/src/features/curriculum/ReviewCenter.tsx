@@ -24,6 +24,7 @@ import {
   type TagReviewItem,
 } from '../../platform/horizonDatabase'
 import { selectBulkReviewScope, type BulkReviewProjectType } from './bulkReviewScope'
+import { Icon } from '../../components/Icon'
 
 type ReviewProjectFilter = BulkReviewProjectType
 type ReviewStatusFilter = 'pending' | 'all' | 'rejected'
@@ -268,7 +269,7 @@ export function ReviewCenter({
 
       <div className="curriculum-review-center__body">
         <div className="curriculum-review-toolbar">
-          <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或依据" value={query} /></label>
+          <label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或依据" value={query} /></label>
           <ListboxSelect ariaLabel="审核项目类型" onValueChange={(value) => setProjectFilter(value as ReviewProjectFilter)} options={projectFilters} value={projectFilter} />
           <ListboxSelect ariaLabel="审核状态" onValueChange={(value) => setStatusFilter(value as ReviewStatusFilter)} options={[{ value: 'pending', label: '待处理' }, { value: 'all', label: '全部状态' }, { value: 'rejected', label: '已驳回' }]} value={statusFilter} />
           <div className="curriculum-review-bulk-actions">
@@ -305,8 +306,8 @@ export function ReviewCenter({
                   <div><span>标签状态</span><strong>{tagState}</strong></div>
                   <StatusBadge tone={rejected ? 'neutral' : pending ? 'warning' : 'success'}>{pending ? '待处理' : '已驳回'}</StatusBadge>
                   <div className="curriculum-review-row__actions">
-                    <IconButton aria-busy={rowBusy.has(key) || undefined} disabled={busy || rowBusy.has(key) || !pending} label={`批准“${name}”`} onClick={() => row.kind === 'definition' ? void runRowAction(row, () => reviewTagDefinition(row.value, 'approve')) : approveProblem(row.value)}>{rowBusy.has(key) ? <span aria-hidden="true" className="ax-spinner curriculum-review-row__spinner" /> : '✓'}</IconButton>
-                    <IconButton aria-busy={rowBusy.has(key) || undefined} className="is-danger" disabled={busy || rowBusy.has(key) || !pending} label={`驳回“${name}”`} onClick={() => rejectRow(row)}>{rowBusy.has(key) ? <span aria-hidden="true" className="ax-spinner curriculum-review-row__spinner" /> : '×'}</IconButton>
+                    <IconButton aria-busy={rowBusy.has(key) || undefined} disabled={busy || rowBusy.has(key) || !pending} label={`批准“${name}”`} onClick={() => row.kind === 'definition' ? void runRowAction(row, () => reviewTagDefinition(row.value, 'approve')) : approveProblem(row.value)}>{rowBusy.has(key) ? <span aria-hidden="true" className="ax-spinner curriculum-review-row__spinner" /> : <Icon name="check" size={16} />}</IconButton>
+                    <IconButton aria-busy={rowBusy.has(key) || undefined} className="is-danger" disabled={busy || rowBusy.has(key) || !pending} label={`驳回“${name}”`} onClick={() => rejectRow(row)}>{rowBusy.has(key) ? <span aria-hidden="true" className="ax-spinner curriculum-review-row__spinner" /> : <Icon name="close" size={16} />}</IconButton>
                   </div>
                   {rowErrors[key] && <p className="curriculum-review-row__error" role="alert">{rowErrors[key]}</p>}
                 </article>

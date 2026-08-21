@@ -109,6 +109,11 @@
 .ax-input-field input:hover:not(:disabled) { border-color: var(--ax-border-strong); }
 .ax-input-field input:focus-visible { outline: none; border-color: var(--ax-border-focus); box-shadow: var(--focus-ring); }
 .ax-input-field input:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
+.ax-textarea-field { min-width: 0; display: grid; gap: var(--ax-space-2); }
+.ax-textarea-field textarea { width: 100%; min-height: calc(var(--ax-control-md) * 2); padding: var(--ax-space-2) var(--ax-control-padding-inline); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-md); color: var(--ax-text-primary); background: var(--ax-color-surface); font: inherit; font-size: var(--ax-type-control-size); line-height: 1.5; resize: vertical; }
+.ax-textarea-field textarea:hover:not(:disabled) { border-color: var(--ax-border-strong); }
+.ax-textarea-field textarea:focus-visible { outline: none; border-color: var(--ax-border-focus); box-shadow: var(--focus-ring); }
+.ax-textarea-field textarea:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
 .ax-listbox-field { min-width: 0; display: grid; gap: var(--ax-space-2); }
 .ax-listbox-trigger {
   width: 100%;

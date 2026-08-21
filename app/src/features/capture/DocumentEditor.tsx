@@ -633,7 +633,7 @@ export function DocumentEditor({
     <main className="workspace editor-workspace">
       <header className="editor-header">
         <button className="back-button" onClick={onBack} type="button">
-          ‹ 返回采集
+          <Icon name="chevron-left" size={14} /> 返回采集
         </button>
         <div>
           <p className="eyebrow">页面处理</p>
@@ -772,7 +772,7 @@ export function DocumentEditor({
               onClick={addBlock}
               type="button"
             >
-              ＋
+              <Icon name="plus" size={16} />
             </button>
           </div>
 

@@ -17,6 +17,7 @@ import { registerUnsavedGuard, unregisterUnsavedGuard } from '../../platform/uns
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 import { ReviewSettings } from './ReviewSettings'
+import { Icon } from '../../components/Icon'
 
 type SettingsTab = 'providers' | 'review' | 'appearance' | 'maintenance' | 'about' | 'update'
 type SettingsMessage = { text: string; tone: 'success' | 'error' }
@@ -341,7 +342,7 @@ export function AISettings() {
                             type="button"
                             aria-label="上移"
                           >
-                            ▲
+                            <Icon name="arrow-up" size={14} />
                           </button>
                           <button
                             className="provider-nav-arrow"
@@ -354,7 +355,7 @@ export function AISettings() {
                             type="button"
                             aria-label="下移"
                           >
-                            ▼
+                            <Icon name="arrow-down" size={14} />
                           </button>
                         </span>
                       </div>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, PageHeader, SegmentedControl, StatusBadge, type Feedback } from '../../components/ui'
+import { Badge, Button, FlowingTaskSurface, IconButton, InlineNotice, PageHeader, SegmentedControl, StatusBadge, Textarea, type Feedback } from '../../components/ui'
 import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
@@ -66,7 +66,7 @@ function ResultCorrection({ response, item, onChange, onError }: {
     <summary>修改识别或批改</summary>
     <div className="practice-result__correction-body">
       <img alt={`第 ${item.orderIndex + 1} 题作答区域`} src={mediaAssetUrl(response.answerAssetPath)} />
-      <label>识别到的作答<textarea aria-label={`第 ${item.orderIndex + 1} 题识别结果`} onChange={(event) => setAnswer(event.target.value)} value={answer} /></label>
+      <Textarea aria-label={`第 ${item.orderIndex + 1} 题识别结果`} label="识别到的作答" onChange={(event) => setAnswer(event.target.value)} value={answer} />
       <div>
         <Button disabled={busy || !answer.trim()} onClick={() => void regrade()} variant="secondary">按修改内容重新批改</Button>
         <Button disabled={busy} onClick={() => void override('correct')} variant="ghost">标为正确</Button>

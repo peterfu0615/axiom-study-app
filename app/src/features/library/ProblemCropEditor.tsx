@@ -15,6 +15,7 @@ import {
 } from '../../platform/database'
 import { mediaAssetUrl } from '../../platform/native'
 import { SegmentedControl } from '../../components/ui'
+import { Icon } from '../../components/Icon'
 
 type PreviewMode = 'corrected' | 'original'
 
@@ -186,7 +187,7 @@ export function ProblemCropEditor({
           onClick={onBack}
           type="button"
         >
-          ‹ 返回错题详情
+          <Icon name="chevron-left" size={14} /> 返回错题详情
         </button>
         <div>
           <p className="eyebrow">图片区域</p>

@@ -39,7 +39,7 @@ function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
   return <section className="today-forecast" aria-label="未来 7 天学习安排">
     <div className="today-forecast__heading">
       <h2>未来 7 天</h2>
-      <IconButton appearance="plain" label="按当前学习状态估算，实际安排会随练习结果变化。"><span aria-hidden="true">ⓘ</span></IconButton>
+      <IconButton appearance="plain" label="按当前学习状态估算，实际安排会随练习结果变化。"><Icon name="info" size={14} /></IconButton>
     </div>
     <div className="today-forecast__days">
       {days.map((day, index) => {

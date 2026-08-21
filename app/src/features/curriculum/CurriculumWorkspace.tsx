@@ -13,6 +13,7 @@ import {
   StatusBadge,
   Surface,
   Tabs,
+  Textarea,
 } from '../../components/ui'
 import type { KnowledgeNode, Textbook } from '../../domain/horizon'
 import {
@@ -81,7 +82,7 @@ function KnowledgeTree({
           <li key={item.node.id} role="treeitem">
             <div className={`curriculum-tree-row ${selectedId === item.node.id ? 'is-selected' : ''}`}>
               {hasChildren
-                ? <IconButton aria-expanded={isExpanded} className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''}>›</span></IconButton>
+                ? <IconButton aria-expanded={isExpanded} className="curriculum-tree-toggle" label={isExpanded ? '收起目录' : '展开目录'} onClick={() => onToggle(item.node.id)}><span className={isExpanded ? 'is-open' : ''} aria-hidden="true"><Icon name="chevron" size={12} /></span></IconButton>
                 : <span className="curriculum-tree-toggle-placeholder" />}
               <button
                 onClick={() => onSelect(item.node)}
@@ -434,7 +435,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }, { value: 'review', label: '审核确认', count: pendingReviewCount }]} value={view} />
 
       <div className={`curriculum-view-scroll curriculum-view-scroll--${view}`}>
-        {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
+        {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}><Icon name="close" size={14} /></IconButton></div>}
 
         {view === 'tags' ? <div className="curriculum-tags-view"><TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null) }} onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : view === 'review' ? <div className="curriculum-review-view"><ReviewCenter onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : (
           <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
@@ -455,7 +456,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               <Surface className="curriculum-structure-shell">
                 <aside className="curriculum-tree-panel">
                   <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><Button onClick={() => openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null)}>新增节点</Button></div>
-                  <label className="curriculum-search"><span>⌕</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
+                  <label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
                   <div className="curriculum-tree-scroll"><KnowledgeTree expanded={expanded} items={tree} onSelect={(node) => setSelectedNodeId(node.id)} onToggle={(nodeId) => setExpanded((current) => { const next = new Set(current); if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId); return next })} selectedId={selectedNodeId} visibleIds={visibleNodeIds} /></div>
                 </aside>
                 <section className="curriculum-node-detail">
@@ -485,7 +486,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
-        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><label>备注<textarea onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><Textarea label="备注" onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">

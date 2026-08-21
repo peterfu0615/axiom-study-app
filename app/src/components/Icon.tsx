@@ -13,8 +13,10 @@ export type IconName =
   | 'check'
   | 'plus'
   | 'chevron'
+  | 'chevron-left'
+  | 'chevron-up'
+  | 'chevron-down'
   | 'close'
-  | 'plus'
   | 'trash'
   | 'alert'
   | 'info'
@@ -24,6 +26,10 @@ export type IconName =
   | 'download'
   | 'print'
   | 'favorite'
+  | 'search'
+  | 'arrow-up'
+  | 'arrow-down'
+  | 'menu'
 
 const paths: Record<IconName, React.ReactNode> = {
   today: (
@@ -97,7 +103,19 @@ const paths: Record<IconName, React.ReactNode> = {
   check: <path d="m5 12 4 4L19 6" />,
   plus: <path d="M12 5v14M5 12h14" />,
   chevron: <path d="m9 6 6 6-6 6" />,
+  'chevron-left': <path d="m15 6-6 6 6 6" />,
+  'chevron-up': <path d="m6 15 6-6 6 6" />,
+  'chevron-down': <path d="m6 9 6 6 6-6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </>
+  ),
+  'arrow-up': <path d="M12 19V5M6 11l6-6 6 6" />,
+  'arrow-down': <path d="M12 5v14M6 13l6 6 6-6" />,
+  menu: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
   trash: (
     <>
       <path d="M5 7h14M9 7V4h6v3M7.5 7l.8 13h7.4l.8-13" />

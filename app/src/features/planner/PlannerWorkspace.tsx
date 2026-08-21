@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
-import { Button, Dialog, EmptyState, InlineNotice, PageHeader, StatusBadge } from '../../components/ui'
+import { Button, Dialog, EmptyState, InlineNotice, ListboxSelect, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { AppSection } from '../../components/Sidebar'
 import { plannerDate, type PlannerAvailabilityDay, type PlannerTaskType } from '../../domain/planner'
@@ -170,13 +170,13 @@ export function PlannerWorkspace({ onNavigate }: { onNavigate: (section: AppSect
     <Dialog onClose={() => setTaskDialog(false)} open={taskDialog} title="添加学习任务">
       <div className="planner-form">
         <label>任务名称<input autoFocus maxLength={160} onChange={(event) => setDraft({ ...draft, title: event.target.value })} value={draft.title} /></label>
-        <label>类型<select onChange={(event) => setDraft({ ...draft, taskType: event.target.value as PlannerTaskInput['taskType'] })} value={draft.taskType}><option value="homework">作业</option><option value="exam_prep">考试准备</option></select></label>
+        <label>类型<ListboxSelect ariaLabel="任务类型" onValueChange={(value) => setDraft({ ...draft, taskType: value as PlannerTaskInput['taskType'] })} options={[{ value: 'homework', label: '作业' }, { value: 'exam_prep', label: '考试准备' }]} value={draft.taskType} /></label>
         <label>科目<input list="planner-subjects" onChange={(event) => setDraft({ ...draft, subject: event.target.value, chapterIds: [], knowledgeTagIds: [] })} value={draft.subject} /><datalist id="planner-subjects">{subjects.map((subject) => <option key={subject} value={subject} />)}</datalist></label>
         <label>预计时长（分钟）<input max="1440" min="1" onChange={(event) => setDraft({ ...draft, estimatedMinutes: Number(event.target.value) })} type="number" value={draft.estimatedMinutes} /></label>
         <label>最早开始<input onChange={(event) => setDraft({ ...draft, earliestDate: event.target.value })} type="date" value={draft.earliestDate} /></label>
         <label>截止日期<input onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} type="date" value={draft.dueDate} /></label>
         {draft.taskType === 'exam_prep' && <label>考试日期<input onChange={(event) => setDraft({ ...draft, exam: { title: draft.exam?.title || draft.title, examDate: event.target.value } })} type="date" value={draft.exam?.examDate || draft.dueDate} /></label>}
-        <label>优先级<select onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} value={draft.priority}><option value="1">低</option><option value="2">较低</option><option value="3">普通</option><option value="4">较高</option><option value="5">最高</option></select></label>
+        <label>优先级<ListboxSelect ariaLabel="优先级" onValueChange={(value) => setDraft({ ...draft, priority: Number(value) })} options={[{ value: '1', label: '低' }, { value: '2', label: '较低' }, { value: '3', label: '普通' }, { value: '4', label: '较高' }, { value: '5', label: '最高' }]} value={String(draft.priority)} /></label>
         <label className="planner-form__check"><input checked={draft.splittable} onChange={(event) => setDraft({ ...draft, splittable: event.target.checked })} type="checkbox" />允许拆分到多天</label>
         {scopedOptions.length > 0 && <details className="planner-scope-picker"><summary>关联章节与知识点（可选）</summary><div>{scopedOptions.map((scope) => {
           const field = scope.kind === 'chapter' ? 'chapterIds' : 'knowledgeTagIds'

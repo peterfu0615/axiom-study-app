@@ -24,6 +24,7 @@ import {
   saveCurriculumImportOutline,
 } from '../../platform/horizonDatabase'
 import { useCurriculumAnalysisStatus } from './CurriculumAnalysisContext'
+import { Icon } from '../../components/Icon'
 import {
   curriculumAnalysisProgress,
   curriculumAnalysisStageLabel,
@@ -239,7 +240,7 @@ export function CurriculumImportFlow({
         ))}
       </ol>}
 
-      {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}>×</IconButton></div>}
+      {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}><Icon name="close" size={14} /></IconButton></div>}
 
       {phase === 'select' && (
         <section className="curriculum-import-card">

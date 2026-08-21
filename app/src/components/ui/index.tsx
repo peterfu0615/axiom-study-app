@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type Ref,
+  type TextareaHTMLAttributes,
 } from 'react'
 import type { AIErrorEnvelope } from '../../domain/aiError'
 import { Icon, type IconName } from '../Icon'
@@ -262,6 +263,30 @@ export function Input({
   )
 }
 
+export function Textarea({
+  label,
+  hint,
+  error,
+  className = '',
+  id,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  label?: string
+  hint?: string
+  error?: string
+}) {
+  const generatedId = useId()
+  const fieldId = id ?? generatedId
+  const descriptionId = hint || error ? `${fieldId}-description` : undefined
+  return (
+    <label className={`ax-textarea-field ${className}`.trim()} htmlFor={fieldId}>
+      {label && <span className="ax-field-label">{label}</span>}
+      <textarea {...props} aria-describedby={descriptionId} aria-invalid={Boolean(error) || undefined} id={fieldId} />
+      {(error || hint) && <small className={error ? 'ax-field-error' : 'ax-field-hint'} id={descriptionId}>{error || hint}</small>}
+    </label>
+  )
+}
+
 export function EmptyState({
   title,
   description,
@@ -506,7 +531,7 @@ export function Menu({
         onClick={() => setOpen((value) => !value)}
         ref={triggerRef}
       >
-        ⋯
+        <Icon name="menu" size={16} />
       </IconButton>
       {open && (
         <div className="ax-menu__popover" onClick={() => setOpen(false)} role="menu">
