@@ -49,7 +49,7 @@ export function ProblemCropEditor({
   const [originalRegions, setOriginalRegions] = useState<ProblemRegion[]>([])
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const { toast, notify, dismiss } = useToast()
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
 
   useEffect(() => {
     if (!canEdit) {
@@ -321,7 +321,7 @@ export function ProblemCropEditor({
         </aside>
       </section>
 
-      <Toast toast={toast} />
+      <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
     </main>
   )
 }

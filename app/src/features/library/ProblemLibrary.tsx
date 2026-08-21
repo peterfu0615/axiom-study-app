@@ -290,7 +290,7 @@ export function ProblemLibrary() {
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [aiUploadConfirming, setAIUploadConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const { toast, notify, dismiss } = useToast()
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
   // Event listeners must not be re-armed on every selection change, so they
   // read the current selection/view through refs instead of closing over them.
   const selectedIdRef = useRef<string | null>(null)
@@ -1835,7 +1835,7 @@ export function ProblemLibrary() {
           </div>
         </div>
       </Dialog>
-      <Toast toast={toast} />
+      <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
     </main>
   )
 }

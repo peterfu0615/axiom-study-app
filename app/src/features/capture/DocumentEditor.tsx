@@ -100,10 +100,12 @@ function createId() {
 export function DocumentEditor({
   document,
   onBack,
+  onNavigate,
   onSaved,
 }: {
   document: SourceDocument
   onBack: () => void
+  onNavigate?: (section: 'library') => void
   onSaved: () => Promise<void>
 }) {
   const [mode, setMode] = useState<EnhancementMode>('color')
@@ -130,7 +132,7 @@ export function DocumentEditor({
   const [processingStage, setProcessingStage] =
     useState<DocumentProcessingProgress['stage']>('starting')
   const [saving, setSaving] = useState(false)
-  const { toast, notify, dismiss } = useToast()
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
   // Tracks whether this editor instance is still mounted so late async
   // completions (page processing outliving a navigation) skip UI writes.
   const aliveRef = useRef(true)
@@ -556,6 +558,11 @@ export function DocumentEditor({
           ? `保存成功：${problems.length} 道错题已写入本地错题库，正在发送题块到 Provider`
           : `保存成功：${problems.length} 道错题仅保存在本地，可稍后从错题详情开始整理`,
         'success',
+        // Close the loop of the capture→library flow: offer the next step
+        // directly instead of leaving users to find the library themselves.
+        onNavigate
+          ? { action: { label: '前往错题库', onClick: () => onNavigate('library') } }
+          : undefined,
       )
     } catch (error) {
       notify(`错题保存失败：${String(error)}`, 'error')
@@ -905,7 +912,7 @@ export function DocumentEditor({
         </div>
       </Dialog>
 
-      <Toast toast={toast} />
+      <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
     </main>
   )
 }

@@ -45,10 +45,16 @@ function AppRuntimeShell({
   section,
   setSection,
   toast,
+  toastDismiss,
+  toastPause,
+  toastResume,
 }: {
   section: AppSection
   setSection: (section: AppSection) => void
   toast: ToastState | null
+  toastDismiss: () => void
+  toastPause: () => void
+  toastResume: () => void
 }) {
   return (
     <div className="app-shell">
@@ -61,7 +67,7 @@ function AppRuntimeShell({
         onChange={setSection}
       />
       {section === 'capture' ? (
-        <CaptureWorkspace />
+        <CaptureWorkspace onNavigateToLibrary={() => setSection('library')} />
       ) : section === 'today' ? (
         <TodayWorkspace onNavigate={setSection} />
       ) : section === 'library' ? (
@@ -77,7 +83,7 @@ function AppRuntimeShell({
       ) : (
         <ModulePlaceholder section={section} />
       )}
-      <Toast toast={toast} />
+      <Toast toast={toast} onClose={toastDismiss} onPause={toastPause} onResume={toastResume} />
     </div>
   )
 }
@@ -85,7 +91,7 @@ function AppRuntimeShell({
 function AppRuntime() {
   const [section, setSection] = useState<AppSection>('capture')
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
-  const { toast, notify } = useToast()
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
 
   useEffect(() => {
     if (appBootStarted) return
@@ -130,7 +136,14 @@ function AppRuntime() {
   }
 
   return <CurriculumAnalysisProvider enabled={dbCheck?.ok === true}>
-    <AppRuntimeShell section={section} setSection={setSection} toast={toast} />
+    <AppRuntimeShell
+      section={section}
+      setSection={setSection}
+      toast={toast}
+      toastDismiss={dismiss}
+      toastPause={pauseAutoDismiss}
+      toastResume={resumeAutoDismiss}
+    />
   </CurriculumAnalysisProvider>
 }
 

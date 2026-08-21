@@ -57,7 +57,11 @@ const queueTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
   day: 'numeric',
 })
 
-export function CaptureWorkspace() {
+export function CaptureWorkspace({
+  onNavigateToLibrary,
+}: {
+  onNavigateToLibrary?: () => void
+} = {}) {
   const [mode, setMode] = useState<CaptureMode>('camera')
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle')
   const [devices, setDevices] = useState<CameraDevice[]>([])
@@ -72,7 +76,7 @@ export function CaptureWorkspace() {
   const [busy, setBusy] = useState(false)
   const [continuousCapture, setContinuousCapture] = useState(true)
   const [frameReady, setFrameReady] = useState(false)
-  const { toast, notify, dismiss } = useToast()
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
   const [rotation, setRotation] = useState<QuarterTurn>(0)
   const [manualRotation, setManualRotation] = useState(false)
   const [previewOrientation, setPreviewOrientation] = useState<
@@ -395,6 +399,7 @@ export function CaptureWorkspace() {
           setEditingDocument(null)
           void refreshRecent()
         }}
+        onNavigate={onNavigateToLibrary}
         onSaved={refreshRecent}
       />
     )
@@ -626,7 +631,7 @@ export function CaptureWorkspace() {
         </aside>
       </section>
 
-      <Toast toast={toast} />
+      <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
     </main>
   )
 }
