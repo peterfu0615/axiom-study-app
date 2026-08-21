@@ -108,18 +108,28 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isCancelled: () => boolean = () => false) => {
     setLoading(true); setError(null)
     try {
-      const [nextPlan, nextForecast] = await Promise.all([getOrCreateTodayPlan(), getSevenDayReviewForecast()])
+      // The 7-day forecast is independent of today's plan; overlap it with
+      // the practice-set lookup instead of waiting for both sequentially.
+      const nextPlan = await getOrCreateTodayPlan()
+      const [nextForecast, existingPracticeSet] = await Promise.all([
+        getSevenDayReviewForecast(),
+        findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
+      ])
+      if (isCancelled()) return
       setPlan(nextPlan); setForecast(nextForecast)
-      const existingPracticeSet = await findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
-    } catch (reason) { setError(practiceErrorMessage(reason)) }
-    finally { setLoading(false) }
+    } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
+    finally { if (!isCancelled()) setLoading(false) }
   }, [])
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    let cancelled = false
+    void load(() => cancelled)
+    return () => { cancelled = true }
+  }, [load])
 
   const mutate = async (operation: () => Promise<TodayReviewPlan | void>) => {
     setBusy(true); setError(null)

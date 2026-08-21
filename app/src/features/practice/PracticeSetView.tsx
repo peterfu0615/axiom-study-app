@@ -7,6 +7,7 @@ import type { PracticeItem, PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt, PracticeCapturedResponse } from '../../domain/practiceAttempt'
 import type { PracticeLoop } from '../../domain/practiceLoop'
 import { importImage, mediaAssetUrl, openPracticeSubmission, preparePracticeSubmission, renderPracticePdfPage, type PracticePdfPagePreview } from '../../platform/native'
+import { mapWithConcurrency } from '../../platform/concurrency'
 import {
   openExportedPracticePdf,
   practiceDocumentDiagnostic,
@@ -296,11 +297,12 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     setMode('processing')
     setProcessingStep({ title: '正在读取作答', detail: `正在安全导入 ${selectedPaths.length} 个文件…`, progress: .12 })
     try {
-      const submissions: PracticeAnswerSubmission[] = []
-      for (const path of selectedPaths) {
+      // Import files with bounded concurrency (order-preserving): one IPC per
+      // file adds up quickly for multi-page submissions.
+      const results = await mapWithConcurrency(selectedPaths, 4, async (path) => {
         if (path.toLowerCase().endsWith('.pdf')) {
           const prepared = await preparePracticeSubmission(path)
-          submissions.push(...prepared.pages.map((page) => ({
+          return prepared.pages.map((page) => ({
             sourcePath: page.sourcePath,
             submissionGroupId: prepared.submissionGroupId,
             sourceKind: prepared.sourceKind,
@@ -308,21 +310,20 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
             sourcePageIndex: page.pageIndex,
             pageCount: prepared.pageCount,
             annotationsPreserved: prepared.annotationsPreserved,
-          })))
-        } else {
-          const media = await importImage(path)
-          submissions.push({
-            sourcePath: media.path,
-            submissionGroupId: crypto.randomUUID(),
-            sourceKind: 'image',
-            originalAssetPath: media.path,
-            sourcePageIndex: 0,
-            pageCount: 1,
-            annotationsPreserved: false,
-          })
+          }))
         }
-      }
-      await processSubmissions(submissions)
+        const media = await importImage(path)
+        return [{
+          sourcePath: media.path,
+          submissionGroupId: crypto.randomUUID(),
+          sourceKind: 'image' as const,
+          originalAssetPath: media.path,
+          sourcePageIndex: 0,
+          pageCount: 1,
+          annotationsPreserved: false,
+        }]
+      })
+      await processSubmissions(results.flat())
     } catch (reason) {
       setMode('submit')
       setFeedback({ tone: 'danger', message: practiceErrorMessage(reason) })

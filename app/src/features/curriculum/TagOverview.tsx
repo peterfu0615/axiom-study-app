@@ -105,7 +105,10 @@ export function TagOverview({
     // Depend only on the batch identity, not the whole object: progress ticks
     // replace `batch` every poll without changing id/status and must not
     // tear down and recreate the interval on each tick.
-    const timer = window.setInterval(() => { void refreshRelabelBatch(relabelBatchId).then((next) => next && setBatch(next)) }, 1200)
+    // 3s cadence: each poll opens a write transaction that competes with the
+    // running relabel worker for the global transaction lock; polling faster
+    // measurably slows the batch itself. Progress granularity of 3s is fine.
+    const timer = window.setInterval(() => { void refreshRelabelBatch(relabelBatchId).then((next) => next && setBatch(next)) }, 3000)
     return () => window.clearInterval(timer)
   }, [relabelBatchId, relabelBatchStatus])
 

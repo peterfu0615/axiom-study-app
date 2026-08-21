@@ -96,6 +96,15 @@ function ExplainableMathMarkdown({
   const [hoverTarget, setHoverTarget] = useState<ExplanationTarget | null>(null)
   const [selectionTarget, setSelectionTarget] = useState<ExplanationTarget | null>(null)
   const hideTimer = useRef<number | null>(null)
+  const selectionTimerRef = useRef<number | null>(null)
+  // Remembers the paragraph already extracted on the last mousemove so
+  // hovering within one long paragraph does not re-run KaTeX text recovery
+  // on every event.
+  const lastHoverElementRef = useRef<Element | null>(null)
+
+  useEffect(() => () => {
+    if (selectionTimerRef.current !== null) window.clearTimeout(selectionTimerRef.current)
+  }, [])
 
   useEffect(() => {
     const clearDetachedSelection = () => {
@@ -117,6 +126,7 @@ function ExplainableMathMarkdown({
   }, [])
 
   const clearHover = () => {
+    lastHoverElementRef.current = null
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => setHoverTarget(null), 120)
   }
@@ -127,7 +137,9 @@ function ExplainableMathMarkdown({
       ? event.target.closest('p, li, blockquote, h1, h2, h3, h4')
       : null
     if (!element || !rootRef.current?.contains(element)) return
+    if (element === lastHoverElementRef.current && hoverTarget) return
     const text = extractReadableMathText(element)
+    lastHoverElementRef.current = element
     if (!text) return
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current)
     setHoverTarget({
@@ -140,7 +152,9 @@ function ExplainableMathMarkdown({
 
   const handleSelection = () => {
     if (!hoverEnabled) return
-    window.setTimeout(() => {
+    if (selectionTimerRef.current !== null) window.clearTimeout(selectionTimerRef.current)
+    selectionTimerRef.current = window.setTimeout(() => {
+      selectionTimerRef.current = null
       const selection = window.getSelection()
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null
       if (!range || !rootRef.current?.contains(range.commonAncestorContainer)) {
@@ -177,6 +191,7 @@ function ExplainableMathMarkdown({
       onMouseMove={updateHover}
       onMouseUp={handleSelection}
       onScrollCapture={() => {
+        lastHoverElementRef.current = null
         setHoverTarget(null)
         setSelectionTarget(null)
       }}
@@ -621,16 +636,28 @@ export function SolutionComparison({
   const explanationRequestId = useRef(0)
   const explanationOwnerId = useRef(crypto.randomUUID())
 
-  // 流式订阅：正解生成时实时显示已接收字符数
+  // 流式订阅：正解生成时实时显示已接收字符数。
+  // SSE chunk 频率很高，与 ExplanationPanel 相同用 ~100ms 尾部节流合帧，
+  // 避免每个 chunk 都触发全量重渲染（含 KaTeX 重排版）。
   useEffect(() => {
+    let latestChars = 0
+    let timer: number | null = null
+    const flush = () => {
+      timer = null
+      setSolutionStreamChars(latestChars)
+    }
     const handler = (event: Event) => {
       const detail = (event as CustomEvent).detail as { problemId: string; accumulated: string }
       if (detail?.problemId === problem.id) {
-        setSolutionStreamChars(detail.accumulated.length)
+        latestChars = detail.accumulated.length
+        if (timer === null) timer = window.setTimeout(flush, 100)
       }
     }
     window.addEventListener(SOLUTION_STREAM_EVENT, handler)
-    return () => window.removeEventListener(SOLUTION_STREAM_EVENT, handler)
+    return () => {
+      window.removeEventListener(SOLUTION_STREAM_EVENT, handler)
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [problem.id])
 
   useEffect(() => {
@@ -716,6 +743,10 @@ export function SolutionComparison({
   const closeModal = (event?: MouseEvent<HTMLDivElement>) => {
     if (!event || event.target === event.currentTarget) setModalOpen(false)
   }
+
+  const knowledgeGaps = reasoning?.status === 'completed'
+    ? reasoning.knowledgeGaps.map(sanitizeAIOutputText).filter((gap) => gap.length > 0)
+    : []
 
   return (
     <>
@@ -826,8 +857,8 @@ export function SolutionComparison({
                 {sanitizeAIOutputText(reasoning.reason) && (
                   <MathMarkdown className="reasoning-text">{sanitizeAIOutputText(reasoning.reason)}</MathMarkdown>
                 )}
-                {reasoning.knowledgeGaps.map(sanitizeAIOutputText).filter((gap) => gap.length > 0).length > 0 && (
-                  <p>知识缺口：{reasoning.knowledgeGaps.map(sanitizeAIOutputText).filter((gap) => gap.length > 0).join(' · ')}</p>
+                {knowledgeGaps.length > 0 && (
+                  <p>知识缺口：{knowledgeGaps.join(' · ')}</p>
                 )}
                 {sanitizeAIOutputText(reasoning.suggestion) && (
                   <MathMarkdown className="reasoning-text">{sanitizeAIOutputText(reasoning.suggestion)}</MathMarkdown>

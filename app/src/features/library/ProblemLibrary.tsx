@@ -168,6 +168,8 @@ function ProblemImage({
     <img
       alt={alt}
       className={className}
+      decoding="async"
+      loading="lazy"
       onError={() => setFailed(true)}
       src={mediaAssetUrl(path)}
     />
@@ -216,6 +218,8 @@ function ProblemDiagramImage({
       >
         <img
           alt={alt}
+          decoding="async"
+          loading="lazy"
           onError={() => setFailed(true)}
           onLoad={(event) => {
             if (croppedPath) return
@@ -294,6 +298,14 @@ export function ProblemLibrary() {
   // A quiet refresh failure leaves the list potentially stale.  Remember it so
   // the next event-driven refresh becomes a visible (non-quiet) one.
   const dirtyRef = useRef(false)
+  // AI pipelines emit one status event per run start/end; during batch runs
+  // that floods the workspace with full-list reloads.  Coalesce them into a
+  // single trailing refresh.
+  const refreshTimerRef = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
+  }, [])
 
   useEffect(() => {
     selectedIdRef.current = selectedId
@@ -340,6 +352,14 @@ export function ProblemLibrary() {
     void refresh(view)
   }, [refresh, view])
 
+  const scheduleEventRefresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) return
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null
+      void refresh(viewRef.current, !dirtyRef.current)
+    }, 400)
+  }, [refresh])
+
   useEffect(() => {
     const handleSolutionStatus = (event: Event) => {
       const problemId = (event as CustomEvent<{ problemId?: string }>).detail
@@ -360,12 +380,12 @@ export function ProblemLibrary() {
             )
           })
       }
-      void refresh(viewRef.current, !dirtyRef.current)
+      scheduleEventRefresh()
     }
     window.addEventListener(SOLUTION_STATUS_EVENT, handleSolutionStatus)
     return () =>
       window.removeEventListener(SOLUTION_STATUS_EVENT, handleSolutionStatus)
-  }, [refresh])
+  }, [refresh, scheduleEventRefresh])
 
   useEffect(() => {
     const handleIntelligenceStatus = (event: Event) => {
@@ -391,18 +411,17 @@ export function ProblemLibrary() {
             )
           })
       }
-      void refresh(viewRef.current, !dirtyRef.current)
+      scheduleEventRefresh()
     }
     window.addEventListener(INTELLIGENCE_STATUS_EVENT, handleIntelligenceStatus)
     return () => window.removeEventListener(INTELLIGENCE_STATUS_EVENT, handleIntelligenceStatus)
-  }, [refresh])
+  }, [refresh, scheduleEventRefresh])
 
   useEffect(() => {
-    const handleAIStatus = () =>
-      void refresh(viewRef.current, !dirtyRef.current)
+    const handleAIStatus = () => scheduleEventRefresh()
     window.addEventListener(AI_STATUS_EVENT, handleAIStatus)
     return () => window.removeEventListener(AI_STATUS_EVENT, handleAIStatus)
-  }, [refresh])
+  }, [scheduleEventRefresh])
 
   const subjects = useMemo(() => [...new Set(problems.map((problem) => problem.subject)
     .filter((value): value is string => Boolean(value)))]
@@ -442,7 +461,8 @@ export function ProblemLibrary() {
       return
     }
     let cancelled = false
-    setSearchMatchIds(new Set())
+    // Keep the previous match set while the debounced search runs; clearing
+    // immediately made the list flash an empty state on every keystroke.
     const timeout = window.setTimeout(() => {
       void searchSavedProblemIds(normalized, view === 'archived', view === 'trash')
         .then((ids) => {

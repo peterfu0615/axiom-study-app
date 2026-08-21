@@ -48,6 +48,15 @@ const cameraStatusCopy: Record<CameraStatus, string> = {
   error: '相机不可用',
 }
 
+// Module-level formatter: constructing Intl.DateTimeFormat per queue item per
+// render is measurably expensive.
+const queueTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  month: 'numeric',
+  day: 'numeric',
+})
+
 export function CaptureWorkspace() {
   const [mode, setMode] = useState<CaptureMode>('camera')
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle')
@@ -589,6 +598,8 @@ export function CaptureWorkspace() {
                 >
                   <img
                     alt=""
+                    decoding="async"
+                    loading="lazy"
                     src={mediaAssetUrl(document.originalImagePath)}
                   />
                   <span>
@@ -599,12 +610,7 @@ export function CaptureWorkspace() {
                       {document.processingStatus === 'ready_for_segmentation'
                         ? '已生成题目块 · '
                         : ''}
-                      {new Intl.DateTimeFormat('zh-CN', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          month: 'numeric',
-                          day: 'numeric',
-                        }).format(document.capturedAt)}
+                      {queueTimeFormatter.format(document.capturedAt)}
                     </small>
                   </span>
                   <Icon name="chevron" size={16} />

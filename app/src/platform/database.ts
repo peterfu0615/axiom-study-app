@@ -58,6 +58,7 @@ import {
 } from '../domain/ai'
 import { isSameCropRect, isValidNormalizedRect } from '../domain/problem'
 import { resolveUserOverride } from '../domain/problemSelection'
+import { mapWithConcurrency } from './concurrency'
 import {
   canonicalizePath,
   cropProblemImage,
@@ -1045,29 +1046,27 @@ export async function saveProblems(
     createdAt: number
   }> = []
   try {
-    for (const block of selectedBlocks) {
-      const questionImage = await cropProblemImage(
-        block.id,
-        correctedImagePath,
-        block.rect,
-        redactions,
-      )
-      images.push(questionImage)
-      questionImages.push(questionImage)
-      const now = Date.now()
-      regionRows.push({
-        id: `question-${block.id}`,
-        problemId: block.id,
-        type: 'question',
-        rect: block.rect,
-        imagePath: questionImage.path,
-        source: block.source,
-        createdAt: now,
-      })
+    // Plan every crop up front (validating rects before creating any file),
+    // then run them with bounded concurrency: one IPC round trip per image
+    // adds up quickly when saving a full page of problems.
+    const cropTasks = selectedBlocks.flatMap((block) => {
       const selectedRegions = regionSelections[block.id] ?? {
         answer: null,
         diagram: null,
       }
+      const tasks: Array<{
+        id: string
+        problemId: string
+        type: ProblemRegionType
+        rect: Problem['cropRect']
+        source: 'manual' | 'auto'
+      }> = [{
+        id: `question-${block.id}`,
+        problemId: block.id,
+        type: 'question',
+        rect: block.rect,
+        source: block.source,
+      }]
       for (const [type, regionRect] of [
         ['answer', selectedRegions.answer],
         ['diagram', selectedRegions.diagram],
@@ -1076,24 +1075,35 @@ export async function saveProblems(
         if (!isValidNormalizedRect(regionRect)) {
           throw new Error(`${type === 'answer' ? '作答' : '图形'}区域边界无效`)
         }
-        const regionImage = await cropProblemImage(
-          `${block.id}-${type}`,
-          correctedImagePath,
-          regionRect,
-          redactions,
-        )
-        images.push(regionImage)
-        regionRows.push({
+        tasks.push({
           id: `${type}-${block.id}`,
           problemId: block.id,
           type,
           rect: regionRect,
-          imagePath: regionImage.path,
           source: 'manual',
-          createdAt: now,
         })
       }
-    }
+      return tasks
+    })
+    const croppedImages = await mapWithConcurrency(
+      cropTasks,
+      4,
+      (task) => cropProblemImage(task.id, correctedImagePath, task.rect, redactions),
+    )
+    croppedImages.forEach((image, index) => {
+      const task = cropTasks[index]
+      images.push(image)
+      if (task.type === 'question') questionImages.push(image)
+      regionRows.push({
+        id: task.id,
+        problemId: task.problemId,
+        type: task.type,
+        rect: task.rect,
+        imagePath: image.path,
+        source: task.source,
+        createdAt: Date.now(),
+      })
+    })
   } catch (error) {
     await cleanupCreatedProblemImages(images)
     throw new Error(`生成题块图片失败：${String(error)}`)
@@ -1959,6 +1969,11 @@ async function createStudentAttemptInput(problem: SavedProblem) {
   return {
     ...emptyStudentAttemptInput(problem),
     answerImagePaths,
+    // Reuse the same query for the region ids so queueStudentAttempt does not
+    // have to fetch all regions a second time.
+    answerRegionIds: regions
+      .filter((region) => region.type === 'answer')
+      .map((region) => region.id),
   }
 }
 
@@ -2070,9 +2085,6 @@ export async function queueStudentAttempt(problemId: string): Promise<StudentAtt
   const db = await database()
   const run = createStudentAttemptModelRun(problem, input)
   const now = Date.now()
-  const answerRegionIds = (await getProblemRegions(problemId))
-    .filter((region) => region.type === 'answer')
-    .map((region) => region.id)
   await inDatabaseTransaction(db, async () => {
     await insertIntelligenceModelRun(db, run)
     await db.execute(
@@ -2087,7 +2099,7 @@ export async function queueStudentAttempt(problemId: string): Promise<StudentAtt
       [
         crypto.randomUUID(),
         problemId,
-        JSON.stringify(answerRegionIds),
+        JSON.stringify(input.answerRegionIds),
         run.id,
         now,
       ],
