@@ -543,9 +543,27 @@ export function ProblemLibrary() {
     return () => { cancelled = true }
   }, [selectedId])
 
+  // Per-problem note drafts: switching problems keeps half-written notes
+  // instead of silently resetting them to the saved value.
+  const noteDraftsRef = useRef<Map<string, string>>(new Map())
+  const previousSelectedIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    // During the commit where the selection changed, `noteDraft` still holds
+    // the outgoing problem's draft — stash it under its own id.
+    const previousId = previousSelectedIdRef.current
+    previousSelectedIdRef.current = selectedId
+    if (previousId && previousId !== selectedId) {
+      noteDraftsRef.current.set(previousId, noteDraft)
+    }
+  }, [noteDraft, selectedId])
+
   useEffect(() => {
     let cancelled = false
-    setNoteDraft(selected?.libraryMetadata.note ?? '')
+    setNoteDraft(
+      (selectedId ? noteDraftsRef.current.get(selectedId) : undefined)
+        ?? selected?.libraryMetadata.note
+        ?? '',
+    )
     if (!selectedId) {
       setDuplicateDecisionIds(new Set())
       return

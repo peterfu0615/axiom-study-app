@@ -5,6 +5,7 @@ import { resumeSolutionPipeline } from './ai/solutionPipeline'
 import { resumeIntelligencePipeline } from './ai/intelligencePipeline'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
+import { Button, Dialog } from './components/ui'
 import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
@@ -20,6 +21,7 @@ import { DiagramPreview } from './features/diagram/DiagramPreview'
 import { PracticeSubmissionPreview } from './features/practice/PracticeSubmissionPreview'
 import { ensureDatabaseReady, listAIProviderProfiles, type DatabasePathCheck } from './platform/database'
 import { checkForUpdates } from './platform/native'
+import { hasUnsavedChanges } from './platform/unsavedGuard'
 import { useToast, type ToastState } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
 import './components/ui/ui.css'
@@ -90,8 +92,20 @@ function AppRuntimeShell({
 
 function AppRuntime() {
   const [section, setSection] = useState<AppSection>('capture')
+  const [pendingSection, setPendingSection] = useState<AppSection | null>(null)
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
   const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
+
+  // Navigation with an unsaved-changes guard: pages holding local form state
+  // (currently AI settings) register in the guard registry before they can be
+  // unmounted by a section switch.
+  const requestSection = (next: AppSection) => {
+    if (next !== section && hasUnsavedChanges()) {
+      setPendingSection(next)
+      return
+    }
+    setSection(next)
+  }
 
   useEffect(() => {
     if (appBootStarted) return
@@ -138,12 +152,32 @@ function AppRuntime() {
   return <CurriculumAnalysisProvider enabled={dbCheck?.ok === true}>
     <AppRuntimeShell
       section={section}
-      setSection={setSection}
+      setSection={requestSection}
       toast={toast}
       toastDismiss={dismiss}
       toastPause={pauseAutoDismiss}
       toastResume={resumeAutoDismiss}
     />
+    <Dialog
+      onClose={() => setPendingSection(null)}
+      open={pendingSection !== null}
+      title="离开此页面？"
+    >
+      <p>当前页面有未保存的修改，切换后将丢失这些修改。</p>
+      <div className="settings-confirm-actions">
+        <Button onClick={() => setPendingSection(null)} variant="ghost">留在本页</Button>
+        <Button
+          onClick={() => {
+            const target = pendingSection
+            setPendingSection(null)
+            if (target) setSection(target)
+          }}
+          variant="danger"
+        >
+          放弃修改并离开
+        </Button>
+      </div>
+    </Dialog>
   </CurriculumAnalysisProvider>
 }
 

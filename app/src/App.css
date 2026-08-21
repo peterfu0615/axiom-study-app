@@ -4494,6 +4494,8 @@
 
 .settings-save-row > span.is-error { color: var(--danger); }
 
+.settings-save-row > span.is-dirty { color: var(--muted); font-style: italic; }
+
 .settings-confirm-actions {
   display: flex;
   justify-content: flex-end;

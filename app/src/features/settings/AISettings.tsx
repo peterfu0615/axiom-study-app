@@ -13,6 +13,7 @@ import {
   saveAIProviderProfiles,
 } from '../../platform/database'
 import { ListboxSelect, Button, Dialog, PageHeader, Tabs } from '../../components/ui'
+import { registerUnsavedGuard, unregisterUnsavedGuard } from '../../platform/unsavedGuard'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 import { ReviewSettings } from './ReviewSettings'
@@ -95,6 +96,11 @@ export function AISettings() {
   const [providerRemoveConfirming, setProviderRemoveConfirming] = useState(false)
   const [apiKeyDeleteTarget, setApiKeyDeleteTarget] = useState<AIProviderProfile | null>(null)
   const messageTimerRef = useRef<number | null>(null)
+  // Snapshot of the last loaded/saved profiles; differences mean unsaved work.
+  const [savedProfilesJson, setSavedProfilesJson] = useState<string | null>(null)
+  const isDirty = savedProfilesJson !== null && savedProfilesJson !== JSON.stringify(profiles)
+  const isDirtyRef = useRef(false)
+  isDirtyRef.current = isDirty
 
   useEffect(() => {
     let cancelled = false
@@ -102,6 +108,7 @@ export function AISettings() {
       .then((next) => {
         if (cancelled) return
         setProfiles(next)
+        setSavedProfilesJson(JSON.stringify(next))
         setSelectedProviderId(next[0]?.id ?? null)
       })
       .catch((error) => { if (!cancelled) setMessage({ text: `读取设置失败：${readableError(error)}`, tone: 'error' }) })
@@ -156,6 +163,7 @@ export function AISettings() {
       const saved = await saveAIProviderProfiles(profiles)
       configureAIProviders(saved)
       setProfiles(saved)
+      setSavedProfilesJson(JSON.stringify(saved))
       setMessage({ text: 'AI 服务设置已保存并立即生效', tone: 'success' })
       scheduleMessageClear()
     } catch (error) {
@@ -178,6 +186,13 @@ export function AISettings() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Tell the app shell when this page holds unsaved changes so switching
+  // sections can ask for confirmation instead of silently discarding them.
+  useEffect(() => {
+    registerUnsavedGuard('ai-settings', { isDirty: () => isDirtyRef.current })
+    return () => unregisterUnsavedGuard('ai-settings')
   }, [])
 
   const addProvider = () => {
@@ -668,7 +683,7 @@ export function AISettings() {
 
           {tab === 'providers' && (
             <div className="settings-save-row">
-              <span className={message?.tone === 'error' ? 'is-error' : ''} role={message?.tone === 'error' ? 'alert' : 'status'}>{message?.text}</span>
+              <span className={message?.tone === 'error' ? 'is-error' : isDirty ? 'is-dirty' : ''} role={message?.tone === 'error' ? 'alert' : 'status'}>{message?.text ?? (isDirty ? '有未保存的修改' : null)}</span>
               <button
                 className="primary-button"
                 disabled={loading || saving}
