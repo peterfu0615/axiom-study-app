@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AsyncState, Badge, Button, EmptyState, ListboxSelect, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
@@ -117,9 +117,16 @@ export function InsightsWorkspace() {
   const [insights, setInsights] = useState<ReviewInsights | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Only the first paint shows the blocking spinner; range/subject switches
+  // refresh in place so the charts do not flash away and back.
+  const hasLoadedRef = useRef(false)
   const load = useCallback(async () => {
-    setLoading(true); setError(null)
-    try { setInsights(await getReviewInsights(range, Date.now(), subject)) }
+    if (!hasLoadedRef.current) setLoading(true)
+    setError(null)
+    try {
+      setInsights(await getReviewInsights(range, Date.now(), subject))
+      hasLoadedRef.current = true
+    }
     catch (reason) { setError(String(reason)) }
     finally { setLoading(false) }
   }, [range, subject])

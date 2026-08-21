@@ -14,6 +14,14 @@ const modeOptions = [
   { value: 'mock_test', label: '模拟测试' },
 ]
 
+// Clamp numeric input immediately: Number('') is 0 and an emptied field used
+// to persist an invalid value that only surfaced in later plan generation.
+function parseBoundedNumber(raw: string, min: number, max: number, fallback: number) {
+  const parsed = Number(raw)
+  if (!raw.trim() || !Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.round(parsed)))
+}
+
 export function ReviewSettings() {
   const [value, setValue] = useState<ReviewPreferences>(DEFAULT_REVIEW_PREFERENCES)
   const [loading, setLoading] = useState(true)
@@ -42,11 +50,11 @@ export function ReviewSettings() {
     <div className="settings-form">
       <label>
         <span>每日最长学习时间（分钟）</span>
-        <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: Number(event.target.value) }))} type="number" value={value.maxDailyMinutes} />
+        <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
       </label>
       <label>
         <span>每日最多复习模块</span>
-        <input disabled={loading || saving} max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: Number(event.target.value) }))} type="number" value={value.maxModules} />
+        <input disabled={loading || saving} max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: parseBoundedNumber(event.target.value, 1, 12, current.maxModules) }))} type="number" value={value.maxModules} />
       </label>
       <ListboxSelect
         disabled={loading || saving}
