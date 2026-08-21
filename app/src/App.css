@@ -1228,6 +1228,13 @@
   border-color: #dcc1be;
 }
 
+/* Armed state of the two-step delete confirmation. */
+.block-actions button.danger.is-armed {
+  color: #fff;
+  border-color: #a44b43;
+  background: #a44b43;
+}
+
 .block-actions button:disabled {
   opacity: 0.38;
   cursor: default;
@@ -4486,6 +4493,13 @@
 }
 
 .settings-save-row > span.is-error { color: var(--danger); }
+
+.settings-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
 
 .library-empty {
   min-height: 180px;

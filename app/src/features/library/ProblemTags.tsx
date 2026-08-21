@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
 import { Icon } from '../../components/Icon'
 import { Badge, Button, Dialog, IconButton, ListboxSelect, StatusBadge } from '../../components/ui'
@@ -30,6 +30,35 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
   const [message, setMessage] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ type: HorizonTagType } | null>(null)
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
+  // Two-step removal: the first click arms the ×, the second removes.
+  // Prevents accidental one-click deletes; auto-disarms shortly after.
+  const [armedTagId, setArmedTagId] = useState<string | null>(null)
+  const armTimerRef = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (armTimerRef.current !== null) window.clearTimeout(armTimerRef.current)
+  }, [])
+  const armTagRemoval = (tagId: string) => {
+    setArmedTagId(tagId)
+    if (armTimerRef.current !== null) window.clearTimeout(armTimerRef.current)
+    armTimerRef.current = window.setTimeout(() => {
+      armTimerRef.current = null
+      setArmedTagId(null)
+    }, 2500)
+  }
+  const removeTag = (tagId: string) => {
+    if (armedTagId !== tagId) {
+      armTagRemoval(tagId)
+      return
+    }
+    if (armTimerRef.current !== null) {
+      window.clearTimeout(armTimerRef.current)
+      armTimerRef.current = null
+    }
+    setArmedTagId(null)
+    void removeProblemTag(tagId)
+      .then(() => refresh())
+      .catch((error) => setMessage(`移除标签失败：${String(error)}`))
+  }
 
   const refresh = useCallback(async () => {
     if (!subjectId) { setTags([]); setDefinitions([]); setDifficulty(null); setAvailability('no_subject'); return }
@@ -43,6 +72,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
   useEffect(() => {
     // Guard against out-of-order responses when switching problems quickly.
     let cancelled = false
+    setArmedTagId(null)
     void refresh().catch((error) => {
       if (cancelled) return
       console.error('Horizon tag query failed', { problemId, subjectId, error })
@@ -100,7 +130,16 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
         <div className="problem-tag-collection">
           {grouped[type].map((tag) => <article className="controlled-problem-tag" key={tag.id}>
             <Badge>{tag.canonicalName}</Badge>
-            <IconButton appearance="plain" className="problem-tag-remove" label={`移除${tag.canonicalName}`} onClick={() => void removeProblemTag(tag.id).then(() => refresh()).catch((error) => setMessage(`移除标签失败：${String(error)}`))} tone="danger"><Icon name="close" size={16} /></IconButton>
+            <IconButton
+              appearance="plain"
+              aria-pressed={armedTagId === tag.id}
+              className={`problem-tag-remove${armedTagId === tag.id ? ' is-armed' : ''}`}
+              label={armedTagId === tag.id ? `再次点击确认移除${tag.canonicalName}` : `移除${tag.canonicalName}`}
+              onClick={() => removeTag(tag.id)}
+              tone="danger"
+            >
+              <Icon name="close" size={16} />
+            </IconButton>
           </article>)}
           {!grouped[type].length && <small className="empty-tag-dimension">暂无</small>}
         </div>

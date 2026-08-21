@@ -34,9 +34,12 @@ describe('autonomous compact tag UI contract', () => {
     const source = read('./features/library/ProblemTags.tsx')
     expect(source).not.toMatch(/置信度|未映射|选择对应标签|AI 标签映射结果|AI 识别|手动添加|已确认|待处理|识别依据|选择本题教材/u)
     expect(source).toContain('className="problem-tag-add"')
-    expect(source).toContain('className="problem-tag-remove"')
+    // The remove class is now conditional: it carries the two-step
+    // confirmation's armed state.
+    expect(source).toContain('problem-tag-remove${armedTagId === tag.id')
+    expect(source).not.toContain('className="problem-tag-remove"')
     expect(source).toContain('label={`添加${labels[type]}`}')
-    expect(source).toContain('label={`移除${tag.canonicalName}`}')
+    expect(source).toContain('再次点击确认移除${tag.canonicalName}')
     expect(source).not.toContain('tag.evidence')
     expect(source).not.toContain('>添加</Button>')
     expect(source).not.toContain('>移除</Button>')

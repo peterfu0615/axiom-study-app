@@ -12,7 +12,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { ListboxSelect, PageHeader, Tabs } from '../../components/ui'
+import { ListboxSelect, Button, Dialog, PageHeader, Tabs } from '../../components/ui'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
 import { ReviewSettings } from './ReviewSettings'
@@ -92,6 +92,8 @@ export function AISettings() {
     null,
   )
   const [appVersion, setAppVersion] = useState('…')
+  const [providerRemoveConfirming, setProviderRemoveConfirming] = useState(false)
+  const [apiKeyDeleteTarget, setApiKeyDeleteTarget] = useState<AIProviderProfile | null>(null)
   const messageTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -352,7 +354,7 @@ export function AISettings() {
                         <button
                           className="secondary-action"
                           disabled={saving}
-                          onClick={() => removeProvider(selectedProfile.id)}
+                          onClick={() => setProviderRemoveConfirming(true)}
                           type="button"
                         >
                           移除
@@ -502,7 +504,7 @@ export function AISettings() {
                               <button
                                 className="secondary-action"
                                 disabled={saving}
-                                onClick={() => void deleteApiKey(selectedProfile)}
+                                onClick={() => setApiKeyDeleteTarget(selectedProfile)}
                                 type="button"
                               >
                                 删除 API Key
@@ -664,6 +666,41 @@ export function AISettings() {
           )}
         </div>
       </section>
+
+      <Dialog onClose={() => setProviderRemoveConfirming(false)} open={providerRemoveConfirming && Boolean(selectedProfile)} title="移除 AI 服务">
+        <p>将移除「{selectedProfile?.name || '未命名服务'}」及其 API Key。未保存的修改会一并丢弃。</p>
+        <p>确认移除？</p>
+        <div className="settings-confirm-actions">
+          <Button onClick={() => setProviderRemoveConfirming(false)} variant="ghost">取消</Button>
+          <Button
+            onClick={() => {
+              if (selectedProfile) removeProvider(selectedProfile.id)
+              setProviderRemoveConfirming(false)
+            }}
+            variant="danger"
+          >
+            确认移除
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog onClose={() => setApiKeyDeleteTarget(null)} open={Boolean(apiKeyDeleteTarget)} title="删除 API Key">
+        <p>将删除「{apiKeyDeleteTarget?.name || ''}」已保存的 API Key，该服务的 AI 任务会立即不可用。</p>
+        <p>确认删除？</p>
+        <div className="settings-confirm-actions">
+          <Button onClick={() => setApiKeyDeleteTarget(null)} variant="ghost">取消</Button>
+          <Button
+            onClick={() => {
+              const target = apiKeyDeleteTarget
+              setApiKeyDeleteTarget(null)
+              if (target) void deleteApiKey(target)
+            }}
+            variant="danger"
+          >
+            确认删除
+          </Button>
+        </div>
+      </Dialog>
     </main>
   )
 }

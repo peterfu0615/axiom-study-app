@@ -470,8 +470,36 @@ export function DocumentEditor({
     )
   }
 
+  // Two-step inline confirmation for deleting OCR blocks: the first click
+  // arms the button, the second one deletes.  Disarms when the selection
+  // changes or after a short timeout so it cannot fire much later.
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current !== null) {
+      window.clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [activeId, selectedIds])
+  useEffect(() => () => {
+    if (deleteArmTimerRef.current !== null) window.clearTimeout(deleteArmTimerRef.current)
+  }, [])
+
   const deleteSelectedBlocks = () => {
     if (!selectedIds.size && !activeId) return
+    if (!deleteArmed) {
+      setDeleteArmed(true)
+      deleteArmTimerRef.current = window.setTimeout(() => {
+        deleteArmTimerRef.current = null
+        setDeleteArmed(false)
+      }, 3000)
+      return
+    }
+    if (deleteArmTimerRef.current !== null) {
+      window.clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
     const ids = selectedIds.size ? selectedIds : new Set([activeId!])
     setBlocks((current) => current.filter((block) => !ids.has(block.id)))
     setSelectedIds(new Set())
@@ -480,6 +508,7 @@ export function DocumentEditor({
     )
     setActiveId(null)
     setActiveRegionId(null)
+    setDeleteArmed(false)
   }
 
   const togglePrivacyRedaction = (kind: PrivacyRedactionKind) => {
@@ -748,14 +777,16 @@ export function DocumentEditor({
               合并所选
             </button>
             <button
-              className="danger"
+              className={deleteArmed ? 'danger is-armed' : 'danger'}
               disabled={
                 processing || saving || (!activeBlock && !selectedIds.size)
               }
               onClick={deleteSelectedBlocks}
               type="button"
             >
-              删除
+              {deleteArmed
+                ? `确认删除 ${selectedIds.size || 1} 块？`
+                : '删除'}
             </button>
           </div>
 

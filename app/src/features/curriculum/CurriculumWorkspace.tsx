@@ -127,6 +127,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [nodeDescription, setNodeDescription] = useState('')
   const [mergeSource, setMergeSource] = useState<KnowledgeNode | null>(null)
   const [mergeTargetId, setMergeTargetId] = useState('')
+  // Archiving a node removes it from the active tree; route through confirm.
+  const [archiveNodeTarget, setArchiveNodeTarget] = useState<KnowledgeNode | null>(null)
   const [relation, setRelation] = useState<NodeRelation>(null)
   const [busy, setBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Textbook | null>(null)
@@ -458,7 +460,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
                 </aside>
                 <section className="curriculum-node-detail">
                   {selectedNode ? <>
-                    <header><div><div className="curriculum-detail-kicker"><span>{knowledgeNodeLabel(selectedNode)}</span><StatusBadge tone={verification(selectedNode).tone}>{verification(selectedNode).label}</StatusBadge></div><h2>{selectedNode.canonicalName}</h2><p>{selectedNode.path}</p></div><div className="curriculum-node-actions"><Button onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>编辑</Button><Menu><MenuItem disabled={busy || selectedNode.verificationStatus === 'user_verified'} onClick={() => void confirmNode(selectedNode)}>确认节点</MenuItem><MenuItem onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>移动到章节</MenuItem>{selectedNode.nodeType === 'knowledge' && <MenuItem onClick={() => { setMergeSource(selectedNode); setMergeTargetId('') }}>合并节点</MenuItem>}<MenuItem onClick={() => setRelation({ node: selectedNode, targetId: '', relation: 'prerequisite_of' })}>添加关联</MenuItem><MenuItem className="is-danger" onClick={() => void archiveNode(selectedNode)}>归档节点</MenuItem></Menu></div></header>
+                    <header><div><div className="curriculum-detail-kicker"><span>{knowledgeNodeLabel(selectedNode)}</span><StatusBadge tone={verification(selectedNode).tone}>{verification(selectedNode).label}</StatusBadge></div><h2>{selectedNode.canonicalName}</h2><p>{selectedNode.path}</p></div><div className="curriculum-node-actions"><Button onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>编辑</Button><Menu><MenuItem disabled={busy || selectedNode.verificationStatus === 'user_verified'} onClick={() => void confirmNode(selectedNode)}>确认节点</MenuItem><MenuItem onClick={() => openNodeEditor(selectedNode, selectedNode.parentId)}>移动到章节</MenuItem>{selectedNode.nodeType === 'knowledge' && <MenuItem onClick={() => { setMergeSource(selectedNode); setMergeTargetId('') }}>合并节点</MenuItem>}<MenuItem onClick={() => setRelation({ node: selectedNode, targetId: '', relation: 'prerequisite_of' })}>添加关联</MenuItem><MenuItem className="is-danger" onClick={() => setArchiveNodeTarget(selectedNode)}>归档节点…</MenuItem></Menu></div></header>
                     <dl className="curriculum-node-facts"><div><dt>教材页码</dt><dd>{selectedNode.sourcePageStart ? `第 ${selectedNode.sourcePageStart}${selectedNode.sourcePageEnd && selectedNode.sourcePageEnd !== selectedNode.sourcePageStart ? `–${selectedNode.sourcePageEnd}` : ''} 页` : '手动建立'}</dd></div><div><dt>来源</dt><dd>{selectedNode.extractionMethod === 'manual' ? '手动建立' : selectedNode.extractionMethod === 'vision_ocr' ? '扫描识别' : '教材文字提取'}</dd></div><div><dt>审核状态</dt><dd>{verification(selectedNode).label}</dd></div><div><dt>关联关系</dt><dd>{edgeCount ? `${edgeCount} 条课程关系` : '尚未添加'}</dd></div></dl>
                     <section className="curriculum-evidence"><h3>教材依据</h3><p>{selectedNode.evidenceText || '该节点由你手动建立，尚未添加教材依据。'}</p></section>
                     {selectedNode.description && <section className="curriculum-evidence"><h3>备注</h3><p>{selectedNode.description}</p></section>}
@@ -496,6 +498,26 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Dialog onClose={closeDeleteTextbookDialog} open={Boolean(deleteTarget)} title="删除课程">
         <div className="curriculum-dialog-form"><p>删除后“{deleteTarget?.title}”将从课程与教材列表中移除，已锁定的题目教材匹配将保留。</p>{deleteImpact ? <><dl className="curriculum-delete-impact"><div><dt>章节</dt><dd>{deleteImpact.chapterCount} 个</dd></div><div><dt>知识点</dt><dd>{deleteImpact.knowledgeCount} 个</dd></div><div><dt>教材页</dt><dd>{deleteImpact.pageCount} 页</dd></div><div><dt>关联题目</dt><dd>{deleteImpact.matchedProblemCount} 道</dd></div></dl>{deleteImpact.matchedProblemCount > 0 && <p>关联题目中未锁定的教材匹配将被清除，已锁定的匹配保持不变。</p>}</> : <p role="status">正在统计删除影响…</p>}<div className="curriculum-dialog-actions"><Button disabled={busy} onClick={closeDeleteTextbookDialog} variant="ghost">取消</Button><Button disabled={!deleteImpact} loading={busy} onClick={() => void confirmDeleteTextbook()} variant="danger">删除课程</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setArchiveNodeTarget(null)} open={Boolean(archiveNodeTarget)} title="归档课程节点">
+        <div className="curriculum-dialog-form">
+          <p>将归档「{archiveNodeTarget?.canonicalName || ''}」。它不再出现在知识树中，已建立的题目关联保留，可随时恢复。</p>
+          <div className="curriculum-dialog-actions">
+            <Button onClick={() => setArchiveNodeTarget(null)} variant="ghost">取消</Button>
+            <Button
+              loading={busy}
+              onClick={() => {
+                const target = archiveNodeTarget
+                setArchiveNodeTarget(null)
+                if (target) void archiveNode(target)
+              }}
+              variant="danger"
+            >
+              确认归档
+            </Button>
+          </div>
+        </div>
       </Dialog>
     </main>
   )

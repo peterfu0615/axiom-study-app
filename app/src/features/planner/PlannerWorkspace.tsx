@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useEffect } from 'react'
+import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { Button, Dialog, EmptyState, InlineNotice, PageHeader, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { AppSection } from '../../components/Sidebar'
@@ -39,6 +39,7 @@ function formatDay(date: string, index: number) {
 
 export function PlannerWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [data, setData] = useState<PlannerWorkspaceData | null>(null)
+  const dataRef = useRef<PlannerWorkspaceData | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,10 +48,19 @@ export function PlannerWorkspace({ onNavigate }: { onNavigate: (section: AppSect
   const [settingsDialog, setSettingsDialog] = useState(false)
   const [completion, setCompletion] = useState<{ id: string; title: string; actualMinutes: number } | null>(null)
   const [draft, setDraft] = useState(defaultDraft)
+  // Two-step confirmation for cancelling a scheduled task.
+  const [cancelArmedId, setCancelArmedId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null)
-    try { setData(await getPlannerWorkspaceData()) }
+    // Only the first paint shows the full-page loading state; refreshing
+    // after a mutation keeps the existing board visible instead of flashing.
+    if (!dataRef.current) setLoading(true)
+    setError(null)
+    try {
+      const next = await getPlannerWorkspaceData()
+      dataRef.current = next
+      setData(next)
+    }
     catch (reason) { setError(`无法生成学习计划：${String(reason)}`) }
     finally { setLoading(false) }
   }, [])
@@ -120,7 +130,22 @@ export function PlannerWorkspace({ onNavigate }: { onNavigate: (section: AppSect
                   <small>{task.subject || 'Horizon'}{task.dueDate === day.date ? ' · 今日截止' : ` · ${task.dueDate.slice(5).replace('-', '/')} 截止`}</small>
                   {task.sourceType === 'user' || task.sourceType === 'exam' ? <div>
                     <button disabled={busy} onClick={() => setCompletion({ id: task.id, title: task.title, actualMinutes: task.estimatedMinutes })} type="button">完成</button>
-                    <button disabled={busy} onClick={() => void mutate(() => cancelPlannerTask(task.id))} type="button">取消</button>
+                    <button
+                      aria-pressed={cancelArmedId === task.id}
+                      className={cancelArmedId === task.id ? 'is-armed' : ''}
+                      disabled={busy}
+                      onClick={() => {
+                        if (cancelArmedId !== task.id) {
+                          setCancelArmedId(task.id)
+                          return
+                        }
+                        setCancelArmedId(null)
+                        void mutate(() => cancelPlannerTask(task.id))
+                      }}
+                      type="button"
+                    >
+                      {cancelArmedId === task.id ? '确认取消？' : '取消'}
+                    </button>
                   </div> : <div><button onClick={() => onNavigate('today')} type="button">{task.taskType === 'correction' ? '去订正' : '去复习'}</button></div>}
                 </div>
               })}
