@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, StatusBadge } from '../../components/ui'
+import { Button, Dialog, StatusBadge } from '../../components/ui'
 import type { ReviewReplayPreview } from '../../domain/reviewReplay'
 import { previewLearningState, rebuildLearningState } from '../../platform/reviewMaintenance'
 import './LearningStateMaintenance.css'
@@ -17,6 +17,7 @@ export function LearningStateMaintenance() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [repaired, setRepaired] = useState(false)
+  const [rebuildConfirming, setRebuildConfirming] = useState(false)
 
   const check = useCallback(async () => {
     setBusy(true); setError(null); setRepaired(false)
@@ -27,7 +28,7 @@ export function LearningStateMaintenance() {
   useEffect(() => { void check() }, [check])
 
   const rebuild = async () => {
-    if (!window.confirm('将根据现有复习记录重新生成学习状态。错题、复习记录和今日计划不会被修改。是否继续？')) return
+    setRebuildConfirming(false)
     setBusy(true); setError(null)
     try {
       const result = await rebuildLearningState()
@@ -51,12 +52,20 @@ export function LearningStateMaintenance() {
       </div>
       <div className="learning-maintenance__actions">
         <Button disabled={busy} onClick={() => void check()} variant="secondary">{busy ? '检查中…' : '重新检查'}</Button>
-        {needsRepair && <Button disabled={busy} onClick={() => void rebuild()} variant="primary">重新生成学习状态</Button>}
+        {needsRepair && <Button disabled={busy} onClick={() => setRebuildConfirming(true)} variant="primary">重新生成学习状态</Button>}
       </div>
     </section>
     {needsRepair && <details className="learning-maintenance__details">
       <summary>查看需要处理的项目</summary>
       <ul>{preview.differences.map((item) => <li key={`${item.kind}:${item.key}`}>{item.stateKind === 'skill' ? '能力状态' : '复习主题状态'} · {item.kind === 'missing' ? '缺失' : item.kind === 'extra' ? '多余' : '数值不一致'}</li>)}</ul>
     </details>}
+      <Dialog onClose={() => setRebuildConfirming(false)} open={rebuildConfirming} title="重新生成学习状态">
+        <p>将根据现有复习记录重新生成学习状态。错题、复习记录和今日计划不会被修改。</p>
+        <p>此操作不可撤销，是否继续？</p>
+        <div className="learning-maintenance__confirm-actions">
+          <Button onClick={() => setRebuildConfirming(false)} variant="ghost">取消</Button>
+          <Button disabled={busy} onClick={() => void rebuild()} variant="danger">{busy ? '正在重建…' : '确认重建'}</Button>
+        </div>
+      </Dialog>
   </div>
 }

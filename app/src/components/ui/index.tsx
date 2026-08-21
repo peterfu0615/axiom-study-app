@@ -7,7 +7,9 @@ import {
   type ChangeEvent,
   type HTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent,
   type ReactNode,
+  type Ref,
 } from 'react'
 import type { AIErrorEnvelope } from '../../domain/aiError'
 import { Icon, type IconName } from '../Icon'
@@ -82,6 +84,7 @@ export function IconButton({
   label: string
   appearance?: 'surface' | 'plain'
   tone?: 'default' | 'danger'
+  ref?: Ref<HTMLButtonElement>
 }) {
   return (
     <button
@@ -361,6 +364,15 @@ export function Progress({
   )
 }
 
+const DIALOG_FOCUSABLE_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+
+function dialogFocusableElements(dialog: HTMLElement | null) {
+  if (!dialog) return []
+  return Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR))
+    .filter((element) => !element.hasAttribute('disabled') && element.offsetParent !== null)
+}
+
 export function Dialog({
   children,
   onClose,
@@ -372,25 +384,59 @@ export function Dialog({
   open: boolean
   title: string
 }) {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
   useEffect(() => {
     if (!open) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+    // Remember where focus came from so it can be restored on close.
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    dialogFocusableElements(dialogRef.current)[0]?.focus()
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      // Keep Tab cycling inside the dialog instead of reaching the page
+      // behind the backdrop.
+      const elements = dialogFocusableElements(dialogRef.current)
+      if (!elements.length) return
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !(active instanceof HTMLElement) || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      previouslyFocused?.focus()
+    }
   }, [onClose, open])
   if (!open) return null
   return (
     <div className="ax-dialog-backdrop" onMouseDown={onClose} role="presentation">
       <section
         aria-label={title}
+        aria-labelledby={titleId}
         aria-modal="true"
         className="ax-dialog"
         onMouseDown={(event) => event.stopPropagation()}
+        ref={dialogRef}
         role="dialog"
       >
-        <header><h2>{title}</h2><IconButton label="关闭" onClick={onClose}><Icon name="close" size={16} /></IconButton></header>
+        <header><h2 id={titleId}>{title}</h2><IconButton label="关闭" onClick={onClose}><Icon name="close" size={16} /></IconButton></header>
         <div className="ax-dialog__body">{children}</div>
       </section>
     </div>
@@ -406,18 +452,67 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (!open) return undefined
     const close = (event: MouseEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false)
     }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
     document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKeyDown)
+    }
   }, [open])
+  const focusMenuItem = (index: number) => {
+    const items = Array.from(
+      root.current?.querySelectorAll<HTMLButtonElement>('.ax-menu__item:not([disabled])') ?? [],
+    )
+    if (items.length) items[Math.max(0, Math.min(index, items.length - 1))].focus()
+  }
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!open) return
+    const items = Array.from(
+      root.current?.querySelectorAll<HTMLButtonElement>('.ax-menu__item:not([disabled])') ?? [],
+    )
+    if (!items.length) return
+    const currentIndex = items.findIndex((item) => item === document.activeElement)
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      focusMenuItem(currentIndex < 0 ? 0 : (currentIndex + 1) % items.length)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusMenuItem(currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      focusMenuItem(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      focusMenuItem(items.length - 1)
+    }
+  }
   return (
-    <div className="ax-menu" ref={root}>
-      <IconButton aria-expanded={open} label={label} onClick={() => setOpen((value) => !value)}>⋯</IconButton>
-      {open && <div className="ax-menu__popover" role="menu" onClick={() => setOpen(false)}>{children}</div>}
+    <div className="ax-menu" ref={root} onKeyDown={onMenuKeyDown}>
+      <IconButton
+        aria-expanded={open}
+        aria-haspopup="menu"
+        label={label}
+        onClick={() => setOpen((value) => !value)}
+        ref={triggerRef}
+      >
+        ⋯
+      </IconButton>
+      {open && (
+        <div className="ax-menu__popover" onClick={() => setOpen(false)} role="menu">
+          {children}
+        </div>
+      )}
     </div>
   )
 }
