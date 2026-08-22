@@ -24,6 +24,7 @@ interface ThemeContextValue {
   resolvedAppearance: ResolvedAppearance
   visualTheme: VisualTheme
   setAppearance: (appearance: Appearance) => void
+  setVisualTheme: (theme: VisualTheme) => void
   toggle: () => void
 }
 
@@ -61,7 +62,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (typeof localStorage === 'undefined') return 'system'
     return readAppearance(localStorage)
   })
-  const [visualTheme] = useState<VisualTheme>(() =>
+  const [visualTheme, setVisualThemeState] = useState<VisualTheme>(() =>
     typeof localStorage === 'undefined' ? 'axiom' : readVisualTheme(localStorage))
   const [systemAppearance, setSystemAppearance] = useState<ResolvedAppearance>(getSystemAppearance)
 
@@ -89,13 +90,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(VISUAL_THEME_STORAGE_KEY, visualTheme)
   }, [visualTheme])
 
+  const setVisualTheme = useCallback((next: VisualTheme) => {
+    setVisualThemeState(next)
+    localStorage.setItem(VISUAL_THEME_STORAGE_KEY, next)
+  }, [])
+
   const toggle = useCallback(() => {
     setAppearance(resolvedAppearance === 'dark' ? 'light' : 'dark')
   }, [resolvedAppearance, setAppearance])
 
   const value = useMemo(
-    () => ({ appearance, resolvedAppearance, visualTheme, setAppearance, toggle }),
-    [appearance, resolvedAppearance, visualTheme, setAppearance, toggle],
+    () => ({ appearance, resolvedAppearance, visualTheme, setAppearance, setVisualTheme, toggle }),
+    [appearance, resolvedAppearance, visualTheme, setAppearance, setVisualTheme, toggle],
   )
 
   return (

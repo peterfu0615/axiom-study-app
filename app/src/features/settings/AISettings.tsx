@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { configureAIProviders } from '../../ai/provider'
 import { useTheme, type Appearance } from '../../platform/theme'
+import { VISUAL_THEME_LABELS, VISUAL_THEME_SWATCHES, VISUAL_THEMES } from '../../platform/themeModel'
 import { getAppVersion } from '../../platform/native'
 import type {
   AIProviderKind,
@@ -69,7 +70,7 @@ const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description:
 ]
 
 export function AISettings() {
-  const { appearance, resolvedAppearance, visualTheme, setAppearance } = useTheme()
+  const { appearance, resolvedAppearance, visualTheme, setAppearance, setVisualTheme } = useTheme()
   const [profiles, setProfiles] = useState<AIProviderProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -603,10 +604,36 @@ export function AISettings() {
                   </button>
                 ))}
               </div>
+              <section className="color-theme-picker" aria-label="颜色主题">
+                <p className="eyebrow">颜色主题</p>
+                <p className="subtitle">同一布局下的六套品牌配色；明暗外观与颜色主题可独立组合。</p>
+                <div className="color-theme-picker__grid" role="radiogroup" aria-label="选择颜色主题">
+                  {VISUAL_THEMES.map((theme) => (
+                    <button
+                      aria-checked={visualTheme === theme}
+                      className={`color-theme-card${visualTheme === theme ? ' active' : ''}`}
+                      key={theme}
+                      onClick={() => setVisualTheme(theme)}
+                      role="radio"
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="color-theme-card__swatch"
+                        style={{ background: VISUAL_THEME_SWATCHES[theme] }}
+                      />
+                      <span className="color-theme-card__copy">
+                        <strong>{VISUAL_THEME_LABELS[theme]}</strong>
+                        {visualTheme === theme && <span className="appearance-current">当前</span>}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
               <p className="appearance-resolved-hint">
                 当前实际显示：
                 <strong>{resolvedAppearance === 'dark' ? '深色' : '浅色'}</strong>
-                <span> · Axiom {visualTheme === 'axiom' ? '默认主题' : visualTheme}</span>
+                <span> · {VISUAL_THEME_LABELS[visualTheme]}主题</span>
               </p>
             </div>
           ) : tab === 'maintenance' ? (

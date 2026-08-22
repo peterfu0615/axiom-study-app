@@ -198,6 +198,203 @@
   background: var(--canvas);
 }
 
+/*
+ * 颜色主题（#13）：同一布局体系下的六套品牌配色，明暗各一套。
+ * 每块覆盖品牌色系（--brand-*）、纸面中性色（--canvas/--surface/…）
+ * 与两个需要随主色联动的语义量（--ax-page-eyebrow / --ax-primary-control-ink）。
+ * 选择器特异性 (0,3,0) 高于上方两组默认 (0,2,0)，加载顺序无关地生效。
+ */
+
+/* ── 樱花粉 ── */
+:root[data-visual-theme='sakura'][data-theme='light'] {
+  --brand: #e05a7e;
+  --brand-hover: #c94a6c;
+  --brand-pressed: #ad3d5c;
+  --brand-soft: #ffe4ea;
+  --brand-wash: #fff0f4;
+  --brand-ink: #5c1a2e;
+  --canvas: #fffbfc;
+  --sidebar: #fff5f8;
+  --surface: #fff5f8;
+  --surface-muted: #f9e9ee;
+  --ink: #2d2126;
+  --muted: #776a70;
+  --border: #eed7dd;
+  --ax-page-eyebrow: #b84a62;
+  --ax-primary-control-ink: #ffffff;
+}
+
+:root[data-visual-theme='sakura'][data-theme='dark'] {
+  color-scheme: dark;
+  --brand: #f27e96;
+  --brand-hover: #f79aac;
+  --brand-pressed: #ea6883;
+  --brand-soft: #3a1621;
+  --brand-wash: #28101a;
+  --brand-ink: #ffc4d1;
+  --canvas: #181115;
+  --sidebar: #20171b;
+  --surface: #20171b;
+  --surface-muted: #2b2025;
+  --ink: #f2e5ea;
+  --muted: #a29098;
+  --border: #402f37;
+  --ax-page-eyebrow: #ef89a0;
+  --ax-primary-control-ink: #38091a;
+}
+
+/* ── 海蓝 ── */
+:root[data-visual-theme='ocean'][data-theme='light'] {
+  --brand: #2563eb;
+  --brand-hover: #1d53cc;
+  --brand-pressed: #1743ab;
+  --brand-soft: #dbeafe;
+  --brand-wash: #eff6ff;
+  --brand-ink: #10316a;
+  --canvas: #fafcff;
+  --sidebar: #f4f9ff;
+  --surface: #f4f9ff;
+  --surface-muted: #e9f0fa;
+  --ink: #182230;
+  --muted: #66768a;
+  --border: #d4dfeb;
+  --ax-page-eyebrow: #1a63cf;
+  --ax-primary-control-ink: #ffffff;
+}
+
+:root[data-visual-theme='ocean'][data-theme='dark'] {
+  color-scheme: dark;
+  --brand: #5b9bff;
+  --brand-hover: #7db1ff;
+  --brand-pressed: #4a8af5;
+  --brand-soft: #14273f;
+  --brand-wash: #0e1c30;
+  --brand-ink: #bcd6ff;
+  --canvas: #0e141d;
+  --sidebar: #121a26;
+  --surface: #121a26;
+  --surface-muted: #1b2534;
+  --ink: #dde7f2;
+  --muted: #90a0b4;
+  --border: #2a3850;
+  --ax-page-eyebrow: #6fa8ff;
+  --ax-primary-control-ink: #081430;
+}
+
+/* ── 森绿 ── */
+:root[data-visual-theme='forest'][data-theme='light'] {
+  --brand: #267a40;
+  --brand-hover: #1f6835;
+  --brand-pressed: #18552b;
+  --brand-soft: #ddf1e2;
+  --brand-wash: #edf8f0;
+  --brand-ink: #0e351e;
+  --canvas: #f9fcf8;
+  --sidebar: #f1f8f2;
+  --surface: #f1f8f2;
+  --surface-muted: #e6f0e7;
+  --ink: #1c2a20;
+  --muted: #66766c;
+  --border: #d3e0d6;
+  --ax-page-eyebrow: #23703c;
+  --ax-primary-control-ink: #ffffff;
+}
+
+:root[data-visual-theme='forest'][data-theme='dark'] {
+  color-scheme: dark;
+  --brand: #55c57e;
+  --brand-hover: #74d496;
+  --brand-pressed: #46b06d;
+  --brand-soft: #12301e;
+  --brand-wash: #0d2417;
+  --brand-ink: #bfe8cf;
+  --canvas: #0f1712;
+  --sidebar: #13201a;
+  --surface: #13201a;
+  --surface-muted: #1c2b22;
+  --ink: #dcebe1;
+  --muted: #8ba091;
+  --border: #28392f;
+  --ax-page-eyebrow: #66cb8d;
+  --ax-primary-control-ink: #07130c;
+}
+
+/* ── 紫藤 ── */
+:root[data-visual-theme='violet'][data-theme='light'] {
+  --brand: #6f4fce;
+  --brand-hover: #5f41ba;
+  --brand-pressed: #5034a2;
+  --brand-soft: #ebe4fb;
+  --brand-wash: #f4f0fd;
+  --brand-ink: #291a5c;
+  --canvas: #fcfbff;
+  --sidebar: #f6f2fe;
+  --surface: #f6f2fe;
+  --surface-muted: #ece6f8;
+  --ink: #211c30;
+  --muted: #6f6880;
+  --border: #ddd4ee;
+  --ax-page-eyebrow: #6b48c9;
+  --ax-primary-control-ink: #ffffff;
+}
+
+:root[data-visual-theme='violet'][data-theme='dark'] {
+  color-scheme: dark;
+  --brand: #a98ef5;
+  --brand-hover: #bca6f8;
+  --brand-pressed: #9679ee;
+  --brand-soft: #251b42;
+  --brand-wash: #191232;
+  --brand-ink: #d5c7fb;
+  --canvas: #131020;
+  --sidebar: #191528;
+  --surface: #191528;
+  --surface-muted: #231d38;
+  --ink: #e4dcf2;
+  --muted: #9d94b3;
+  --border: #342c4c;
+  --ax-page-eyebrow: #ab90f2;
+  --ax-primary-control-ink: #140f2e;
+}
+
+/* ── 水墨灰 ── */
+:root[data-visual-theme='ink'][data-theme='light'] {
+  --brand: #3a4552;
+  --brand-hover: #2d3642;
+  --brand-pressed: #212832;
+  --brand-soft: #e5eaef;
+  --brand-wash: #f0f3f6;
+  --brand-ink: #10161d;
+  --canvas: #fbfcfd;
+  --sidebar: #f4f6f8;
+  --surface: #f4f6f8;
+  --surface-muted: #e9edf0;
+  --ink: #1a2026;
+  --muted: #64707c;
+  --border: #d6dde3;
+  --ax-page-eyebrow: #48586a;
+  --ax-primary-control-ink: #ffffff;
+}
+
+:root[data-visual-theme='ink'][data-theme='dark'] {
+  color-scheme: dark;
+  --brand: #9db1c4;
+  --brand-hover: #b3c3d3;
+  --brand-pressed: #8aa0b2;
+  --brand-soft: #22282f;
+  --brand-wash: #171c22;
+  --brand-ink: #d3dde6;
+  --canvas: #111315;
+  --sidebar: #16181b;
+  --surface: #16181b;
+  --surface-muted: #1f2327;
+  --ink: #dce2e8;
+  --muted: #97a2ad;
+  --border: #2e353c;
+  --ax-page-eyebrow: #9fb2c4;
+  --ax-primary-control-ink: #0d1114;
+}
+
 * {
   box-sizing: border-box;
 }

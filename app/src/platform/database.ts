@@ -727,6 +727,14 @@ const SOLUTION_TASK_TYPE = 'generate_solution'
 const STUDENT_ATTEMPT_TASK_TYPE = 'extract_student_attempt'
 const REASONING_TASK_TYPE = 'analyze_student_reasoning'
 const EXPLAIN_TASK_TYPE = 'explain_selection'
+// model_runs 表中出现的全部任务类型（题目理解/正解/作答/推理/解释）
+const MODEL_RUN_TASK_TYPES = [
+  AI_TASK_TYPE,
+  SOLUTION_TASK_TYPE,
+  STUDENT_ATTEMPT_TASK_TYPE,
+  REASONING_TASK_TYPE,
+  EXPLAIN_TASK_TYPE,
+] as const
 
 interface NewAIModelRun {
   id: string
@@ -1429,7 +1437,13 @@ export async function getPrimaryQuestionRegion(problem: SavedProblem) {
 }
 
 function rowToModelRun(row: Record<string, unknown>): ModelRun {
-  const output = row.output_json
+  const rawTaskType = String(row.task_type ?? AI_TASK_TYPE)
+  const taskType = (MODEL_RUN_TASK_TYPES as readonly string[]).includes(rawTaskType)
+    ? rawTaskType as ModelRun['taskType']
+    : AI_TASK_TYPE
+  // 只有题目理解任务的 output 是 problem analysis 结构；solution/reasoning
+  // 等任务的输出形状不同，且 UI 只消费 rawOutput，不做归一化。
+  const output = row.output_json && taskType === AI_TASK_TYPE
     ? normalizeAIProblemAnalysis(parseJSON(row.output_json, {}, `model_runs.output_json#${row.id ?? '?'}`))
     : null
   const structuredError = parseJSON<AIErrorEnvelope | null>(
@@ -1440,7 +1454,7 @@ function rowToModelRun(row: Record<string, unknown>): ModelRun {
   return {
     id: String(row.id),
     problemId: String(row.problem_id),
-    taskType: AI_TASK_TYPE,
+    taskType,
     provider: String(row.provider),
     model: String(row.model),
     input: parseJSON(row.input_json, {
@@ -3178,13 +3192,14 @@ export async function listProblemModelRuns(
   problemId: string,
 ): Promise<ModelRun[]> {
   if (!isDesktopRuntime()) return []
+  // 覆盖该题的全部任务类型：解答/作答分析/推理等调用的 token 用量与
+  // 成本同样落库，用户应能在 Model Run 历史里看到完整开销。
   const rows = await (await database()).select<Record<string, unknown>[]>(
     `SELECT *
      FROM model_runs
      WHERE problem_id = $1
-       AND task_type = $2
      ORDER BY created_at DESC`,
-    [problemId, AI_TASK_TYPE],
+    [problemId],
   )
   return rows.map(rowToModelRun)
 }

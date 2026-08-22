@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ThemeProvider } from './platform/theme'
-import { readAppearance, resolveAppearance } from './platform/themeModel'
+import { readAppearance, readVisualTheme, resolveAppearance } from './platform/themeModel'
 import './index.css'
 import App from './App.tsx'
 
@@ -14,7 +14,7 @@ const initialTheme: 'light' | 'dark' =
   previewTheme === 'light' || previewTheme === 'dark'
     ? previewTheme
     : resolveAppearance(readAppearance(localStorage), prefersDark ? 'dark' : 'light')
-document.documentElement.setAttribute('data-visual-theme', 'axiom')
+document.documentElement.setAttribute('data-visual-theme', readVisualTheme(localStorage))
 document.documentElement.setAttribute('data-appearance', initialTheme)
 document.documentElement.setAttribute('data-theme', initialTheme)
 

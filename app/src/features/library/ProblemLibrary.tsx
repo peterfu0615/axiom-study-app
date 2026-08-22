@@ -85,6 +85,14 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 })
 
+const modelRunTaskLabels: Record<string, string> = {
+  analyze_problem_image: '题目理解',
+  generate_solution: '正解生成',
+  extract_student_attempt: '作答识别',
+  analyze_student_reasoning: '错因推理',
+  explain_selection: '局部解释',
+}
+
 function modelRunMetrics(run: ModelRun) {
   const metrics: string[] = []
   if (run.latencyMs != null) {
@@ -1704,7 +1712,7 @@ export function ProblemLibrary() {
                               <li key={run.id}>
                                 <div>
                                   <strong>
-                                    {run.provider} / {run.model}
+                                    {modelRunTaskLabels[run.taskType] ?? run.taskType} · {run.provider} / {run.model}
                                   </strong>
                                   <small>
                                     {dateFormatter.format(run.createdAt)}
