@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, StatusTag } from '../../components/ui'
+import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
@@ -10,7 +10,7 @@ import {
   addTodayReviewUnit,
   deferTodayReviewUnit,
   getOrCreateTodayPlan,
-  getSevenDayReviewForecast,
+  getReviewForecast,
   refreshTodayPlan,
   replaceTodayReviewUnit,
   type TodayReviewPlan,
@@ -34,14 +34,38 @@ function minutes(seconds: number) {
   return Math.max(1, Math.round(seconds / 60))
 }
 
-function ForecastStrip({ days }: { days: ReviewForecastDay[] }) {
+export type ForecastRange = 7 | 14 | 30
+
+const forecastRangeOptions: Array<{ value: string; label: string }> = [
+  { value: '7', label: '未来 7 天' },
+  { value: '14', label: '未来 14 天' },
+  { value: '30', label: '未来 30 天' },
+]
+
+function ForecastStrip({
+  days,
+  onRangeChange,
+  range,
+}: {
+  days: ReviewForecastDay[]
+  onRangeChange: (range: ForecastRange) => void
+  range: ForecastRange
+}) {
   const maxUnits = Math.max(1, ...days.map((day) => day.estimatedUnitCount))
-  return <section className="today-forecast" aria-label="未来 7 天学习安排">
+  return <section className="today-forecast" aria-label="未来复习计划">
     <div className="today-forecast__heading">
-      <h2>未来 7 天</h2>
-      <IconButton appearance="plain" label="按当前学习状态估算，实际安排会随练习结果变化。"><Icon name="info" size={14} /></IconButton>
+      <h2>未来复习计划</h2>
+      <div className="today-forecast__controls">
+        <SegmentedControl
+          ariaLabel="预测时间范围"
+          onChange={(value) => onRangeChange(Number(value) as ForecastRange)}
+          options={forecastRangeOptions}
+          value={String(range)}
+        />
+        <IconButton appearance="plain" label="由复习调度（记忆衰减曲线）估算，实际安排会随练习结果自动调整。"><Icon name="info" size={14} /></IconButton>
+      </div>
     </div>
-    <div className="today-forecast__days">
+    <div className={`today-forecast__days${range > 7 ? ' is-scrollable' : ''}`}>
       {days.map((day, index) => {
         const date = new Date(day.dayStart)
         const weekday = index === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)
@@ -101,6 +125,7 @@ function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer, preferre
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
   const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
+  const [forecastRange, setForecastRange] = useState<ForecastRange>(7)
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [todayAttempt, setTodayAttempt] = useState<PracticeAttempt | null>(null)
@@ -108,14 +133,19 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const refreshForecast = useCallback(async (range: ForecastRange) => {
+    try { setForecast(await getReviewForecast(range)) }
+    catch (reason) { console.warn('复习预测加载失败：', reason) }
+  }, [])
+
   const load = useCallback(async (isCancelled: () => boolean = () => false) => {
     setLoading(true); setError(null)
     try {
-      // The 7-day forecast is independent of today's plan; overlap it with
+      // The forward forecast is independent of today's plan; overlap it with
       // the practice-set lookup instead of waiting for both sequentially.
       const nextPlan = await getOrCreateTodayPlan()
       const [nextForecast, existingPracticeSet] = await Promise.all([
-        getSevenDayReviewForecast(),
+        getReviewForecast(forecastRange),
         findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
       ])
       if (isCancelled()) return
@@ -124,19 +154,24 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
     finally { if (!isCancelled()) setLoading(false) }
-  }, [])
+  }, [forecastRange])
   useEffect(() => {
     let cancelled = false
     void load(() => cancelled)
     return () => { cancelled = true }
   }, [load])
 
+  const changeForecastRange = (range: ForecastRange) => {
+    setForecastRange(range)
+    void refreshForecast(range)
+  }
+
   const mutate = async (operation: () => Promise<TodayReviewPlan | void>) => {
     setBusy(true); setError(null)
     try {
       const next = await operation()
       setPlan(next ?? await refreshTodayPlan())
-      setForecast(await getSevenDayReviewForecast())
+      void refreshForecast(forecastRange)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
@@ -217,7 +252,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
           />)}
         </section>
       </>}
-      {plan && forecast.length > 0 && <ForecastStrip days={forecast} />}
+      {plan && forecast.length > 0 && <ForecastStrip days={forecast} onRangeChange={changeForecastRange} range={forecastRange} />}
     </AsyncState>
   </main>
 }

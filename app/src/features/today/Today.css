@@ -19,10 +19,14 @@
 .today-unit--deferred { opacity: .62; }
 .today-more { display: flex; justify-content: center; padding: var(--ax-space-8) 0; }
 .today-forecast { padding: var(--ax-space-8) 0; border-top: 1px solid var(--ax-border-default); }
-.today-forecast__heading { display: flex; align-items: center; gap: var(--ax-space-2); margin-bottom: var(--ax-space-6); }
+.today-forecast__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-2); margin-bottom: var(--ax-space-6); }
 .today-forecast__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
+.today-forecast__controls { display: flex; align-items: center; gap: var(--ax-space-3); }
 .today-forecast__heading .ax-icon-button { width: var(--ax-control-sm); height: var(--ax-control-sm); color: var(--ax-text-tertiary); }
 .today-forecast__days { display: grid; grid-template-columns: repeat(7, minmax(84px, 1fr)); gap: var(--ax-space-3); overflow-x: auto; padding-bottom: var(--ax-space-2); }
+/* 14/30 天时间轴：固定卡片宽度，横向滚动浏览 */
+.today-forecast__days.is-scrollable { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.today-forecast__days.is-scrollable .today-forecast__day { min-width: 104px; }
 .today-forecast__day { min-width: 84px; display: grid; grid-template-rows: auto 64px auto auto auto; gap: var(--ax-space-2); padding: var(--ax-space-4); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); background: var(--ax-surface-subtle); }
 .today-forecast__day.is-today { border-color: var(--ax-accent-border); background: var(--ax-color-selected); }
 .today-forecast__day > div:first-child { display: flex; justify-content: space-between; gap: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }

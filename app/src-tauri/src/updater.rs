@@ -371,6 +371,14 @@ pub async fn download_and_install_update(
         .build()
         .map_err(|_| update_failure("download", "client_build", None))?;
 
+    // 0. 目标预检必须先于任何下载：开发模式（target/debug/axiom）或只读
+    // 安装位置在下载完成前就能确定不可更新，避免用户白等一次上百 MB 的
+    // 下载后才看到失败。
+    let app_bundle_path = current_app_bundle_path()
+        .map_err(|_| update_failure("target_preflight", "bundle_path", None))?;
+    ensure_update_target_is_writable(&app_bundle_path)
+        .map_err(|_| update_failure("target_preflight", "target_not_writable", None))?;
+
     // 每次更新使用独立目录，避免残留安装脚本或并发更新互相删除文件。
     let update_dir = std::env::temp_dir().join(format!("axiom-update-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&update_dir).map_err(|_| update_failure("temp_dir", "create", None))?;
@@ -402,13 +410,6 @@ pub async fn download_and_install_update(
     }
     validate_update_bundle(&new_app_path, &expected_version)
         .map_err(|_| update_failure("bundle_validate", "invalid_bundle", None))?;
-
-    // 4. 定位并预检当前 .app bundle。必须在退出前确认原位置可写，
-    // 否则不能让用户先失去正在运行的旧版本。
-    let app_bundle_path = current_app_bundle_path()
-        .map_err(|_| update_failure("target_preflight", "bundle_path", None))?;
-    ensure_update_target_is_writable(&app_bundle_path)
-        .map_err(|_| update_failure("target_preflight", "target_not_writable", None))?;
 
     // 安装脚本会在当前进程退出后继续运行；日志不能放在会被清理的临时目录里。
     let install_log_path = app
@@ -599,6 +600,30 @@ fn current_app_bundle_path() -> Result<PathBuf, String> {
     Ok(app_bundle)
 }
 
+/// 在 bundle 的 Contents/MacOS 中定位主程序。
+/// Tauri 以 productName（"Axiom"）命名二进制，历史版本为小写 "axiom"；
+/// 大小写敏感卷上硬编码任一拼写都会误判 bundle 不完整，因此按名匹配。
+fn find_bundle_binary(app_path: &Path) -> Result<PathBuf, String> {
+    let macos_dir = app_path.join("Contents/MacOS");
+    let entries = std::fs::read_dir(&macos_dir)
+        .map_err(|e| format!("无法读取更新包主程序目录 {}: {e}", macos_dir.display()))?;
+    let mut listed = String::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        listed.push_str(&format!("{}\n", path.display()));
+        if path.is_file()
+            && path
+                .file_name()
+                .map_or(false, |name| name.eq_ignore_ascii_case("axiom"))
+        {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "更新包缺少主程序（Contents/MacOS 下未找到 axiom/Axiom）。实际内容：\n{listed}"
+    ))
+}
+
 /// 检查下载并解压后的 bundle 是否完整且符合用户选择的 Release 版本。
 /// 这一步必须在旧应用退出前完成，避免损坏或错版本资产覆盖可用版本。
 fn validate_update_bundle(app_path: &Path, expected_version: &str) -> Result<(), String> {
@@ -610,10 +635,10 @@ fn validate_update_bundle(app_path: &Path, expected_version: &str) -> Result<(),
     }
 
     let plist = app_path.join("Contents/Info.plist");
-    let executable = app_path.join("Contents/MacOS/axiom");
-    if !plist.is_file() || !executable.is_file() {
+    if !plist.is_file() {
         return Err("更新包缺少 Axiom.app 的必要文件，已停止安装。".to_string());
     }
+    find_bundle_binary(app_path)?;
 
     let output = std::process::Command::new("/usr/libexec/PlistBuddy")
         .args(["-c", "Print :CFBundleShortVersionString"])
@@ -719,8 +744,19 @@ restore_backup() {{
 validate_bundle() {{
     local bundle="$1"
     local plist="$bundle/Contents/Info.plist"
-    if [ ! -f "$plist" ] || [ ! -f "$bundle/Contents/MacOS/axiom" ]; then
+    if [ ! -f "$plist" ]; then
         log "错误：新应用 bundle 文件不完整。"
+        return 1
+    fi
+    # 主程序名大小写不敏感匹配（productName="Axiom"，历史为 "axiom"）
+    local bindir="$bundle/Contents/MacOS"
+    local bin=""
+    if [ -f "$bindir/axiom" ]; then bin="$bindir/axiom"
+    elif [ -f "$bindir/Axiom" ]; then bin="$bindir/Axiom"
+    fi
+    if [ -z "$bin" ]; then
+        log "错误：找不到主程序（$bindir）。目录内容："
+        ls -la "$bindir" >> "$LOG_FILE" 2>&1
         return 1
     fi
     local bundle_version

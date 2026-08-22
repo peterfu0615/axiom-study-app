@@ -157,7 +157,7 @@
 .curriculum-panel-heading span { color: var(--muted); font-size: var(--ax-type-meta-size); line-height: var(--ax-type-meta-line); }
 .curriculum-panel-heading .ax-button { min-height: 31px; padding: 0 9px; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); }
 
-.curriculum-search { min-height: 34px; display: flex; align-items: center; gap: 7px; margin: 0 15px 11px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: color-mix(in srgb, var(--surface) 76%, var(--canvas)); }
+.curriculum-search { min-height: var(--control-height); display: flex; align-items: center; gap: 7px; margin: 0 15px 11px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: color-mix(in srgb, var(--surface) 76%, var(--canvas)); }
 .curriculum-search:focus-within { border-color: var(--brand-pressed); box-shadow: var(--focus-ring); }
 .curriculum-search span { font-size: 15px; line-height: 1; }
 .curriculum-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font: inherit; font-size: var(--ax-type-control-size); line-height: var(--ax-type-control-line); }
@@ -273,7 +273,7 @@
 .curriculum-outline-list { display: grid; gap: 5px; max-height: 420px; overflow: auto; padding-right: 2px; }
 .curriculum-outline-row { display: grid; grid-template-columns: 93px minmax(0, 1fr) 70px; align-items: center; gap: 7px; }
 .curriculum-outline-row input,
-.curriculum-outline-row select { min-height: 34px; font-size: var(--ax-type-control-size); }
+.curriculum-outline-row select { min-height: var(--control-height); font-size: var(--ax-type-control-size); }
 .curriculum-outline-row .ax-listbox-field,
 .curriculum-outline-row .ax-listbox-trigger { min-width: 0; min-height: 34px; }
 .curriculum-outline-row .ax-listbox-trigger { padding-inline: 8px; font-size: var(--ax-type-control-size); }

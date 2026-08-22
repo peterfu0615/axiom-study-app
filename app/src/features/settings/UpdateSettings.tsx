@@ -104,7 +104,10 @@ export function UpdateSettings() {
       // 成功后进程会退出，这里不会执行到
     } catch (e) {
       console.error('安装更新失败', e)
-      setError('更新未能完成，请稍后重试。')
+      // 后端返回的已是面向用户的中文错误（含阶段与原因），直接透出，
+      // 避免「下载完成后只看到一句请稍后重试」而无法定位问题。
+      const detail = typeof e === 'string' ? e : e instanceof Error ? e.message : ''
+      setError(detail ? `更新未能完成：${detail}` : '更新未能完成，请稍后重试。')
       setErrorPhase('install')
       setDownloading(false)
     } finally {

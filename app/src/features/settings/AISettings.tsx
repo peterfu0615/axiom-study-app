@@ -5,7 +5,6 @@ import { getAppVersion } from '../../platform/native'
 import type {
   AIProviderKind,
   AIProviderProfile,
-  AIProviderTaskType,
 } from '../../domain/models'
 import {
   deleteAIProviderProfileApiKey,
@@ -67,20 +66,6 @@ const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description:
   { value: 'light', label: '浅色', description: '始终使用浅色外观' },
   { value: 'dark', label: '深色', description: '始终使用深色外观' },
   { value: 'system', label: '跟随系统', description: '随系统设置自动切换' },
-]
-
-const PROVIDER_TASK_OPTIONS: Array<{ value: AIProviderTaskType; label: string }> = [
-  { value: 'problem_understanding', label: '题目理解' },
-  { value: 'solution_generation', label: '正解生成' },
-  { value: 'attempt_analysis', label: '作答与错因分析' },
-  { value: 'tag_mapping', label: '标签映射' },
-  { value: 'variant_generation', label: '变式生成' },
-  { value: 'variant_verification', label: '变式独立验证' },
-  { value: 'submission_grading', label: '练习批改' },
-  { value: 'explain_selection', label: '局部解释' },
-  { value: 'textbook_recognition', label: '教材识别' },
-  { value: 'curriculum_analysis', label: '课程分析' },
-  { value: 'geometry_scene', label: '几何图重建（实验）' },
 ]
 
 export function AISettings() {
@@ -157,36 +142,68 @@ export function AISettings() {
     })
   }
 
-  const save = async () => {
-    setSaving(true)
-    setMessage(null)
+  // 自动保存：配置变更后短防抖落库，页面不提供保存按钮。
+  // 列表中的服务始终启用、始终支持文本；「多模态」勾选只控制 supportsVision；
+  // 按任务分流已移除，服务列表顺序即失败回退的优先级。
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+  const autoSaveTimerRef = useRef<number | null>(null)
+  const autoSaveResetTimerRef = useRef<number | null>(null)
+  const autoSaveInFlightRef = useRef(false)
+  const autoSavePendingRef = useRef(false)
+  const profilesRef = useRef(profiles)
+  profilesRef.current = profiles
+
+  const persistProfiles = useCallback(async () => {
+    if (autoSaveInFlightRef.current) {
+      autoSavePendingRef.current = true
+      return
+    }
+    autoSaveInFlightRef.current = true
+    setAutoSaveState('saving')
     try {
-      const saved = await saveAIProviderProfiles(profiles)
+      const payload = profilesRef.current.map((profile) => ({
+        ...profile,
+        enabled: true,
+        supportsText: true,
+        taskTypes: [] as AIProviderProfile['taskTypes'],
+      }))
+      const saved = await saveAIProviderProfiles(payload)
       configureAIProviders(saved)
       setProfiles(saved)
       setSavedProfilesJson(JSON.stringify(saved))
-      setMessage({ text: 'AI 服务设置已保存并立即生效', tone: 'success' })
-      scheduleMessageClear()
+      setAutoSaveState('saved')
+      if (autoSaveResetTimerRef.current !== null) window.clearTimeout(autoSaveResetTimerRef.current)
+      autoSaveResetTimerRef.current = window.setTimeout(() => {
+        autoSaveResetTimerRef.current = null
+        setAutoSaveState((current) => current === 'saved' ? 'idle' : current)
+      }, 3200)
     } catch (error) {
-      setMessage({ text: `保存失败：${readableError(error)}`, tone: 'error' })
+      setMessage({ text: `自动保存失败：${readableError(error)}`, tone: 'error' })
+      setAutoSaveState('error')
     } finally {
-      setSaving(false)
-    }
-  }
-
-  // Cmd/Ctrl+S saves the provider settings from anywhere on the page.
-  // Latest-ref pattern keeps the listener armed once for the page lifetime.
-  const saveRef = useRef(save)
-  saveRef.current = save
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault()
-        void saveRef.current()
+      autoSaveInFlightRef.current = false
+      if (autoSavePendingRef.current) {
+        autoSavePendingRef.current = false
+        void persistProfiles()
       }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  useEffect(() => {
+    // 初始加载完成前（基线为空）与保存回写（基线等于当前）都不触发。
+    if (savedProfilesJson === null) return
+    if (savedProfilesJson === JSON.stringify(profiles)) return
+    if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current)
+    setAutoSaveState((current) => current === 'saving' ? current : 'pending')
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      void persistProfiles()
+    }, 800)
+  }, [profiles, savedProfilesJson, persistProfiles])
+
+  useEffect(() => () => {
+    if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current)
+    if (autoSaveResetTimerRef.current !== null) window.clearTimeout(autoSaveResetTimerRef.current)
   }, [])
 
   // Tell the app shell when this page holds unsaved changes so switching
@@ -218,7 +235,9 @@ export function AISettings() {
       const saved = await deleteAIProviderProfileApiKey(profile.id)
       configureAIProviders(saved)
       setProfiles(saved)
+      setSavedProfilesJson(JSON.stringify(saved))
       setMessage({ text: `已删除“${profile.name}”的 API Key`, tone: 'success' })
+      scheduleMessageClear()
     } catch (error) {
       setMessage({ text: `删除 API Key 失败：${readableError(error)}`, tone: 'error' })
     } finally {
@@ -238,15 +257,6 @@ export function AISettings() {
     () => profiles.find((profile) => profile.id === selectedProviderId) ?? null,
     [profiles, selectedProviderId],
   )
-
-  const toggleProviderTask = (profile: AIProviderProfile, taskType: AIProviderTaskType) => {
-    const current = profile.taskTypes ?? []
-    update(profile.id, {
-      taskTypes: current.includes(taskType)
-        ? current.filter((candidate) => candidate !== taskType)
-        : [...current, taskType],
-    })
-  }
 
   return (
     <main className="workspace settings-workspace">
@@ -274,6 +284,7 @@ export function AISettings() {
             ]}
             value={tab}
             variant="rail"
+            className="settings-nav"
           />
         </nav>
 
@@ -282,7 +293,7 @@ export function AISettings() {
             <div className="settings-providers-layout">
               <aside className="provider-nav">
                 <div className="provider-nav-heading">
-                  <strong>拖动排序</strong>
+                  <strong>回退顺序</strong>
                   <button
                     className="secondary-action"
                     disabled={loading || saving}
@@ -317,23 +328,15 @@ export function AISettings() {
                           <strong>{profile.name || '未命名服务'}</strong>
                           <small>{providerSubtitle(profile)}</small>
                           <span className="provider-nav-tags">
-                            {profile.enabled ? (
-                              <span className="provider-tag enabled">启用</span>
-                            ) : (
-                              <span className="provider-tag">停用</span>
-                            )}
                             {profile.supportsVision && (
-                              <span className="provider-tag">图片</span>
-                            )}
-                            {profile.supportsText && (
-                              <span className="provider-tag">文本</span>
+                              <span className="provider-tag">多模态</span>
                             )}
                           </span>
                         </span>
                         <span className="provider-nav-reorder" role="group" aria-label="调整顺序">
                           <button
                             className="provider-nav-arrow"
-                            disabled={index === 0 || saving}
+                            disabled={index === 0}
                             onClick={(event) => {
                               event.stopPropagation()
                               moveBy(profile.id, -1)
@@ -346,7 +349,7 @@ export function AISettings() {
                           </button>
                           <button
                             className="provider-nav-arrow"
-                            disabled={index === profiles.length - 1 || saving}
+                            disabled={index === profiles.length - 1}
                             onClick={(event) => {
                               event.stopPropagation()
                               moveBy(profile.id, 1)
@@ -384,8 +387,7 @@ export function AISettings() {
                       <div className="provider-detail-actions">
                         <button
                           className="secondary-action"
-                          disabled={saving}
-                          onClick={() => setProviderRemoveConfirming(true)}
+                                                    onClick={() => setProviderRemoveConfirming(true)}
                           type="button"
                         >
                           移除
@@ -398,8 +400,7 @@ export function AISettings() {
                         <label>
                           <span>名称</span>
                           <input
-                            disabled={saving}
-                            onChange={(event) =>
+                                                        onChange={(event) =>
                               update(selectedProfile.id, {
                                 name: event.target.value,
                               })
@@ -408,7 +409,7 @@ export function AISettings() {
                           />
                         </label>
                         <ListboxSelect
-                          disabled={saving || selectedProfile.provider === 'mock'}
+                          disabled={selectedProfile.provider === 'mock'}
                           label="服务类型"
                           onValueChange={(value) => update(selectedProfile.id, { provider: value as AIProviderKind })}
                           options={[
@@ -422,8 +423,7 @@ export function AISettings() {
                           <label>
                             <span>Base URL</span>
                             <input
-                              disabled={saving}
-                              onChange={(event) =>
+                                                            onChange={(event) =>
                                 update(selectedProfile.id, {
                                   baseUrl: event.target.value,
                                 })
@@ -437,8 +437,7 @@ export function AISettings() {
                           <label>
                             <span>Antigravity CLI 路径</span>
                             <input
-                              disabled={saving}
-                              onChange={(event) =>
+                                                            onChange={(event) =>
                                 update(selectedProfile.id, {
                                   commandPath: event.target.value,
                                 })
@@ -451,7 +450,7 @@ export function AISettings() {
                         <label>
                           <span>模型</span>
                           <input
-                            disabled={saving || selectedProfile.provider === 'mock'}
+                            disabled={selectedProfile.provider === 'mock'}
                             onChange={(event) =>
                               update(selectedProfile.id, {
                                 model: event.target.value,
@@ -470,8 +469,7 @@ export function AISettings() {
                             <label>
                               <span>输入单价 <small>USD / 100 万 tokens</small></span>
                               <input
-                                disabled={saving}
-                                inputMode="decimal"
+                                                                inputMode="decimal"
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   inputCostPerMillionUsd: event.target.value === ''
@@ -487,8 +485,7 @@ export function AISettings() {
                             <label>
                               <span>输出单价 <small>USD / 100 万 tokens</small></span>
                               <input
-                                disabled={saving}
-                                inputMode="decimal"
+                                                                inputMode="decimal"
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   outputCostPerMillionUsd: event.target.value === ''
@@ -516,8 +513,7 @@ export function AISettings() {
                               </span>
                               <input
                                 autoComplete="off"
-                                disabled={saving}
-                                onChange={(event) =>
+                                                                onChange={(event) =>
                                   update(selectedProfile.id, {
                                     apiKey: event.target.value,
                                   })
@@ -534,8 +530,7 @@ export function AISettings() {
                             {selectedProfile.hasApiKey && (
                               <button
                                 className="secondary-action"
-                                disabled={saving}
-                                onClick={() => setApiKeyDeleteTarget(selectedProfile)}
+                                                                onClick={() => setApiKeyDeleteTarget(selectedProfile)}
                                 type="button"
                               >
                                 删除 API Key
@@ -548,21 +543,8 @@ export function AISettings() {
                       <div className="provider-capabilities">
                         <label>
                           <input
-                            checked={selectedProfile.enabled}
-                            disabled={saving}
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                enabled: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          启用
-                        </label>
-                        <label>
-                          <input
                             checked={selectedProfile.supportsVision}
-                            disabled={saving || selectedProfile.provider === 'mock'}
+                            disabled={selectedProfile.provider === 'mock'}
                             onChange={(event) =>
                               update(selectedProfile.id, {
                                 supportsVision: event.target.checked,
@@ -570,39 +552,12 @@ export function AISettings() {
                             }
                             type="checkbox"
                           />
-                          支持图片识别
-                        </label>
-                        <label>
-                          <input
-                            checked={selectedProfile.supportsText}
-                            disabled={saving || selectedProfile.provider === 'mock'}
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                supportsText: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          支持文本与推理
+                          多模态（支持图片识别）
                         </label>
                       </div>
-                      <fieldset className="provider-task-routing">
-                        <legend>任务路由</legend>
-                        <p>不勾选表示承担所有能力兼容的任务；勾选后只承担选中的任务，失败时按服务顺序回退。</p>
-                        <div className="provider-task-routing__grid">
-                          {PROVIDER_TASK_OPTIONS.map((option) => (
-                            <label key={option.value}>
-                              <input
-                                checked={(selectedProfile.taskTypes ?? []).includes(option.value)}
-                                disabled={saving}
-                                onChange={() => toggleProviderTask(selectedProfile, option.value)}
-                                type="checkbox"
-                              />
-                              {option.label}
-                            </label>
-                          ))}
-                        </div>
-                      </fieldset>
+                      <p className="provider-capabilities__hint">
+                        所有服务始终参与全部任务，按左侧顺序作为失败回退的优先级。
+                      </p>
                     </div>
                   </>
                 ) : (
@@ -683,16 +638,19 @@ export function AISettings() {
           )}
 
           {tab === 'providers' && (
-            <div className="settings-save-row">
-              <span className={message?.tone === 'error' ? 'is-error' : isDirty ? 'is-dirty' : ''} role={message?.tone === 'error' ? 'alert' : 'status'}>{message?.text ?? (isDirty ? '有未保存的修改' : null)}</span>
-              <button
-                className="primary-button"
-                disabled={loading || saving}
-                onClick={() => void save()}
-                type="button"
+            <div className="provider-status-bar">
+              <span
+                aria-live="polite"
+                className={`provider-status-bar__state${autoSaveState === 'error' || message?.tone === 'error' ? ' is-error' : ''}`}
+                role={message?.tone === 'error' ? 'alert' : 'status'}
               >
-                {saving ? '保存中…' : '保存设置'}
-              </button>
+                {message?.text
+                  ?? (autoSaveState === 'saving' ? '正在保存…'
+                    : autoSaveState === 'pending' ? '有未保存的修改…'
+                    : autoSaveState === 'saved' ? '已自动保存'
+                    : autoSaveState === 'error' ? '保存失败，修改后会自动重试'
+                    : null)}
+              </span>
             </div>
           )}
         </div>

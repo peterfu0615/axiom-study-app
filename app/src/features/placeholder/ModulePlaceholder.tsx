@@ -23,12 +23,6 @@ const modules: Record<
     description: '积累真实作答和复习记录后，这里会呈现薄弱知识点与错因趋势。',
     phase: '阶段 3',
   },
-  planner: {
-    eyebrow: '学习计划',
-    title: '计划',
-    description: '复习负担、作业截止日期与每日可用时间会在这里统一排程。',
-    phase: '阶段 4',
-  },
   settings: {
     eyebrow: '应用偏好',
     title: '设置',

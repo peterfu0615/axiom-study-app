@@ -180,15 +180,17 @@ export function Tabs<T extends string>({
   options,
   variant = 'underline',
   ariaLabel,
+  className = '',
 }: {
   value: T
   onChange: (value: T) => void
   options: TabOption<T>[]
   variant?: 'underline' | 'rail' | 'segment'
   ariaLabel: string
+  className?: string
 }) {
   return (
-    <div aria-label={ariaLabel} className={`ax-tabs ax-tabs--${variant}`} role="tablist">
+    <div aria-label={ariaLabel} className={`ax-tabs ax-tabs--${variant} ${className}`.trim()} role="tablist">
       {options.map((option) => (
         <button
           aria-selected={value === option.value}

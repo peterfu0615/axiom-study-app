@@ -14,7 +14,7 @@ import {
   type ReviewUnitStatus,
 } from '../domain/review'
 import type { DifficultyLevel, HorizonTagType } from '../domain/models'
-import { buildSevenDayReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
+import { buildReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
 import { DEFAULT_REVIEW_PREFERENCES, getReviewPreferences, type ReviewPreferences } from './reviewPreferencesDatabase'
 import { withTransactionLock } from './transactionLock'
 
@@ -204,8 +204,13 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
   })
 }
 
+export async function getReviewForecast(days = 7, timestamp = Date.now()): Promise<ReviewForecastDay[]> {
+  return buildReviewForecast(await listReviewCandidates(), timestamp, days)
+}
+
+/** @deprecated 兼容旧调用；请使用 getReviewForecast。 */
 export async function getSevenDayReviewForecast(timestamp = Date.now()): Promise<ReviewForecastDay[]> {
-  return buildSevenDayReviewForecast(await listReviewCandidates(), timestamp)
+  return getReviewForecast(7, timestamp)
 }
 
 export interface TodayReviewUnit {
@@ -454,11 +459,7 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
   const existing = await findTodaySession(sessionDate)
   if (existing) return readTodayPlanBySession(existing)
   const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
-  const units = buildTodayReviewUnits(candidates, {
-    now: timestamp,
-    maxModules: preferences.maxModules,
-    maxDurationSeconds: preferences.maxDailyMinutes * 60,
-  })
+  const units = buildTodayReviewUnits(candidates, { now: timestamp })
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
@@ -620,10 +621,8 @@ async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: str
   const existingKeys = new Set(current.units.map((unit) => unit.canonicalKey))
   const existingProblems = new Set(current.units.map((unit) => unit.question.sourceProblemId))
   const candidatesToPlan = candidates.filter((candidate) => !existingProblems.has(candidate.problemId))
-  const nextUnit = buildTodayReviewUnits(candidatesToPlan, {
-    now: input.timestamp,
-    maxModules: Math.max(1, candidatesToPlan.length),
-  }).find((unit) => !existingKeys.has(unit.canonicalKey))
+  const nextUnit = buildTodayReviewUnits(candidatesToPlan, { now: input.timestamp })
+    .find((unit) => !existingKeys.has(unit.canonicalKey))
   if (!nextUnit) return current
 
   return withTransactionLock(async () => {

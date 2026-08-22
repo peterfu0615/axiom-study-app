@@ -49,18 +49,19 @@ export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {
 }
 
 /**
- * Static seven-day projection. Each current candidate is assigned to its
+ * Static forward projection. Each current candidate is assigned to its
  * earliest scheduled local day and clustered with the same pure planner used
  * by Today. No future feedback or future session is invented.
  */
-export function buildSevenDayReviewForecast(
+export function buildReviewForecast(
   candidates: ReviewCandidate[],
   now: number,
+  days = 7,
 ): ReviewForecastDay[] {
   const todayStart = startOfLocalReviewDay(now)
-  const days = Array.from({ length: 7 }, (_, offset) => addLocalReviewDays(todayStart, offset))
-  const buckets = days.map(() => [] as ReviewCandidate[])
-  const overdue = days.map(() => 0)
+  const horizon = Array.from({ length: days }, (_, offset) => addLocalReviewDays(todayStart, offset))
+  const buckets = horizon.map(() => [] as ReviewCandidate[])
+  const overdue = horizon.map(() => 0)
 
   candidates.forEach((candidate) => {
     if (!candidate.subject.trim() || !candidate.stemMarkdown.trim()) return
@@ -70,11 +71,11 @@ export function buildSevenDayReviewForecast(
       overdue[0] += 1
       return
     }
-    const index = days.findIndex((day) => dueAt <= endOfLocalReviewDay(day))
+    const index = horizon.findIndex((day) => dueAt <= endOfLocalReviewDay(day))
     if (index >= 0) buckets[index].push(candidate)
   })
 
-  return days.map((dayStart, index) => {
+  return horizon.map((dayStart, index) => {
     const candidatesForDay = buckets[index]
     const units = buildReviewUnitPool(candidatesForDay, dayStart + 12 * 60 * 60 * 1000)
     return {

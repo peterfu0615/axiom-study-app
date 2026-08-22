@@ -119,9 +119,10 @@ describe('Horizon Today planner', () => {
       candidate('overdue-a', { tags: repeated, lastRating: 'again', createdAt: now - 100 * 86_400_000 }),
       candidate('overdue-b', { tags: [tag('knowledge', '函数'), tag('method', '待定系数法')], lastRating: 'again', createdAt: now - 100 * 86_400_000 }),
       candidate('other', { tags: [tag('knowledge', '全等三角形'), tag('method', '倍长中线')] }),
-    ], { now, maxModules: 2 })
-    expect(units).toHaveLength(2)
-    expect(new Set(units.map((unit) => unit.canonicalKey)).size).toBe(2)
+    ], { now })
+    // 不再限制主题数量：所有到期主题都会进入今日计划，且键互不相同
+    expect(new Set(units.map((unit) => unit.canonicalKey)).size).toBe(units.length)
+    expect(units.length).toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -186,13 +187,13 @@ describe('Horizon review scheduler', () => {
     })
   })
 
-  it('caps the generated Today plan by both module count and time budget', () => {
+  it('schedules every due theme without an artificial module cap', () => {
     const candidates = [
       candidate('budget-a', { tags: [tag('knowledge', '函数'), tag('method', '待定系数法')] }),
       candidate('budget-b', { tags: [tag('knowledge', '全等'), tag('method', '倍长中线')] }),
       candidate('budget-c', { tags: [tag('knowledge', '圆'), tag('method', '辅助线')] }),
     ]
-    expect(buildTodayReviewUnits(candidates, { now, maxModules: 1, maxDurationSeconds: 3_600 })).toHaveLength(1)
-    expect(buildTodayReviewUnits(candidates, { now, maxModules: 3, maxDurationSeconds: 500 })).toHaveLength(1)
+    // 今日安排由复习调度决定：到期多少主题就安排多少，不再按数量/时长截断
+    expect(buildTodayReviewUnits(candidates, { now })).toHaveLength(3)
   })
 })

@@ -32,7 +32,9 @@ describe('insights evidence query', () => {
       state: { stability: 12, transferScore: .7, maxStableDifficulty: 'advanced' },
     })
     const recordQuery = mocks.invoke.mock.calls.find(([, args]) => String(args.sql).includes('FROM review_modules module'))?.[1].sql
-    expect(recordQuery).toContain('instance.source_mode')
+    // The physical column is source_type; it must be aliased to source_mode.
+    expect(recordQuery).toContain('instance.source_type AS source_mode')
+    expect(recordQuery).not.toMatch(/instance\.source_mode(?!\s*AS)/u)
     expect(recordQuery).toContain('instance.difficulty')
   })
 })

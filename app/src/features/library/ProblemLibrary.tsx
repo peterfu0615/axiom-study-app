@@ -31,7 +31,6 @@ import {
   queueProblemSolution,
   queueStudentAttempt,
   restoreProblem,
-  saveProblemNote,
   searchSavedProblemIds,
   setProblemFavorite,
   decideProblemDuplicate,
@@ -60,7 +59,6 @@ import {
 } from '../../ai/intelligencePipeline'
 import { ProblemTags } from './ProblemTags'
 import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../platform/problemHistoryDatabase'
-import { getProblemUnderstandingUploadDisclosure } from '../../ai/provider'
 import { findProblemDuplicateSuggestions } from '../../domain/problemDuplicates'
 import {
   createRelabelBatch,
@@ -276,7 +274,6 @@ export function ProblemLibrary() {
   const [geometryScene, setGeometryScene] = useState<PersistedGeometryScene | null>(null)
   const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
-  const [noteDraft, setNoteDraft] = useState('')
   const [batchMode, setBatchMode] = useState(false)
   const [batchProblemIds, setBatchProblemIds] = useState<Set<string>>(new Set())
   const [batchTextbookId, setBatchTextbookId] = useState('')
@@ -288,7 +285,6 @@ export function ProblemLibrary() {
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
   const [subjectChangeConfirming, setSubjectChangeConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
-  const [aiUploadConfirming, setAIUploadConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
   // Event listeners must not be re-armed on every selection change, so they
@@ -543,27 +539,8 @@ export function ProblemLibrary() {
     return () => { cancelled = true }
   }, [selectedId])
 
-  // Per-problem note drafts: switching problems keeps half-written notes
-  // instead of silently resetting them to the saved value.
-  const noteDraftsRef = useRef<Map<string, string>>(new Map())
-  const previousSelectedIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    // During the commit where the selection changed, `noteDraft` still holds
-    // the outgoing problem's draft — stash it under its own id.
-    const previousId = previousSelectedIdRef.current
-    previousSelectedIdRef.current = selectedId
-    if (previousId && previousId !== selectedId) {
-      noteDraftsRef.current.set(previousId, noteDraft)
-    }
-  }, [noteDraft, selectedId])
-
   useEffect(() => {
     let cancelled = false
-    setNoteDraft(
-      (selectedId ? noteDraftsRef.current.get(selectedId) : undefined)
-        ?? selected?.libraryMetadata.note
-        ?? '',
-    )
     if (!selectedId) {
       setDuplicateDecisionIds(new Set())
       return
@@ -576,7 +553,7 @@ export function ProblemLibrary() {
       })
       .catch(() => { if (!cancelled) setDuplicateDecisionIds(new Set()) })
     return () => { cancelled = true }
-  }, [selected?.libraryMetadata.note, selectedId])
+  }, [selectedId])
 
   useEffect(() => {
     setBatchProblemIds(new Set())
@@ -783,29 +760,12 @@ export function ProblemLibrary() {
     }
   }
 
-  const persistNote = async () => {
-    if (!selected) return
-    setUpdating(true)
-    try {
-      const updated = await saveProblemNote(selected.id, noteDraft)
-      setProblems((current) => current.map((problem) =>
-        problem.id === updated.id ? updated : problem))
-      notify('备注已保存', 'success')
-    } catch (error) {
-      notify(`备注保存失败：${String(error)}`, 'error')
-    } finally {
-      setUpdating(false)
-    }
-  }
-
   // Keyboard operation: ↑/↓ move through the filtered list, Cmd/Ctrl+S saves
-  // whatever context is active (the edit form, or a dirty note).  High-volume
-  // review workflows should not require the mouse for either.
+  // the edit form.  High-volume review workflows should not require the mouse.
   const keyboardNavRef = useRef(false)
   const keyboardSaveRef = useRef<() => void>(() => undefined)
   keyboardSaveRef.current = () => {
     if (editing) void saveEdits()
-    else if (selected && noteDraft !== selected.libraryMetadata.note) void persistNote()
   }
   useEffect(() => {
     if (keyboardNavRef.current || !selectedId) return
@@ -900,14 +860,8 @@ export function ProblemLibrary() {
     finally { setUpdating(false) }
   }
 
-  const retryAI = async (uploadConfirmed = false) => {
+  const retryAI = async () => {
     if (!selected) return
-    const disclosure = getProblemUnderstandingUploadDisclosure()
-    if (disclosure.sendsImagesExternally && !uploadConfirmed) {
-      setAIUploadConfirming(true)
-      return
-    }
-    setAIUploadConfirming(false)
     setUpdating(true)
     dismiss()
     try {
@@ -1092,7 +1046,7 @@ export function ProblemLibrary() {
           </div>
 
           <div className="problem-list-filters">
-            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案、标签或备注" type="search" value={query} /></label>
+            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案或标签" type="search" value={query} /></label>
             <ListboxSelect
               ariaLabel="筛选科目"
               onValueChange={setSubjectFilter}
@@ -1318,7 +1272,7 @@ export function ProblemLibrary() {
                       disabled={updating}
                       label="题干 / 备注"
                       onChange={(event) => setEditStemMarkdown(event.target.value)}
-                      placeholder="补充题干、解题背景或个人备注"
+                      placeholder="补充题干或解题背景"
                       rows={6}
                       value={editStemMarkdown}
                     />
@@ -1501,8 +1455,17 @@ export function ProblemLibrary() {
                                 activeModelRun?.errorMessage || 'AI 服务未返回错误详情',
                                 { runId: activeModelRun?.id ?? null },
                               )}
-                              onRetry={updating ? undefined : () => void retryAI()}
                             />
+                            {/* 报错与取消都必须始终提供重试入口，固定在卡片右侧 */}
+                            <Button
+                              className="problem-ai-error-region__retry"
+                              disabled={updating}
+                              loading={updating}
+                              onClick={() => void retryAI()}
+                              variant="secondary"
+                            >
+                              重试解析
+                            </Button>
                           </div>
                         )}
                       </section>
@@ -1553,31 +1516,6 @@ export function ProblemLibrary() {
                         subjectId={selected.subjectId}
                         subject={selected.subject}
                       />
-
-                      <section className="problem-note-section">
-                        <div>
-                          <p className="eyebrow">个人备注</p>
-                          <h3>复习时提醒自己</h3>
-                        </div>
-                        <Textarea
-                          aria-label="错题备注"
-                          disabled={updating}
-                          maxLength={20_000}
-                          onChange={(event) => setNoteDraft(event.target.value)}
-                          placeholder="例如：容易漏掉定义域；下次先画辅助线。备注会参与错题库搜索。"
-                          rows={3}
-                          value={noteDraft}
-                        />
-                        <div>
-                          <small>{noteDraft.length} / 20000</small>
-                          <Button
-                            disabled={updating || noteDraft === selected.libraryMetadata.note}
-                            onClick={() => void persistNote()}
-                          >
-                            保存备注
-                          </Button>
-                        </div>
-                      </section>
 
                       {duplicateSuggestions.length > 0 && (
                         <section className="problem-duplicate-section">
@@ -1874,23 +1812,6 @@ export function ProblemLibrary() {
           <div className="curriculum-dialog-actions">
             <Button onClick={() => setSubjectChangeConfirming(false)} variant="ghost">取消</Button>
             <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续更改</Button>
-          </div>
-        </div>
-      </Dialog>
-      <Dialog
-        onClose={() => { if (!updating) setAIUploadConfirming(false) }}
-        open={aiUploadConfirming}
-        title="确认发送题目图片"
-      >
-        <div className="image-upload-confirmation">
-          <p>
-            Axiom 将把当前题块图片发送到 Provider
-            <strong>{getProblemUnderstandingUploadDisclosure().providerId}</strong>
-            （模型 {getProblemUnderstandingUploadDisclosure().model}）进行整理，不会发送完整原始页面。
-          </p>
-          <div className="image-upload-confirmation__actions">
-            <Button disabled={updating} onClick={() => setAIUploadConfirming(false)}>取消</Button>
-            <Button loading={updating} onClick={() => void retryAI(true)} variant="primary">确认发送</Button>
           </div>
         </div>
       </Dialog>

@@ -136,13 +136,14 @@
   flex: 0 0 auto;
 }
 
+/* 今日/洞察/练习与其它工作区共用标准 .workspace 内边距（42px 36px 34px），
+   保证页面边界与标题起点完全一致；此前这里单独收窄内容区导致对齐观感不同。 */
 .today-workspace,
 .insights-workspace,
 .practice-workspace,
 .placeholder-workspace {
   width: 100%;
   max-width: none;
-  padding: 40px var(--ax-page-gutter) 34px;
 }
 
 .today-header {
@@ -677,12 +678,6 @@
 }
 
 @media (min-width: 1600px) {
-  .today-workspace,
-  .insights-workspace,
-  .practice-workspace {
-    padding-inline: clamp(48px, 5vw, 112px);
-  }
-
   .insights-overview > div,
   .insights-section {
     padding-inline: var(--ax-space-8);
