@@ -1,5 +1,4 @@
 import { Icon } from './Icon'
-import axiomWordmark from '../../src-tauri/icons/source/axiom-wordmark.png'
 
 export type AppSection =
   | 'today'
@@ -32,11 +31,27 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="traffic-light-space" data-tauri-drag-region />
       <div className="brand">
-        <img
-          alt="Axiom"
+        {/* 文字式 wordmark：fill 跟随 currentColor（--brand），随颜色主题联动 */}
+        <svg
+          aria-label="Axiom"
+          aria-hidden="true"
           className="brand-icon"
-          src={axiomWordmark}
-        />
+          fill="currentColor"
+          role="img"
+          viewBox="0 0 124 30"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <text
+            fontFamily="Georgia, 'Times New Roman', 'Songti SC', serif"
+            fontSize="28"
+            fontStyle="italic"
+            fontWeight="700"
+            x="0"
+            y="24"
+          >
+            Axiom
+          </text>
+        </svg>
       </div>
 
       <nav aria-label="主要导航">
@@ -62,10 +77,7 @@ export function Sidebar({
           <Icon name="settings" />
           <span>设置</span>
         </button>
-        <div className="local-first-note">
-          <span className="status-dot" />
-          数据保存在本机
-        </div>
+
       </div>
     </aside>
   )

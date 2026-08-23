@@ -43,13 +43,16 @@ describe('canonical Axiom icon assets', () => {
   it('keeps the Sidebar wordmark separate from generated app icon assets', () => {
     const sidebar = readFileSync(new URL('./Sidebar.tsx', import.meta.url), 'utf8')
     const appStyles = readFileSync(new URL('../App.css', import.meta.url), 'utf8')
-    expect(sidebar).toContain(
-      "../../src-tauri/icons/source/axiom-wordmark.png",
-    )
+    // 主题适配的 wordmark 是内联 SVG 文字，随 --brand 换色；
+    // 不再直接引用固定黄色的 PNG 资产。
+    expect(sidebar).not.toContain('axiom-wordmark.png')
+    expect(sidebar).toContain('brand-icon')
+    expect(sidebar).toContain('fill="currentColor"')
     expect(sidebar).not.toContain('axiom-icon-light-1024.png')
     expect(sidebar).not.toContain('axiom-icon-dark-1024.png')
     expect(sidebar).not.toContain('../../../icons/')
-    expect(appStyles).toMatch(/\.brand-icon\s*\{[^}]*width:\s*59px;[^}]*height:\s*15px;/s)
+    expect(appStyles).toMatch(/\.brand-icon\s*\{[^}]*width:\s*62px;/s)
+    expect(appStyles).toMatch(/\.brand\s*\{[^}]*color:\s*var\(--brand\);/s)
 
     expect(pngDimensions(asset('../../src-tauri/icons/32x32.png'))).toEqual({
       width: 32,

@@ -187,13 +187,11 @@ function ProblemDiagramImage({
   croppedPath,
   path,
   rect,
-  source,
 }: {
   alt: string
   croppedPath: string | null
   path: string
   rect: NormalizedRect
-  source: 'manual' | 'auto'
 }) {
   const [aspectRatio, setAspectRatio] = useState<number | null>(null)
   const [failed, setFailed] = useState(false)
@@ -247,9 +245,6 @@ function ProblemDiagramImage({
           }
         />
       </div>
-      <figcaption>
-        {source === 'manual' ? '手动选择图形' : croppedPath ? 'AI 自动抠取图形' : 'AI 识别图形'}
-      </figcaption>
     </figure>
   )
 }
@@ -1137,8 +1132,13 @@ export function ProblemLibrary() {
                     className="problem-card-image"
                     path={problem.cropImagePath}
                   />
+                  {problem.libraryMetadata.favorite && (
+                    <span aria-label="已收藏" className="problem-card-favorite">
+                      <Icon filled name="favorite" size={14} />
+                    </span>
+                  )}
                   <span className="problem-card-copy">
-                    <strong>{problem.libraryMetadata.favorite && <span aria-label="已收藏" className="problem-card-favorite"><Icon name="favorite" size={12} /></span>}{problem.title}</strong>
+                    <strong>{problem.title}</strong>
                     <small>{dateFormatter.format(problem.createdAt)}</small>
                     <span className="problem-card-statuses">
                       <span className="problem-status">
@@ -1209,7 +1209,7 @@ export function ProblemLibrary() {
                         label={selected.libraryMetadata.favorite ? '取消收藏' : '收藏错题'}
                         onClick={() => void toggleFavorite()}
                       >
-                        <Icon name="favorite" size={18} />
+                        <Icon filled={selected.libraryMetadata.favorite} name="favorite" size={18} />
                       </IconButton>
                       <button
                         className="secondary-action"
@@ -1413,7 +1413,6 @@ export function ProblemLibrary() {
                                     croppedPath={selectedDiagramPath}
                                     path={selected.cropImagePath}
                                     rect={selectedDiagramRect}
-                                    source={selectedDiagramRegion?.source ?? 'auto'}
                                   />
                                 )}
                                 scene={geometryScene?.validationStatus === 'validated'
@@ -1457,24 +1456,23 @@ export function ProblemLibrary() {
                         </div>
 
                         {selected.aiStatus === 'failed' && (
-                          <div className="problem-ai-error-region">
-                            <ErrorState
-                              error={activeModelRun?.error ?? classifyAIError(
-                                activeModelRun?.errorMessage || 'AI 服务未返回错误详情',
-                                { runId: activeModelRun?.id ?? null },
-                              )}
-                            />
-                            {/* 报错与取消都必须始终提供重试入口，固定在卡片右侧 */}
-                            <Button
-                              className="problem-ai-error-region__retry"
-                              disabled={updating}
-                              loading={updating}
-                              onClick={() => void retryAI()}
-                              variant="secondary"
-                            >
-                              重试解析
-                            </Button>
-                          </div>
+                          <ErrorState
+                            error={activeModelRun?.error ?? classifyAIError(
+                              activeModelRun?.errorMessage || 'AI 服务未返回错误详情',
+                              { runId: activeModelRun?.id ?? null },
+                            )}
+                            secondaryAction={
+                              /* 报错与取消都始终提供重试入口，位于错误卡片内部右侧 */
+                              <Button
+                                disabled={updating}
+                                loading={updating}
+                                onClick={() => void retryAI()}
+                                variant="secondary"
+                              >
+                                重试解析
+                              </Button>
+                            }
+                          />
                         )}
                       </section>
 

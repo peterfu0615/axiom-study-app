@@ -5,7 +5,6 @@ import { open } from '@tauri-apps/plugin-dialog'
 import type {
   CameraDevice,
   CameraStatus,
-  NativeCapabilities,
   SourceDocument,
 } from '../../domain/models'
 import { Icon } from '../../components/Icon'
@@ -22,7 +21,6 @@ import {
   type QuarterTurn,
 } from '../../platform/cameraGeometry'
 import {
-  getNativeCapabilities,
   importImage,
   isDesktopRuntime,
   mediaAssetUrl,
@@ -67,8 +65,6 @@ export function CaptureWorkspace({
   const [devices, setDevices] = useState<CameraDevice[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [stream, setStream] = useState<MediaStream | null>(null)
-  const [capabilities, setCapabilities] =
-    useState<NativeCapabilities | null>(null)
   const [recent, setRecent] = useState<SourceDocument[]>([])
   const [preview, setPreview] = useState<SourceDocument | null>(null)
   const [editingDocument, setEditingDocument] =
@@ -98,12 +94,7 @@ export function CaptureWorkspace({
   }, [notify])
 
   useEffect(() => {
-    let cancelled = false
-    void getNativeCapabilities()
-      .then((next) => { if (!cancelled) setCapabilities(next) })
-      .catch(() => null)
     void refreshRecent()
-    return () => { cancelled = true }
   }, [refreshRecent])
 
   useEffect(() => {
@@ -408,12 +399,6 @@ export function CaptureWorkspace({
   return (
     <main className="workspace capture-workspace">
       <PageHeader
-        actions={<div className="runtime-pill">
-          <span className={`status-dot ${capabilities ? 'online' : ''}`} />
-          {capabilities
-            ? '图片与题目数据保存在本机'
-            : '正在准备采集…'}
-        </div>}
         eyebrow="快速采集"
         title="添加错题"
       />

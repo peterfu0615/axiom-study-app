@@ -18,7 +18,7 @@ function Trend({ insights }: { insights: ReviewInsights }) {
   const max = Math.max(1, ...insights.trend.map((day) => day.completedUnits))
   const visibleLabels = insights.rangeDays === 7 ? 1 : 5
   return <section className="insights-section">
-    <header><div><p className="eyebrow">复习趋势</p><h2>每日完成</h2></div><span>已完成练习</span></header>
+    <header><div><p className="eyebrow">复习趋势</p><h2>每日完成</h2></div></header>
     <div className={`insights-trend insights-trend--${insights.rangeDays}`}>
       {insights.trend.map((day, index) => <div className="insights-trend__day" key={day.date} title={`${day.date} · ${day.completedUnits} 个单元`}>
         <div className="insights-trend__bar"><i style={{ height: `${Math.max(day.completedUnits ? 14 : 2, day.completedUnits / max * 100)}%` }} /></div>
@@ -99,7 +99,7 @@ function MethodModelDiagnostics({ insights }: { insights: ReviewInsights }) {
     { label: '已稳定到进阶难度的模型', items: advancedModels, metric: (item: typeof advancedModels[number]) => `掌握 ${percent(item.state.masteryEstimate)}` },
   ]
   return <section className="insights-section">
-    <header><div><p className="eyebrow">诊断视角</p><h2>方法与题型模型</h2></div><span>仅使用有效证据</span></header>
+    <header><div><p className="eyebrow">诊断视角</p><h2>方法与题型模型</h2></div></header>
     <div className="insights-diagnostics">
       {groups.map((group) => <article key={group.label}>
         <h3>{group.label}</h3>

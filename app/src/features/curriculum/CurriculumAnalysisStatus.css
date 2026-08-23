@@ -33,7 +33,7 @@
     105deg,
     transparent 8%,
     color-mix(in srgb, var(--brand) 10%, transparent) 30%,
-    color-mix(in srgb, #fff0a0 42%, transparent) 49%,
+    color-mix(in srgb, color-mix(in srgb, var(--brand) 70%, white) 42%, transparent) 49%,
     color-mix(in srgb, var(--brand) 14%, transparent) 67%,
     transparent 90%
   );

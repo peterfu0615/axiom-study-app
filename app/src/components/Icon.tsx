@@ -153,9 +153,12 @@ const paths: Record<IconName, React.ReactNode> = {
 }
 
 export function Icon({
+  filled = false,
   name,
   size = 20,
 }: {
+  /** 实心填充态（如已收藏的星标）；默认线框风格。 */
+  filled?: boolean
   name: IconName
   size?: number
 }) {
@@ -164,7 +167,7 @@ export function Icon({
       aria-hidden="true"
       className="icon"
       focusable="false"
-      fill="none"
+      fill={filled ? 'currentColor' : 'none'}
       height={size}
       viewBox="0 0 24 24"
       width={size}

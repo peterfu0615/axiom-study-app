@@ -70,7 +70,7 @@ const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description:
 ]
 
 export function AISettings() {
-  const { appearance, resolvedAppearance, visualTheme, setAppearance, setVisualTheme } = useTheme()
+  const { appearance, visualTheme, setAppearance, setVisualTheme } = useTheme()
   const [profiles, setProfiles] = useState<AIProviderProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -246,14 +246,6 @@ export function AISettings() {
     }
   }
 
-  const enabledVisionCount = useMemo(
-    () =>
-      profiles.filter(
-        (profile) => profile.enabled && profile.supportsVision,
-      ).length,
-    [profiles],
-  )
-
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedProviderId) ?? null,
     [profiles, selectedProviderId],
@@ -262,9 +254,6 @@ export function AISettings() {
   return (
     <main className="workspace settings-workspace">
       <PageHeader
-        actions={<span className="settings-provider-badge">
-          {enabledVisionCount} 个图片识别服务可用
-        </span>}
         eyebrow="Axiom"
         summary="AI 服务、外观与应用信息"
         title="设置"
@@ -556,9 +545,6 @@ export function AISettings() {
                           多模态（支持图片识别）
                         </label>
                       </div>
-                      <p className="provider-capabilities__hint">
-                        所有服务始终参与全部任务，按左侧顺序作为失败回退的优先级。
-                      </p>
                     </div>
                   </>
                 ) : (
@@ -595,18 +581,22 @@ export function AISettings() {
                       />
                     </div>
                     <div className="appearance-option-copy">
-                      <strong>{option.label}</strong>
+                      <strong>
+                        <span
+                          aria-hidden="true"
+                          className={`selection-check${appearance === option.value ? ' is-active' : ''}`}
+                        >
+                          <Icon name="check" size={12} />
+                        </span>
+                        {option.label}
+                      </strong>
                       <small>{option.description}</small>
-                      {appearance === option.value && (
-                        <span className="appearance-current">当前</span>
-                      )}
                     </div>
                   </button>
                 ))}
               </div>
               <section className="color-theme-picker" aria-label="颜色主题">
                 <p className="eyebrow">颜色主题</p>
-                <p className="subtitle">同一布局下的六套品牌配色；明暗外观与颜色主题可独立组合。</p>
                 <div className="color-theme-picker__grid" role="radiogroup" aria-label="选择颜色主题">
                   {VISUAL_THEMES.map((theme) => (
                     <button
@@ -620,21 +610,25 @@ export function AISettings() {
                       <span
                         aria-hidden="true"
                         className="color-theme-card__swatch"
-                        style={{ background: VISUAL_THEME_SWATCHES[theme] }}
+                        style={{
+                          background: `linear-gradient(135deg, ${VISUAL_THEME_SWATCHES[theme].brand} 0 46%, ${VISUAL_THEME_SWATCHES[theme].paperLight} 46% 72%, ${VISUAL_THEME_SWATCHES[theme].paperDark} 72% 100%)`,
+                        }}
                       />
                       <span className="color-theme-card__copy">
-                        <strong>{VISUAL_THEME_LABELS[theme]}</strong>
-                        {visualTheme === theme && <span className="appearance-current">当前</span>}
+                        <strong>
+                          <span
+                            aria-hidden="true"
+                            className={`selection-check${visualTheme === theme ? ' is-active' : ''}`}
+                          >
+                            <Icon name="check" size={12} />
+                          </span>
+                          {VISUAL_THEME_LABELS[theme]}
+                        </strong>
                       </span>
                     </button>
                   ))}
                 </div>
               </section>
-              <p className="appearance-resolved-hint">
-                当前实际显示：
-                <strong>{resolvedAppearance === 'dark' ? '深色' : '浅色'}</strong>
-                <span> · {VISUAL_THEME_LABELS[visualTheme]}主题</span>
-              </p>
             </div>
           ) : tab === 'maintenance' ? (
             <LearningStateMaintenance />

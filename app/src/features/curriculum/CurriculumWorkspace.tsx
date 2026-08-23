@@ -130,6 +130,8 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const [mergeTargetId, setMergeTargetId] = useState('')
   // Archiving a node removes it from the active tree; route through confirm.
   const [archiveNodeTarget, setArchiveNodeTarget] = useState<KnowledgeNode | null>(null)
+  // 批量确认当前教材下全部待确认节点
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
   const [relation, setRelation] = useState<NodeRelation>(null)
   const [busy, setBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Textbook | null>(null)
@@ -278,6 +280,17 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   const confirmNode = async (node: KnowledgeNode) => {
     setBusy(true)
     try { await confirmKnowledgeNode(node); await refreshTree() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+  }
+
+  const batchConfirmNodes = async () => {
+    if (!reviewCount) return
+    setBatchConfirmOpen(false)
+    setBusy(true)
+    try {
+      const pending = nodes.filter((node) => node.verificationStatus === 'needs_review')
+      for (const node of pending) await confirmKnowledgeNode(node)
+      await refreshTree()
+    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
   }
 
   const archiveNode = async (node: KnowledgeNode) => {
@@ -455,7 +468,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               </section>
               <Surface className="curriculum-structure-shell">
                 <aside className="curriculum-tree-panel">
-                  <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><Button onClick={() => openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null)}>新增节点</Button></div>
+                  <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><div className="curriculum-panel-heading__actions">{reviewCount > 0 && <Button disabled={busy} onClick={() => setBatchConfirmOpen(true)} variant="secondary">批量确认（{reviewCount}）</Button>}<Button onClick={() => openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null)}>新增节点</Button></div></div>
                   <label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
                   <div className="curriculum-tree-scroll"><KnowledgeTree expanded={expanded} items={tree} onSelect={(node) => setSelectedNodeId(node.id)} onToggle={(nodeId) => setExpanded((current) => { const next = new Set(current); if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId); return next })} selectedId={selectedNodeId} visibleIds={visibleNodeIds} /></div>
                 </aside>
@@ -499,6 +512,16 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
       <Dialog onClose={closeDeleteTextbookDialog} open={Boolean(deleteTarget)} title="删除课程">
         <div className="curriculum-dialog-form"><p>删除后“{deleteTarget?.title}”将从课程与教材列表中移除，已锁定的题目教材匹配将保留。</p>{deleteImpact ? <><dl className="curriculum-delete-impact"><div><dt>章节</dt><dd>{deleteImpact.chapterCount} 个</dd></div><div><dt>知识点</dt><dd>{deleteImpact.knowledgeCount} 个</dd></div><div><dt>教材页</dt><dd>{deleteImpact.pageCount} 页</dd></div><div><dt>关联题目</dt><dd>{deleteImpact.matchedProblemCount} 道</dd></div></dl>{deleteImpact.matchedProblemCount > 0 && <p>关联题目中未锁定的教材匹配将被清除，已锁定的匹配保持不变。</p>}</> : <p role="status">正在统计删除影响…</p>}<div className="curriculum-dialog-actions"><Button disabled={busy} onClick={closeDeleteTextbookDialog} variant="ghost">取消</Button><Button disabled={!deleteImpact} loading={busy} onClick={() => void confirmDeleteTextbook()} variant="danger">删除课程</Button></div></div>
+      </Dialog>
+
+      <Dialog onClose={() => setBatchConfirmOpen(false)} open={batchConfirmOpen} title="批量确认知识节点">
+        <div className="curriculum-dialog-form">
+          <p>将把当前教材下 {reviewCount} 个待确认节点全部标记为「已确认」。已确认的节点之后仍可逐个编辑或归档。</p>
+          <div className="curriculum-dialog-actions">
+            <Button onClick={() => setBatchConfirmOpen(false)} variant="ghost">取消</Button>
+            <Button loading={busy} onClick={() => void batchConfirmNodes()} variant="primary">确认 {reviewCount} 个节点</Button>
+          </div>
+        </div>
       </Dialog>
 
       <Dialog onClose={() => setArchiveNodeTarget(null)} open={Boolean(archiveNodeTarget)} title="归档课程节点">

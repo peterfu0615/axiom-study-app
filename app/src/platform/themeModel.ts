@@ -28,14 +28,17 @@ export const VISUAL_THEME_LABELS: Record<VisualTheme, string> = {
 
 export const VISUAL_THEMES = Object.keys(VISUAL_THEME_LABELS) as VisualTheme[]
 
-/** 设置页色卡预览用的主题代表色（取自 index.css 的 --brand）。 */
-export const VISUAL_THEME_SWATCHES: Record<VisualTheme, string> = {
-  axiom: '#ffd50a',
-  sakura: '#e05a7e',
-  ocean: '#2563eb',
-  forest: '#267a40',
-  violet: '#6f4fce',
-  ink: '#3a4552',
+/**
+ * 设置页色卡预览：每个主题展示 [品牌色, 纸面浅色, 纸面深色] 三段条带，
+ * 取自 index.css 各主题 light/dark 调色板的 --brand / --canvas。
+ */
+export const VISUAL_THEME_SWATCHES: Record<VisualTheme, { brand: string; paperLight: string; paperDark: string }> = {
+  axiom: { brand: '#ffd50a', paperLight: '#fffdf7', paperDark: '#15140f' },
+  sakura: { brand: '#e05a7e', paperLight: '#fffbfc', paperDark: '#181115' },
+  ocean: { brand: '#2563eb', paperLight: '#fafcff', paperDark: '#0e141d' },
+  forest: { brand: '#267a40', paperLight: '#f9fcf8', paperDark: '#0f1712' },
+  violet: { brand: '#6f4fce', paperLight: '#fcfbff', paperDark: '#131020' },
+  ink: { brand: '#3a4552', paperLight: '#fbfcfd', paperDark: '#111315' },
 }
 
 export function isAppearance(value: unknown): value is Appearance {

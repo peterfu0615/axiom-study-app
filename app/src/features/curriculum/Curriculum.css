@@ -462,3 +462,4 @@
 }
 
 :root[data-theme='dark'] .curriculum-form-warning { color: #ffd28a; }
+.curriculum-panel-heading__actions { display: flex; align-items: center; gap: var(--ax-space-3); }

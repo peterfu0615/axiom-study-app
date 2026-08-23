@@ -43,14 +43,19 @@
   display: flex;
   align-items: center;
   padding: 8px 10px 24px;
+  /* wordmark 跟随品牌色：六套主题下自动换色 */
+  color: var(--brand);
 }
 
 .brand-icon {
-  width: 59px;
-  height: 15px;
+  width: 62px;
+  height: 16px;
   display: block;
-  object-fit: contain;
-  object-position: left center;
+  overflow: visible;
+}
+
+.brand-icon text {
+  letter-spacing: .5px;
 }
 
 .sidebar nav {
@@ -99,14 +104,6 @@
   gap: 12px;
 }
 
-.local-first-note {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 12px;
-  color: #8b918d;
-  font-size: 10px;
-}
 
 .status-dot {
   width: 7px;
@@ -114,7 +111,7 @@
   display: inline-block;
   flex: 0 0 auto;
   border-radius: 999px;
-  background: #bbbdbb;
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
   box-shadow: 0 0 0 3px rgba(100, 105, 102, 0.08);
 }
 
@@ -169,18 +166,6 @@
   font-size: 13px;
 }
 
-.runtime-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: #737a76;
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  font-size: 10px;
-}
 
 .capture-workspace {
   height: 100vh;
@@ -233,7 +218,7 @@
   padding: 7px 12px;
   border: 0;
   border-radius: 8px;
-  color: #7b817d;
+  color: var(--muted);
   background: transparent;
   font: inherit;
   font-size: 11px;
@@ -398,7 +383,7 @@
   max-width: 185px;
   margin-left: auto;
   border: 0;
-  color: #3d4943;
+  color: var(--ink);
   background: transparent;
   font: inherit;
   font-size: 10px;
@@ -482,7 +467,7 @@
   place-items: center;
   margin-bottom: 6px;
   border-radius: 18px;
-  color: #487662;
+  color: var(--ax-review-good);
   background: var(--brand-soft);
 }
 
@@ -524,7 +509,7 @@
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
-  color: #69736e;
+  color: var(--muted);
   background: var(--surface);
   cursor: pointer;
 }
@@ -590,7 +575,7 @@
   padding: 6px;
   border: 0;
   border-radius: 8px;
-  color: #7d8581;
+  color: var(--muted);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -624,7 +609,7 @@
 }
 
 .queue-item small {
-  color: #9aa09d;
+  color: var(--muted);
   font-size: 9px;
 }
 
@@ -633,11 +618,11 @@
   display: grid;
   align-content: center;
   justify-items: center;
-  color: #9da39f;
+  color: var(--muted);
 }
 
 .empty-queue span {
-  color: #e3d8aa;
+  color: color-mix(in srgb, var(--brand) 60%, var(--muted));
   font-family: Georgia, serif;
   font-size: 44px;
 }
@@ -867,7 +852,7 @@
   gap: 6px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  color: #55615b;
+  color: var(--muted);
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   font: inherit;
   font-size: 10px;
@@ -962,7 +947,7 @@
 
 .processing-summary {
   margin-left: auto;
-  color: #87908b;
+  color: var(--muted);
   font-size: 9px;
 }
 
@@ -1155,7 +1140,7 @@
 
 .processing-overlay small {
   margin-top: 3px;
-  color: #79857f;
+  color: var(--muted);
   font-size: 9px;
 }
 
@@ -1210,7 +1195,7 @@
   padding: 6px 5px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  color: #59635e;
+  color: var(--muted);
   background: var(--surface);
   font: inherit;
   font-size: 8px;
@@ -1224,15 +1209,15 @@
 }
 
 .block-actions button.danger:hover:not(:disabled) {
-  color: #a44b43;
-  border-color: #dcc1be;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
 }
 
 /* Armed state of the two-step delete confirmation. */
 .block-actions button.danger.is-armed {
-  color: #fff;
-  border-color: #a44b43;
-  background: #a44b43;
+  color: var(--ax-text-inverse);
+  border-color: var(--danger);
+  background: var(--danger);
 }
 
 .block-actions button:disabled {
@@ -1419,7 +1404,7 @@
 
 .block-copy strong {
   overflow: hidden;
-  color: #3d4742;
+  color: var(--ink);
   font-size: 9px;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -1427,7 +1412,7 @@
 }
 
 .block-copy small {
-  color: #929995;
+  color: var(--muted);
   font-size: 8px;
 }
 
@@ -1440,7 +1425,7 @@
 }
 
 .block-detail label {
-  color: #69736e;
+  color: var(--muted);
   font-size: 8px;
   font-weight: 680;
 }
@@ -1450,7 +1435,7 @@
   padding: 7px 8px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  color: #37423c;
+  color: var(--ink);
   background: var(--surface);
   font: inherit;
   font-size: 9px;
@@ -1464,7 +1449,7 @@
 
 .block-detail p {
   margin: 0;
-  color: #8b928e;
+  color: var(--muted);
   font-size: 8px;
   line-height: 1.5;
 }
@@ -1649,6 +1634,7 @@
 }
 
 .problem-card {
+  position: relative;
   width: 100%;
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr);
@@ -1707,9 +1693,13 @@
   overflow: hidden;
 }
 
+/* 已收藏：卡片右上角实心星标 */
 .problem-card-favorite {
-  margin-right: 5px;
-  color: var(--brand-strong);
+  position: absolute;
+  top: 8px;
+  right: 9px;
+  color: var(--brand-hover);
+  filter: drop-shadow(0 0 1px color-mix(in srgb, var(--ink) 30%, transparent));
 }
 
 .problem-detail-actions .ax-icon-button.is-favorite {
@@ -1854,11 +1844,11 @@
   background:
     linear-gradient(
       100deg,
-      #8c6b00 0%,
-      #d6a900 32%,
-      #fff0a6 50%,
-      #d6a900 68%,
-      #8c6b00 100%
+      var(--brand-pressed) 0%,
+      var(--brand-hover) 32%,
+      color-mix(in srgb, var(--brand) 45%, #ffffff) 50%,
+      var(--brand-hover) 68%,
+      var(--brand-pressed) 100%
     );
   background-size: 220% 100%;
   -webkit-background-clip: text;
@@ -3807,8 +3797,27 @@
 .provider-nav-tags {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
+  /* 固定标签行高：无「多模态」标签时也占位，避免列表项高度跳动 */
+  min-height: 18px;
   margin-top: 2px;
+}
+
+/* 选择态勾符号：常驻占位（未选中仅隐藏），不引起卡片高度变化 */
+.selection-check {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-right: 4px;
+  border-radius: 999px;
+  visibility: hidden;
+}
+
+.selection-check.is-active {
+  visibility: visible;
+  color: var(--ax-accent-active);
 }
 
 .provider-tag {
@@ -3999,17 +4008,7 @@
   font-weight: 700;
 }
 
-.appearance-resolved-hint {
-  margin-top: 18px;
-  color: var(--muted);
-  font-size: 10px;
-}
 
-.appearance-resolved-hint strong {
-  margin-left: 4px;
-  color: var(--ink);
-  font-weight: 700;
-}
 
 .settings-about-pane header {
   margin-bottom: 18px;
@@ -4083,14 +4082,14 @@
   margin: 16px 0;
   padding: 14px 16px;
   border-radius: 12px;
-  background: color-mix(in srgb, #ff453a 12%, var(--surface));
-  border: 1px solid color-mix(in srgb, #ff453a 30%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .update-error strong {
   display: block;
   margin-bottom: 6px;
-  color: #ff453a;
+  color: var(--danger);
   font-size: 12px;
 }
 
@@ -4119,8 +4118,8 @@
   margin: 16px 0;
   padding: 14px 16px;
   border-radius: 12px;
-  background: color-mix(in srgb, #34c759 10%, var(--surface));
-  border: 1px solid color-mix(in srgb, #34c759 24%, transparent);
+  background: color-mix(in srgb, var(--ax-success-fg) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--ax-success-fg) 24%, transparent);
 }
 
 .update-latest p {
@@ -4513,27 +4512,7 @@
 
 .provider-status-bar__state.is-error { color: var(--danger); }
 
-.provider-capabilities__hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--ax-type-caption-size);
-}
 
-/* AI 解析失败卡片：错误信息占满，重试按钮固定右侧 */
-.problem-ai-error-region {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.problem-ai-error-region .ax-error-state {
-  flex: 1;
-  min-width: 0;
-}
-
-.problem-ai-error-region__retry {
-  flex-shrink: 0;
-}
 
 .settings-save-row > span.is-dirty { color: var(--muted); font-style: italic; }
 
