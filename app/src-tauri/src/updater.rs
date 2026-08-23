@@ -614,7 +614,7 @@ fn find_bundle_binary(app_path: &Path) -> Result<PathBuf, String> {
         if path.is_file()
             && path
                 .file_name()
-                .map_or(false, |name| name.eq_ignore_ascii_case("axiom"))
+                .is_some_and(|name| name.eq_ignore_ascii_case("axiom"))
         {
             return Ok(path);
         }
