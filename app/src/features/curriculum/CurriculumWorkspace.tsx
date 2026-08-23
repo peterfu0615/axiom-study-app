@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import {
   AsyncState,
@@ -176,43 +176,49 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
     return () => { cancelled = true }
   }, [subject])
 
+  const treeSeqRef = useRef(0)
   const refreshTree = useCallback(async () => {
-    if (!textbookId) {
-      setNodes([])
-      setEdgeCount(0)
+    const seq = ++treeSeqRef.current
+    const targetTextbookId = textbookId
+    if (!targetTextbookId) {
+      if (treeSeqRef.current === seq) {
+        setNodes([])
+        setEdgeCount(0)
+      }
       return
     }
-    const [nextNodes, nextEdges] = await Promise.all([listKnowledgeNodes(textbookId), listKnowledgeEdges(textbookId)])
-    setNodes(nextNodes)
-    setEdgeCount(nextEdges.length)
-    setSelectedNodeId((current) => current && nextNodes.some((node) => node.id === current) ? current : nextNodes[0]?.id ?? null)
-    setExpanded((current) => new Set([...current, ...nextNodes.filter((node) => node.parentId === null).map((node) => node.id)]))
+    const [nextNodes, nextEdges] = await Promise.all([listKnowledgeNodes(targetTextbookId), listKnowledgeEdges(targetTextbookId)])
+    if (treeSeqRef.current === seq) {
+      setNodes(nextNodes)
+      setEdgeCount(nextEdges.length)
+      setSelectedNodeId((current) => current && nextNodes.some((node) => node.id === current) ? current : nextNodes[0]?.id ?? null)
+      setExpanded((current) => new Set([...current, ...nextNodes.filter((node) => node.parentId === null).map((node) => node.id)]))
+    }
   }, [textbookId])
 
   useEffect(() => {
-    // Switching textbooks triggers overlapping loads; only the latest one may
-    // paint the tree, otherwise a slow older response replaces it wholesale.
-    let cancelled = false
-    void refreshTree().catch((reason) => { if (!cancelled) setError(String(reason)) })
-    return () => { cancelled = true }
+    void refreshTree().catch((reason) => { setError(String(reason)) })
   }, [refreshTree])
 
+  const reviewCountSeqRef = useRef(0)
   const refreshReviewCount = useCallback(async () => {
-    if (!subject) {
-      setPendingReviewCount(0)
+    const seq = ++reviewCountSeqRef.current
+    const targetSubject = subject
+    const targetTextbookId = textbookId
+    if (!targetSubject) {
+      if (reviewCountSeqRef.current === seq) setPendingReviewCount(0)
       return
     }
     try {
-      setPendingReviewCount(await getCurriculumReviewCount(subject, textbookId))
+      const count = await getCurriculumReviewCount(targetSubject, targetTextbookId)
+      if (reviewCountSeqRef.current === seq) setPendingReviewCount(count)
     } catch (reason) {
-      setError(String(reason))
+      if (reviewCountSeqRef.current === seq) setError(String(reason))
     }
   }, [subject, textbookId])
 
   useEffect(() => {
-    let cancelled = false
-    void refreshReviewCount().catch((reason) => { if (!cancelled) setError(String(reason)) })
-    return () => { cancelled = true }
+    void refreshReviewCount().catch((reason) => { setError(String(reason)) })
   }, [refreshReviewCount])
 
   const handleReviewDataChanged = useCallback(() => {

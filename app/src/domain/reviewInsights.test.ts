@@ -108,6 +108,21 @@ describe('review insights', () => {
     expect(Object.values(result.mastery).flat().map((skill) => skill.subject)).toEqual(['数学'])
   })
 
+  it('isolates future-due skills from overdue skills in overview counts', () => {
+    const base = initialReviewSkillState()
+    const today = new Date(2026, 8, 2).getTime()
+    const result = buildReviewInsights({
+      records: [], rangeDays: 7, now: today, changes: [],
+      skills: [
+        { subject: '数学', tagId: 'overdue', name: '已逾期', type: 'knowledge', state: { ...base, nextReviewAt: today - 86_400_000 } },
+        { subject: '数学', tagId: 'future', name: '未来到期', type: 'knowledge', state: { ...base, nextReviewAt: today + 3 * 86_400_000 } },
+        { subject: '数学', tagId: 'distant', name: '远期', type: 'knowledge', state: { ...base, nextReviewAt: today + 15 * 86_400_000 } },
+      ],
+    })
+    expect(result.overview.overdueSkills).toBe(1)
+    expect(result.overview.futureDueSkills).toBe(1)
+  })
+
   it('aggregates thousands of historical snapshots without per-record queries', () => {
     const records = Array.from({ length: 3_000 }, (_, index) => record(
       `history-${index}`, index % 2 ? '2026-09-01' : '2026-09-02', index % 4 === 0 ? 'again' : 'good',

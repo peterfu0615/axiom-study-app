@@ -1255,55 +1255,6 @@
   opacity: 0.38;
 }
 
-.privacy-redaction-panel {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-raised) 86%, transparent);
-}
-
-.privacy-redaction-panel > div:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.privacy-redaction-panel small {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.privacy-redaction-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.privacy-redaction-actions button {
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  color: var(--muted-strong);
-  background: var(--surface);
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.privacy-redaction-actions button.active {
-  border-color: #8a7bb8;
-  color: var(--text);
-  background: color-mix(in srgb, #9d8bd3 18%, var(--surface));
-}
-
-.privacy-redaction-actions button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
 .image-upload-confirmation {
   display: grid;
   gap: 12px;

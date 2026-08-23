@@ -81,11 +81,13 @@ export function ProblemCropEditor({
       setOriginalRegions(loadedRegions)
       setRect(nextQuestion.rect)
       setActiveRegionId(nextQuestion.id)
-    }).catch((error) => notify(`读取区域失败：${String(error)}`, 'error'))
+    }).catch((error) => {
+      if (!cancelled) notify(`读取区域失败：${String(error)}`, 'error')
+    })
     return () => {
       cancelled = true
     }
-  }, [problem])
+  }, [notify, problem])
 
   const displayedPath =
     previewMode === 'corrected' && problem.correctedImagePath

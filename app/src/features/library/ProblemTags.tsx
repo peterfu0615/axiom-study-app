@@ -30,6 +30,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
   const [message, setMessage] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ type: HorizonTagType } | null>(null)
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
+  const reqSeqRef = useRef(0)
   // Two-step removal: the first click arms the ×, the second removes.
   // Prevents accidental one-click deletes; auto-disarms shortly after.
   const [armedTagId, setArmedTagId] = useState<string | null>(null)
@@ -61,24 +62,38 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
   }
 
   const refresh = useCallback(async () => {
-    if (!subjectId) { setTags([]); setDefinitions([]); setDifficulty(null); setAvailability('no_subject'); return }
+    const seq = ++reqSeqRef.current
+    const targetProblemId = problemId
+    const targetSubjectId = subjectId
+    if (!targetSubjectId) {
+      if (reqSeqRef.current === seq) {
+        setTags([])
+        setDefinitions([])
+        setDifficulty(null)
+        setAvailability('no_subject')
+      }
+      return
+    }
     const [nextTags, available, nextDifficulty] = await Promise.all([
-      listProblemTags(problemId), getAvailableHorizonTags(subjectId), getProblemDifficulty(problemId),
+      listProblemTags(targetProblemId),
+      getAvailableHorizonTags(targetSubjectId),
+      getProblemDifficulty(targetProblemId),
     ])
-    setTags(nextTags); setDefinitions(available.tags); setDifficulty(nextDifficulty); setAvailability(available.status)
-    setMessage(null)
+    if (reqSeqRef.current === seq) {
+      setTags(nextTags)
+      setDefinitions(available.tags)
+      setDifficulty(nextDifficulty)
+      setAvailability(available.status)
+      setMessage(null)
+    }
   }, [problemId, subjectId])
 
   useEffect(() => {
-    // Guard against out-of-order responses when switching problems quickly.
-    let cancelled = false
     setArmedTagId(null)
     void refresh().catch((error) => {
-      if (cancelled) return
       console.error('Horizon tag query failed', { problemId, subjectId, error })
       setMessage('标签加载失败，请稍后重试。')
     })
-    return () => { cancelled = true }
   }, [problemId, refresh, subjectId])
   useEffect(() => {
     const listener = (event: Event) => {

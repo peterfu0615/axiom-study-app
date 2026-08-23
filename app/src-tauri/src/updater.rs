@@ -37,6 +37,11 @@ const UPDATE_REPO: &str = match option_env!("UPDATE_REPO") {
     None => "axiom-study-app",
 };
 
+/// 获取最新 Release 下载页面 URL（遵循编译时配置的 owner 与 repo）。
+pub fn latest_release_page_url() -> String {
+    format!("https://github.com/{UPDATE_OWNER}/{UPDATE_REPO}/releases/latest")
+}
+
 // ────────────────────────────────────────────────────────────
 // 类型定义
 // ────────────────────────────────────────────────────────────

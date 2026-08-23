@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
@@ -126,6 +126,8 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
   const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
   const [forecastRange, setForecastRange] = useState<ForecastRange>(7)
+  const forecastRangeRef = useRef<ForecastRange>(7)
+  forecastRangeRef.current = forecastRange
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [todayAttempt, setTodayAttempt] = useState<PracticeAttempt | null>(null)
@@ -145,7 +147,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       // the practice-set lookup instead of waiting for both sequentially.
       const nextPlan = await getOrCreateTodayPlan()
       const [nextForecast, existingPracticeSet] = await Promise.all([
-        getReviewForecast(forecastRange),
+        getReviewForecast(forecastRangeRef.current),
         findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
       ])
       if (isCancelled()) return
@@ -154,7 +156,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
     finally { if (!isCancelled()) setLoading(false) }
-  }, [forecastRange])
+  }, [])
   useEffect(() => {
     let cancelled = false
     void load(() => cancelled)
@@ -171,7 +173,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     try {
       const next = await operation()
       setPlan(next ?? await refreshTodayPlan())
-      void refreshForecast(forecastRange)
+      void refreshForecast(forecastRangeRef.current)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }

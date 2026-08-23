@@ -115,10 +115,21 @@ export function CaptureWorkspace({
     const video = videoRef.current
     const canvas = previewCanvasRef.current
     let frameId = 0
+    let lastDrawTime = 0
     let lastOrientation: 'portrait' | 'landscape' | null = null
     let hasSuccessfulFrame = false
 
-    const draw = () => {
+    const draw = (now: number) => {
+      // 节流至 ~30fps 并在页面不可见时暂停绘制，大幅降低连续取景时的 GPU/CPU 占用
+      if (document.hidden) {
+        frameId = requestAnimationFrame(draw)
+        return
+      }
+      if (now - lastDrawTime < 32) {
+        frameId = requestAnimationFrame(draw)
+        return
+      }
+      lastDrawTime = now
       const canDrawFrame = Boolean(
         video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
         && video.videoWidth

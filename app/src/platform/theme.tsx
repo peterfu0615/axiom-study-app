@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
@@ -16,19 +14,9 @@ import {
   type ResolvedAppearance,
   type VisualTheme,
 } from './themeModel'
+import { ThemeContext } from './themeContext'
 
 export type { Appearance, ResolvedAppearance, VisualTheme } from './themeModel'
-
-interface ThemeContextValue {
-  appearance: Appearance
-  resolvedAppearance: ResolvedAppearance
-  visualTheme: VisualTheme
-  setAppearance: (appearance: Appearance) => void
-  setVisualTheme: (theme: VisualTheme) => void
-  toggle: () => void
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function getSystemAppearance(): ResolvedAppearance {
   if (typeof window === 'undefined') return 'light'
@@ -107,10 +95,4 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
   )
-}
-
-export function useTheme() {
-  const ctx = useContext(ThemeContext)
-  if (!ctx) throw new Error('useTheme must be used within ThemeProvider')
-  return ctx
 }

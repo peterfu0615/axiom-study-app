@@ -42,7 +42,7 @@ describe('capture privacy contracts', () => {
 
     expect(editor).toContain('确认发送题目图片')
     expect(editor).toContain('saveBlocks(false)')
-    expect(editor).toContain('redactions: privacyRedactions.map')
+    expect(editor).toContain('redactions: []')
     // 产品决策：题目解析不再弹出「确认发送题目图片」，重试/开始整理直接排队；
     // 采集保存流程（DocumentEditor）的披露确认保持不变。
     expect(library).not.toContain('setAIUploadConfirming')

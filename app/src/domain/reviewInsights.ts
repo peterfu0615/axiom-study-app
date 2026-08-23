@@ -187,6 +187,7 @@ export function buildReviewInsights(input: {
       deferredUnits: deferred.length,
       completionRate: actionable ? completed.length / actionable : null,
       futureDueSkills: skills.filter((skill) => skill.state.nextReviewAt !== null
+        && skill.state.nextReviewAt >= toStart
         && skill.state.nextReviewAt <= addLocalReviewDays(toStart, 7)).length,
       overdueSkills: skills.filter((skill) => skill.state.nextReviewAt !== null
         && skill.state.nextReviewAt < toStart).length,

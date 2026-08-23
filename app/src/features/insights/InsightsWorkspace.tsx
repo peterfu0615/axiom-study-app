@@ -120,15 +120,24 @@ export function InsightsWorkspace() {
   // Only the first paint shows the blocking spinner; range/subject switches
   // refresh in place so the charts do not flash away and back.
   const hasLoadedRef = useRef(false)
+  const loadSeqRef = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     if (!hasLoadedRef.current) setLoading(true)
     setError(null)
     try {
-      setInsights(await getReviewInsights(range, Date.now(), subject))
-      hasLoadedRef.current = true
+      const result = await getReviewInsights(range, Date.now(), subject)
+      if (loadSeqRef.current === seq) {
+        setInsights(result)
+        hasLoadedRef.current = true
+      }
     }
-    catch (reason) { setError(String(reason)) }
-    finally { setLoading(false) }
+    catch (reason) {
+      if (loadSeqRef.current === seq) setError(String(reason))
+    }
+    finally {
+      if (loadSeqRef.current === seq) setLoading(false)
+    }
   }, [range, subject])
   useEffect(() => { void load() }, [load])
   const totalRatings = useMemo(() => insights ? Object.values(insights.ratings).reduce((sum, count) => sum + count, 0) : 0, [insights])

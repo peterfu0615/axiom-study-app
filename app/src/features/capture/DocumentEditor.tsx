@@ -36,31 +36,6 @@ type RegionSelection = {
   answer: NormalizedRect | null
   diagram: NormalizedRect | null
 }
-type PrivacyRedactionKind = 'name' | 'school' | 'exam_number'
-type PrivacyRedaction = {
-  id: string
-  kind: PrivacyRedactionKind
-  label: string
-  rect: NormalizedRect
-}
-
-const privacyRedactionDefaults: Record<
-  PrivacyRedactionKind,
-  Omit<PrivacyRedaction, 'id' | 'kind'>
-> = {
-  name: {
-    label: '姓名',
-    rect: { x: 0.08, y: 0.035, width: 0.24, height: 0.055 },
-  },
-  school: {
-    label: '学校',
-    rect: { x: 0.36, y: 0.035, width: 0.28, height: 0.055 },
-  },
-  exam_number: {
-    label: '考号',
-    rect: { x: 0.68, y: 0.035, width: 0.24, height: 0.055 },
-  },
-}
 
 const processingStageCopy: Record<DocumentProcessingProgress['stage'], string> = {
   starting: '正在准备页面处理…',
@@ -123,7 +98,6 @@ export function DocumentEditor({
   >({})
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
-  const [privacyRedactions, setPrivacyRedactions] = useState<PrivacyRedaction[]>([])
   const [uploadConfirmationOpen, setUploadConfirmationOpen] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [pageDetected, setPageDetected] = useState<boolean | null>(null)
@@ -290,14 +264,6 @@ export function DocumentEditor({
   }
 
   const updateCanvasRect = (id: string, rect: NormalizedRect) => {
-    if (id.startsWith('privacy-')) {
-      setPrivacyRedactions((current) =>
-        current.map((redaction) =>
-          redaction.id === id ? { ...redaction, rect } : redaction,
-        ),
-      )
-      return
-    }
     const suffix = id.endsWith('-answer')
       ? 'answer'
       : id.endsWith('-diagram')
@@ -320,7 +286,6 @@ export function DocumentEditor({
 
   const activateCanvasRegion = (id: string) => {
     setActiveRegionId(id)
-    if (id.startsWith('privacy-')) return
     const blockId = id.endsWith('-answer')
       ? id.slice(0, -'-answer'.length)
       : id.endsWith('-diagram')
@@ -511,28 +476,6 @@ export function DocumentEditor({
     setDeleteArmed(false)
   }
 
-  const togglePrivacyRedaction = (kind: PrivacyRedactionKind) => {
-    const existing = privacyRedactions.find(
-      (redaction) => redaction.kind === kind,
-    )
-    if (existing) {
-      setPrivacyRedactions((current) =>
-        current.filter((redaction) => redaction.id !== existing.id),
-      )
-      if (activeRegionId === existing.id) setActiveRegionId(null)
-      return
-    }
-    const preset = privacyRedactionDefaults[kind]
-    const added: PrivacyRedaction = {
-      id: `privacy-${kind}-${createId()}`,
-      kind,
-      label: preset.label,
-      rect: { ...preset.rect },
-    }
-    setPrivacyRedactions((current) => [...current, added])
-    setActiveRegionId(added.id)
-  }
-
   const saveBlocks = async (queueAI: boolean) => {
     setSaving(true)
     setUploadConfirmationOpen(false)
@@ -546,7 +489,7 @@ export function DocumentEditor({
         regionSelections,
         {
           queueAI,
-          redactions: privacyRedactions.map((redaction) => redaction.rect),
+          redactions: [],
         },
       )
       if (queueAI) void runProblemAIWorker()
@@ -736,14 +679,6 @@ export function DocumentEditor({
                       }
                       return overlays
                     }),
-                    ...privacyRedactions.map((redaction) => ({
-                      id: redaction.id,
-                      rect: redaction.rect,
-                      label: `遮挡·${redaction.label}`,
-                      active: activeRegionId === redaction.id,
-                      selected: true,
-                      tone: 'annotation' as const,
-                    })),
                   ].sort(
                     (left, right) => Number(left.active) - Number(right.active),
                   )
@@ -822,33 +757,6 @@ export function DocumentEditor({
               全不选
             </button>
           </div>
-
-          <section className="privacy-redaction-panel" aria-label="图片隐私遮挡">
-            <div>
-              <strong>上传前遮挡</strong>
-              <small>遮挡会写入题块像素；原始页面仍只保存在本机。</small>
-            </div>
-            <div className="privacy-redaction-actions">
-              {(['name', 'school', 'exam_number'] as const).map((kind) => {
-                const preset = privacyRedactionDefaults[kind]
-                const enabled = privacyRedactions.some(
-                  (redaction) => redaction.kind === kind,
-                )
-                return (
-                  <button
-                    aria-pressed={enabled}
-                    className={enabled ? 'active' : ''}
-                    disabled={processing || saving}
-                    key={kind}
-                    onClick={() => togglePrivacyRedaction(kind)}
-                    type="button"
-                  >
-                    {enabled ? `移除${preset.label}遮挡` : `遮挡${preset.label}`}
-                  </button>
-                )
-              })}
-            </div>
-          </section>
 
           <div className="block-list">
             {blocks.map((block, index) => (

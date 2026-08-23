@@ -302,7 +302,7 @@ export function sanitizeAIOutputText(text: string | null | undefined): string {
   if (earliestCut >= 0) {
     // 往前找，如果前面是 / 或 _ 或空格，也一起截掉
     let cutStart = earliestCut
-    while (cutStart > 0 && /[\/_\s]/.test(cleaned[cutStart - 1])) {
+    while (cutStart > 0 && /[/_\s]/.test(cleaned[cutStart - 1])) {
       cutStart -= 1
     }
     cleaned = cleaned.slice(0, cutStart).trim()

@@ -112,15 +112,15 @@ export interface CurriculumStageProviderResult {
 }
 
 export const VISION_MODEL_REQUIRED =
-  '当前模型不支持图片输入，请选择支持视觉的 VLM Provider。'
+  '当前模型不支持图片输入，请在「设置 → AI 模型」中勾选多模态（支持图片识别）。'
 export const TEXT_MODEL_REQUIRED =
-  '没有可用的文本 Provider，请在设置中启用 supportsText 的 Provider（LLM 或多模态 VLM）。'
+  '没有可用的模型服务，请在「设置 → AI 模型」中添加并配置模型。'
 export const SOLUTION_PROVIDER_REQUIRED =
-  '没有可用的 Solution Provider，请在设置中启用 supportsText 的 Provider（正解生成等文字任务由 LLM 承担）。'
+  '没有可用的模型服务，请在「设置 → AI 模型」中配置模型以生成正解。'
 export const INTELLIGENCE_PROVIDER_REQUIRED =
-  '没有可用的 Intelligence Provider，请在设置中启用 supportsText 的 Provider。'
+  '没有可用的模型服务，请在「设置 → AI 模型」中配置模型以分析作答与错因。'
 export const VISION_PROVIDER_REQUIRED =
-  '没有可用的视觉 Provider，请在设置中启用 supportsVision 的 VLM Provider 后再进行图片识别。'
+  '没有可用的多模态模型，请在「设置 → AI 模型」中为模型勾选「多模态（支持图片识别）」。'
 
 export interface AIProviderResult {
   analysis: AIProblemAnalysis

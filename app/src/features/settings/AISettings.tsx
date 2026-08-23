@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { configureAIProviders } from '../../ai/provider'
-import { useTheme, type Appearance } from '../../platform/theme'
+import { useTheme } from '../../platform/useTheme'
+import type { Appearance } from '../../platform/theme'
 import { VISUAL_THEME_LABELS, VISUAL_THEME_SWATCHES, VISUAL_THEMES } from '../../platform/themeModel'
 import { getAppVersion } from '../../platform/native'
 import type {
