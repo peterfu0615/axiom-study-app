@@ -2944,10 +2944,10 @@ export async function completeProblemAIModelRun(
            AND status = 'saved'
            AND deleted_at IS NULL`,
         [
-          analysis.title,
-          analysis.subject,
-          analysis.problemType,
-          analysis.stemMarkdown,
+          analysis.title.trim() || null,
+          analysis.subject.trim() || null,
+          analysis.problemType.trim() || null,
+          analysis.stemMarkdown.trim() || null,
           JSON.stringify(analysis.choices),
           JSON.stringify(analysis.subQuestions),
           analysis.hasDiagram ? 1 : 0,

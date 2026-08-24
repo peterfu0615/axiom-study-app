@@ -46,6 +46,7 @@ import {
   buildLockedTextbookPromptSection,
   buildResolvedTextbookPromptSection,
   problemAnalysisAntigravityJSONSchema,
+  problemAnalysisJSONSchema,
 } from './problemAnalysisContract'
 import {
   parseProblemAnalysis,
@@ -484,7 +485,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         providerId: this.profile.id,
         cropImagePath: input.cropImagePath,
         prompt: PROBLEM_ANALYSIS_PROMPT,
-        jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
+        jsonSchema: JSON.stringify(problemAnalysisJSONSchema),
       })
     if (response.errorMessage || response.error) {
       throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
@@ -525,7 +526,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         diagramImagePaths: input.diagramImagePaths,
         answerImagePaths: input.answerImagePaths,
       })}\n</regions_json>${buildProblemTextbookPromptSection(input)}`,
-      jsonSchema: JSON.stringify(problemAnalysisAntigravityJSONSchema),
+      jsonSchema: JSON.stringify(problemAnalysisJSONSchema),
     })
     if (response.errorMessage || response.error) {
       throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)

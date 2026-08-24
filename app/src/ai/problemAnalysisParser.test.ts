@@ -111,15 +111,20 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.repairStrategy).toBeNull()
   })
 
-  it.each(['level', 'reason'] as const)(
-    'still rejects a difficulty object without %s',
-    (field) => {
-      const difficulty = { ...valid.difficulty }
-      delete (difficulty as Record<string, unknown>)[field]
-      expect(() => parseProblemAnalysis(JSON.stringify({ ...valid, difficulty })))
-        .toThrow(ProblemAnalysisParseError)
-    },
-  )
+  it('drops a difficulty object without a valid level', () => {
+    const difficulty = { ...valid.difficulty } as Record<string, unknown>
+    delete difficulty.level
+    const parsed = parseProblemAnalysis(JSON.stringify({ ...valid, difficulty }))
+    expect(parsed.analysis.difficulty).toBeNull()
+    expect(parsed.analysis.warnings.join('')).toContain('难度字段格式异常')
+  })
+
+  it('keeps a valid difficulty level when only its explanation is missing', () => {
+    const difficulty = { ...valid.difficulty } as Record<string, unknown>
+    delete difficulty.reason
+    const parsed = parseProblemAnalysis(JSON.stringify({ ...valid, difficulty }))
+    expect(parsed.analysis.difficulty).toMatchObject({ level: 'basic', reason: '' })
+  })
 
   it('normalizes an optional textbook hint without requiring a second AI call', () => {
     const parsed = parseProblemAnalysis(JSON.stringify({
@@ -168,7 +173,7 @@ describe('parseProblemAnalysis', () => {
 
   it('declares the constrained knowledge rule and bumps the prompt version', () => {
     expect(PROBLEM_ANALYSIS_PROMPT_VERSION).toBe(
-      'problem-understanding-v9-simplified-tags',
+      'problem-understanding-v10-resilient-contract',
     )
     // 教材对齐与受控 ID 规则必须存在，且 textbook_hint 可缺省语义保持不变
     expect(PROBLEM_ANALYSIS_PROMPT).toContain('locked_textbook_json')
@@ -315,12 +320,31 @@ describe('parseProblemAnalysis', () => {
     expect(parsed.analysis.warnings.join('')).toContain('边界格式异常')
   })
 
-  it('rejects schema violations instead of fabricating content', () => {
-    expect(() =>
-      parseProblemAnalysis(
-        JSON.stringify({ ...valid, confidence: 2, choices: 'A' }),
-      ),
-    ).toThrow(ProblemAnalysisParseError)
+  it('drops a malformed optional field without discarding readable content', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({ ...valid, confidence: 2, choices: 'A' }))
+    expect(parsed.analysis.stemMarkdown).toBe(valid.stem_markdown)
+    expect(parsed.analysis.choices).toEqual([])
+    expect(parsed.analysis.warnings.join('')).toContain('选项字段格式异常')
+  })
+
+  it('repairs the legacy DeepSeek tag and sub-question shapes field by field', () => {
+    const parsed = parseProblemAnalysis(JSON.stringify({
+      ...valid,
+      sub_questions: [{ index: 1, text: '求参数范围。' }],
+      knowledge_tags: [{ name: '一次函数', primary: true, secondary: false, evidence: '斜率为正', source: '题面' }],
+      unresolved_knowledge_candidates: ['一元一次不等式'],
+      method_tags: [{ name: '待定系数法', primary: true, evidence: '代入两点', source: '第(1)问' }],
+    }))
+    expect(parsed.analysis.subQuestions).toEqual([{ index: 1, content: '求参数范围。' }])
+    expect(parsed.analysis.knowledgeTags?.[0]).toMatchObject({ role: 'primary', source: 'problem' })
+    expect(parsed.analysis.unresolvedKnowledgeCandidates?.[0]).toMatchObject({ name: '一元一次不等式', role: 'secondary' })
+    expect(parsed.analysis.methodTags?.[0]).toMatchObject({ role: 'primary', source: 'problem' })
+    expect(parsed.repairStrategy).toContain('canonicalize-schema-fields')
+  })
+
+  it('rejects an object with no readable stem or sub-question so another provider can run', () => {
+    expect(() => parseProblemAnalysis(JSON.stringify({ ...valid, stem_markdown: null, sub_questions: [] })))
+      .toThrow(ProblemAnalysisParseError)
   })
 
   it('rejects an unterminated JSON string', () => {

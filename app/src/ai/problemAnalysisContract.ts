@@ -2,7 +2,7 @@ import problemAnalysisSchema from './problemAnalysis.schema.json'
 import type { LockedTextbookContext, ResolvedTextbookContext } from '../domain/models'
 
 export const PROBLEM_ANALYSIS_SCHEMA_VERSION = 'problem-analysis-v6-simplified-tags'
-export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v9-simplified-tags'
+export const PROBLEM_ANALYSIS_PROMPT_VERSION = 'problem-understanding-v10-resilient-contract'
 
 export const problemAnalysisJSONSchema = problemAnalysisSchema
 
@@ -111,7 +111,7 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
 4. 分式、根号、上下标、方程、函数表达式，以及角、三角形、平行、垂直等几何关系均优先使用 LaTeX。
 5. stem_markdown 只保存公共题干；不得重复 choices 或 sub_questions。
 6. 选择题选项只放在 choices，格式为 {"label":"A","text":"..."}；不是选择题时返回 []。
-7. 有明确小问时分别放在 sub_questions，index 从 1 开始；没有小问时返回 []。
+7. 有明确小问时分别放在 sub_questions，只能使用 {"index":1,"content":"..."}，禁止使用 text 字段；没有小问时返回 []。
 8. title 是错题库短标题，使用“知识点-题型-核心考察内容”结构，建议不超过 16 个中文字符，
    不得直接摘抄题干，不得包含题号、分数或无意义前缀。
 9. diagram 表示题目中是否存在需要独立展示并自动抠出的几何图、函数图、坐标图、统计图、表格或其他解题图形。
@@ -121,7 +121,9 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
    不要把公式、普通文字或选项框误判为图形。没有图形时 diagram 为 {"exists":false,"kind":null,"bbox":null}。
 10. 可选的附加答案/图形图片只用于补充识别，Problem Analysis 不得评价学生正误。
 11. 发现裁图残缺、模糊或信息矛盾时写入 warnings；不要输出概率或置信度字段。
-12. 返回 knowledge_tags、method_tags、model_tags。每项必须给出 primary/secondary、题面依据和来源。
+12. 返回 knowledge_tags、method_tags、model_tags。每项只能使用
+    {"canonical_tag_id":null,"name":"...","role":"primary | secondary","evidence":"...","source":"problem | solution | student_attempt | textbook_hint"}。
+    role 表示主次，禁止输出 primary:true、secondary:true；source 必须使用上述英文枚举，禁止输出“题面”“整题”“解题”等中文值。
     当附加上下文提供 <resolved_textbook_context_json> 时，knowledge_tags 优先从其中选择 canonical_tag_id；
     canonical_tag_id 必须逐字复制候选 ID，不得改写或虚构。候选中没有对应知识点时，将其放入
     unresolved_knowledge_candidates，canonical_tag_id 返回 null。method/model/error 不得伪装成教材知识节点。
@@ -161,6 +163,17 @@ export const PROBLEM_ANALYSIS_PROMPT = String.raw`
   "error_categories": [],
   "textbook_hint": null,
   "warnings": []
+}
+
+字段形状示例（内容仅示意，不得照抄）：
+{
+  "sub_questions": [{"index": 1, "content": "求 $x$ 的值。"}],
+  "diagram": {"exists": false, "kind": null, "bbox": null},
+  "knowledge_tags": [{"canonical_tag_id": null, "name": "一元一次方程", "role": "primary", "evidence": "题干要求解方程", "source": "problem"}],
+  "unresolved_knowledge_candidates": [],
+  "method_tags": [{"canonical_tag_id": null, "name": "移项", "role": "primary", "evidence": "解题需要移项", "source": "solution"}],
+  "model_tags": [],
+  "difficulty": {"level": "basic", "score": null, "reason": "直接应用基本规则"}
 }
 `.trim()
 

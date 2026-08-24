@@ -155,47 +155,131 @@ function canonicalizeAnalysis(value: unknown) {
   for (const [key, fallback] of Object.entries(defaults)) {
     if (source[key] === undefined) source[key] = fallback
   }
-  if (
-    source.diagram !== null &&
-    (typeof source.diagram !== 'object' || Array.isArray(source.diagram))
-  ) {
+  const repairWarnings = Array.isArray(source.warnings)
+    ? source.warnings.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    : []
+  const warn = (message: string) => {
+    if (!repairWarnings.includes(message)) repairWarnings.push(message)
+  }
+
+  for (const key of ['title', 'subject', 'problem_type', 'stem_markdown']) {
+    if (source[key] !== null && typeof source[key] !== 'string') {
+      source[key] = null
+      warn(`模型 ${key} 字段格式异常，已忽略`)
+    }
+  }
+  if (!Array.isArray(source.choices)) {
+    source.choices = []
+    warn('模型选项字段格式异常，已忽略')
+  } else {
+    const original = source.choices
+    const normalized = original.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      const candidate = item as Record<string, unknown>
+      return typeof candidate.label === 'string' && candidate.label.trim() &&
+        typeof candidate.text === 'string' && candidate.text.trim()
+        ? [{ label: candidate.label.trim(), text: candidate.text.trim() }]
+        : []
+    })
+    source.choices = normalized
+    if (normalized.length !== original.length) warn('部分选项格式异常，已忽略无效项')
+  }
+  if (!Array.isArray(source.sub_questions)) {
+    source.sub_questions = []
+    warn('模型小问字段格式异常，已忽略')
+  } else {
+    const original = source.sub_questions
+    const normalized = original.flatMap((item, position) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      const candidate = item as Record<string, unknown>
+      const content = candidate.content ?? candidate.text
+      const index = Number(candidate.index)
+      return typeof content === 'string' && content.trim()
+        ? [{ index: Number.isInteger(index) && index > 0 ? index : position + 1, content: content.trim() }]
+        : []
+    })
+    source.sub_questions = normalized
+    if (normalized.length !== original.length || original.some((item) => Boolean(item && typeof item === 'object' && !Array.isArray(item) && 'text' in item))) {
+      warn('部分小问字段已安全修复或忽略')
+    }
+  }
+  if (source.diagram !== null && (typeof source.diagram !== 'object' || Array.isArray(source.diagram))) {
     source.diagram = null
-    const warnings = Array.isArray(source.warnings) ? source.warnings : []
-    source.warnings = [...warnings, '模型图形字段格式异常，已降级为 null']
+    warn('模型图形字段格式异常，已降级为 null')
   }
   if (source.diagram && typeof source.diagram === 'object') {
-    const diagram = { ...(source.diagram as Record<string, unknown>) }
-    if (diagram.kind === undefined) diagram.kind = null
-    source.diagram = diagram
+    const candidate = source.diagram as Record<string, unknown>
+    const exists = candidate.exists === true
+    const kind = ['geometry', 'function', 'chart', 'table', 'other'].includes(String(candidate.kind))
+      ? candidate.kind : null
+    const bbox = candidate.bbox && typeof candidate.bbox === 'object' && !Array.isArray(candidate.bbox)
+      ? candidate.bbox : null
+    source.diagram = { exists, kind: exists ? kind : null, bbox: exists ? bbox : null }
+    if (exists && (!kind || !bbox)) warn('模型图形类型或边界不完整，已保留可用部分')
   }
   if (source.textbook_hint && typeof source.textbook_hint === 'object' && !Array.isArray(source.textbook_hint)) {
-    const hint = { ...(source.textbook_hint as Record<string, unknown>) }
-    for (const key of ['title', 'grade', 'volume', 'publisher', 'edition']) {
-      if (hint[key] === undefined) hint[key] = null
+    const hint = source.textbook_hint as Record<string, unknown>
+    source.textbook_hint = {
+      title: typeof hint.title === 'string' ? hint.title : null,
+      grade: typeof hint.grade === 'string' ? hint.grade : null,
+      volume: typeof hint.volume === 'string' ? hint.volume : null,
+      publisher: typeof hint.publisher === 'string' ? hint.publisher : null,
+      edition: typeof hint.edition === 'string' ? hint.edition : null,
+      evidence: typeof hint.evidence === 'string' ? hint.evidence : '',
     }
-    if (hint.evidence === undefined) hint.evidence = ''
-    source.textbook_hint = hint
+  } else if (source.textbook_hint !== null) {
+    source.textbook_hint = null
+    warn('模型教材线索格式异常，已忽略')
   }
-  // v5 and older ModelRuns may contain confidence fields. They remain
-  // readable, but the active v6 contract deliberately ignores them before
-  // validating the simplified shape.
-  delete source.confidence
+
+  if (!Array.isArray(source.knowledge_points)) source.knowledge_points = []
+  else source.knowledge_points = source.knowledge_points.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim())
+
+  const sourceAliases: Record<string, 'problem' | 'solution' | 'student_attempt' | 'textbook_hint'> = {
+    problem: 'problem', '题面': 'problem', '整题': 'problem', solution: 'solution', '解题': 'solution',
+    student_attempt: 'student_attempt', '学生作答': 'student_attempt', textbook_hint: 'textbook_hint', '教材': 'textbook_hint',
+  }
   for (const key of ['knowledge_tags', 'unresolved_knowledge_candidates', 'method_tags', 'model_tags', 'error_categories']) {
-    if (!Array.isArray(source[key])) continue
-    source[key] = (source[key] as unknown[]).map((item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return item
-      const copy = { ...(item as Record<string, unknown>) }
-      delete copy.confidence
-      return copy
+    if (!Array.isArray(source[key])) { source[key] = []; warn(`模型 ${key} 字段格式异常，已忽略`); continue }
+    const original = source[key] as unknown[]
+    const usedLegacyShape = original.some((item) => typeof item === 'string' || Boolean(item && typeof item === 'object' && !Array.isArray(item) && ('primary' in item || 'secondary' in item)))
+    const normalized = original.flatMap((item) => {
+      const candidate = typeof item === 'string' ? { name: item } :
+        item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null
+      if (!candidate || typeof candidate.name !== 'string' || !candidate.name.trim()) return []
+      const sourceValue = typeof candidate.source === 'string' ? candidate.source : ''
+      const normalizedSource = sourceAliases[sourceValue] ?? 'problem'
+      const canonicalTagId = candidate.canonical_tag_id ?? candidate.canonicalTagId
+      return [{
+        canonical_tag_id: typeof canonicalTagId === 'string' && canonicalTagId.trim()
+          ? canonicalTagId.trim() : null,
+        name: candidate.name.trim(),
+        role: candidate.role === 'primary' || candidate.primary === true ? 'primary' : 'secondary',
+        evidence: typeof candidate.evidence === 'string' ? candidate.evidence : '',
+        source: normalizedSource,
+      }]
     })
+    source[key] = normalized
+    if (normalized.length !== original.length || usedLegacyShape) {
+      warn(`部分 ${key} 标签已安全修复或忽略`)
+    }
   }
-  for (const key of ['difficulty', 'textbook_hint']) {
-    const item = source[key]
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-    const copy = { ...(item as Record<string, unknown>) }
-    delete copy.confidence
-    source[key] = copy
+  if (source.difficulty && typeof source.difficulty === 'object' && !Array.isArray(source.difficulty)) {
+    const difficulty = source.difficulty as Record<string, unknown>
+    if (['basic', 'intermediate', 'advanced'].includes(String(difficulty.level))) {
+      source.difficulty = {
+        level: difficulty.level,
+        score: typeof difficulty.score === 'number' && Number.isFinite(difficulty.score) && difficulty.score >= 0 && difficulty.score <= 1 ? difficulty.score : null,
+        reason: typeof difficulty.reason === 'string' ? difficulty.reason : '',
+      }
+    } else { source.difficulty = null; warn('模型难度字段格式异常，已忽略') }
+  } else if (source.difficulty !== null) {
+    source.difficulty = null
+    warn('模型难度字段格式异常，已忽略')
   }
+  source.warnings = repairWarnings
+  const allowed = new Set([...Object.keys(defaults), 'unresolved_knowledge_candidates'])
+  for (const key of Object.keys(source)) if (!allowed.has(key)) delete source[key]
   return source
 }
 
@@ -444,8 +528,15 @@ export function parseProblemAnalysis(rawOutput: string): ParsedProblemAnalysis {
     )
   }
 
+  const analysis = normalizeAIProblemAnalysis(parsed)
+  if (!analysis.stemMarkdown.trim() && analysis.subQuestions.length === 0) {
+    throw new ProblemAnalysisParseError(
+      '模型 JSON 不符合 Schema：/stem_markdown 与 /sub_questions 均没有可读题目内容',
+      strategies.length ? strategies.join(',') : null,
+    )
+  }
   return {
-    analysis: normalizeAIProblemAnalysis(parsed),
+    analysis,
     repairStrategy: strategies.length ? strategies.join(',') : null,
   }
 }

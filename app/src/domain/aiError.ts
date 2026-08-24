@@ -69,7 +69,7 @@ const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
   },
   SCHEMA_VALIDATION_ERROR: {
     title: '模型结果格式不符合要求', userMessage: '模型结果缺少必要字段或字段类型错误，可以重新尝试。',
-    retryable: false, fallbackAllowed: false,
+    retryable: false, fallbackAllowed: true,
   },
   MAPPING_ERROR: {
     title: '知识标签映射失败', userMessage: '题目分析已返回，但无法安全映射到教材知识体系。',
