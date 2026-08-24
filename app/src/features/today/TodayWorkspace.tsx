@@ -359,7 +359,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       </section>}
       {plan && plan.units.length === 0 ? <EmptyState
         action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}
-        description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。"
+        description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。生成练习时会优先创建并审校变式题，失败则安全回退原题。"
         icon={<Icon name="today" size={22} />}
         secondaryAction={<><Button onClick={() => onNavigate('library')} variant="secondary">前往错题库</Button><Button onClick={() => onNavigate('curriculum')} variant="ghost">查看课程</Button></>}
         title="今天暂时没有学习安排"

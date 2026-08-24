@@ -513,15 +513,17 @@ export function ProblemLibrary() {
   const selectedHasDisplayDiagram =
     Boolean(selectedDiagramRect) &&
     Boolean(selected?.cropImagePath || selectedDiagramPath)
-  const variantPrerequisite = !selected?.stemMarkdown?.trim()
-    ? '请先补全题干'
-    : !solution || solution.status !== 'completed'
-      ? '请先生成有效解答'
-      : !selected.libraryMetadata.difficulty
-        ? '请先确认题目难度'
-        : !selected.libraryMetadata.tags.some((tag) => tag.id && tag.type !== 'error')
-          ? '请先确认至少一个知识、方法或模型标签'
-          : null
+  const variantMissingItems = [
+    !selected?.stemMarkdown?.trim() ? '完整题干' : null,
+    !solution || solution.status !== 'completed' ? '有效解答' : null,
+    !selected?.libraryMetadata.difficulty ? '题目难度' : null,
+    !selected?.libraryMetadata.tags.some((tag) => tag.id && tag.type !== 'error')
+      ? '至少一个已确认知识、方法或模型标签'
+      : null,
+  ].filter((item): item is string => Boolean(item))
+  const variantPrerequisite = variantMissingItems.length
+    ? `生成变式前还需：${variantMissingItems.join('、')}`
+    : null
   const selectedIsProcessing =
     selected?.aiStatus === 'pending' || selected?.aiStatus === 'processing'
   const activeModelRun =
@@ -1263,15 +1265,6 @@ export function ProblemLibrary() {
                     <>
                       <button
                         className="secondary-action"
-                        disabled={updating || variantBusy || Boolean(variantPrerequisite)}
-                        onClick={() => void generateSingleVariant()}
-                        title={variantPrerequisite ?? '生成并独立审校一道变式题'}
-                        type="button"
-                      >
-                        {variantBusy ? '生成中…' : '生成变式'}
-                      </button>
-                      <button
-                        className="secondary-action"
                         disabled={updating}
                         onClick={cancelEditing}
                         type="button"
@@ -1289,6 +1282,15 @@ export function ProblemLibrary() {
                     </>
                   ) : (
                     <>
+                      <button
+                        className="secondary-action"
+                        disabled={updating || variantBusy || Boolean(variantPrerequisite)}
+                        onClick={() => void generateSingleVariant()}
+                        title={variantPrerequisite ?? '生成并独立审校一道变式题'}
+                        type="button"
+                      >
+                        {variantBusy ? '生成中…' : '生成变式'}
+                      </button>
                       <IconButton
                         aria-pressed={selected.libraryMetadata.favorite}
                         className={selected.libraryMetadata.favorite ? 'is-favorite' : ''}
@@ -1333,6 +1335,9 @@ export function ProblemLibrary() {
                   )}
                 </div>
               </div>
+              {!editing && !selected.deletedAt && variantPrerequisite && (
+                <p className="problem-variant-prerequisite" role="status">{variantPrerequisite}</p>
+              )}
 
               {editing ? (
                 <div className="problem-detail-content">

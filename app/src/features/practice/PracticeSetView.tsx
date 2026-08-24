@@ -39,6 +39,16 @@ const baseDocumentTabs: Array<{ value: PracticePdfSection; label: string }> = [
   { value: 'solution', label: '解析' },
 ]
 
+function variantFallbackReason(code: string) {
+  if (code.includes('no_variant_provider')) return '没有可用的变式生成模型'
+  if (code.includes('no_variant_verification_provider')) return '没有可用的独立审校模型'
+  if (code.includes('missing_confirmed_target_tags')) return '原题缺少已确认目标标签'
+  if (code.includes('missing_required_solution_steps')) return '原题解答缺少必要步骤'
+  if (code.includes('diagram') || code.includes('geometry')) return '图形一致性没有通过校验'
+  if (code.includes('provider') || code.includes('REQUEST_')) return '模型请求未能安全完成'
+  return '变式没有通过答案、难度、标签或必要步骤校验'
+}
+
 function ResultCorrection({ response, item, onChange, onError }: {
   response: PracticeCapturedResponse
   item: PracticeItem
@@ -145,6 +155,10 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     : baseDocumentTabs, [practiceSet.sessionMode, practiceSet.sessionSettings?.includeAnswerSheet])
   const generatedVariantCount = Number(practiceSet.generationMetadata.generatedVariantCount ?? 0)
   const fallbackCount = Number(practiceSet.generationMetadata.fallbackCount ?? 0)
+  const fallbackReasons = [...new Set(practiceSet.items.flatMap((item) => {
+    const code = item.generationMetadata?.variantFallbackCode
+    return typeof code === 'string' && code ? [variantFallbackReason(code)] : []
+  }))]
 
   useEffect(() => {
     let cancelled = false
@@ -426,6 +440,10 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       title="本次练习"
     />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
+    {fallbackCount > 0 && <InlineNotice feedback={{
+      tone: 'warning',
+      message: `${fallbackCount} 道题已安全回退原题：${fallbackReasons.join('；') || '变式未通过完整校验'}。`,
+    }} />}
     <section className="practice-result-summary">
       <div><span>得分</span><strong>{score}</strong><small>/ 100</small></div>
       <div><span>答对</span><strong>{correct}</strong><small>/ {results.length}</small></div>

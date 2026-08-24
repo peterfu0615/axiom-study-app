@@ -1869,6 +1869,14 @@
   white-space: nowrap;
 }
 
+.problem-variant-prerequisite {
+  margin: -10px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: right;
+}
+
 .problem-detail-image {
   width: 100%;
   min-height: 240px;
