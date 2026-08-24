@@ -65,9 +65,11 @@ fn build_vision_helper() {
     use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 
     println!("cargo:rerun-if-changed=native/AxiomVision.swift");
+    println!("cargo:rerun-if-changed=native/AxiomVision-Info.plist");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let source = manifest_dir.join("native/AxiomVision.swift");
+    let info_plist = manifest_dir.join("native/AxiomVision-Info.plist");
     let target = env::var("TARGET").expect("missing Cargo target triple");
     println!("cargo:rustc-env=AXIOM_TARGET={target}");
     let binaries = manifest_dir.join("binaries");
@@ -81,7 +83,7 @@ fn build_vision_helper() {
     fs::create_dir_all(&binaries).expect("failed to create native binary directory");
 
     let build_script = manifest_dir.join("build.rs");
-    if vision_helper_needs_rebuild(&output, &[&source, &build_script]) {
+    if vision_helper_needs_rebuild(&output, &[&source, &info_plist, &build_script]) {
         let status = Command::new("xcrun")
             .args([
                 "swiftc",
@@ -100,6 +102,14 @@ fn build_vision_helper() {
                 "AVFoundation",
                 "-framework",
                 "PDFKit",
+                "-Xlinker",
+                "-sectcreate",
+                "-Xlinker",
+                "__TEXT",
+                "-Xlinker",
+                "__info_plist",
+                "-Xlinker",
+                info_plist.to_str().unwrap(),
             ])
             .status()
             .expect("failed to invoke swiftc for the Vision helper");
