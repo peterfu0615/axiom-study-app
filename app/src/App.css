@@ -55,6 +55,7 @@
 }
 
 .brand-icon text {
+  font-family: var(--ax-font-reading);
   letter-spacing: .5px;
 }
 
@@ -2358,6 +2359,7 @@
 
 .problem-sub-question-content {
   min-width: 0;
+  font-family: var(--ax-font-reading);
   font-size: 14px;
   line-height: 22px;
 }
@@ -2517,6 +2519,10 @@
   overflow-wrap: anywhere;
 }
 
+.problem-solution-content {
+  font-family: var(--ax-font-reading);
+}
+
 .problem-solution-content .katex-display,
 .student-attempt-content .katex-display,
 .solution-formula-list .katex-display {
@@ -2639,6 +2645,7 @@
 .reasoning-text {
   margin: 0;
   color: var(--muted);
+  font-family: var(--ax-font-reading);
   font-size: 10px;
   line-height: 15px;
 }
@@ -3076,6 +3083,7 @@
 
 .explain-result-content {
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 13px;
   line-height: 1.7;
 }

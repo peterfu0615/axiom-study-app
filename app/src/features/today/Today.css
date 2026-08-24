@@ -66,7 +66,7 @@
 .today-question { max-width: 780px; width: 100%; margin: var(--ax-space-9) auto 0; padding: var(--ax-space-9) 0; border-bottom: 1px solid var(--ax-border-default); }
 .today-question__index { color: var(--ax-accent-ink); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); }
 .today-question h1 { margin: var(--ax-space-5) 0 var(--ax-space-8); color: var(--ax-text-primary); font-size: var(--ax-type-page-size); line-height: var(--ax-type-page-line); }
-.today-question__stem { color: var(--ax-text-primary); font-size: var(--ax-type-body-size); line-height: 1.75; overflow-wrap: anywhere; }
+.today-question__stem { color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-body-size); line-height: 1.75; overflow-wrap: anywhere; }
 .today-question__image { display: block; width: auto; max-width: 100%; max-height: min(62vh, 680px); margin: 0 0 var(--ax-space-6); object-fit: contain; object-position: left top; border-radius: var(--ax-radius-sm); }
 .today-question__image--diagram { max-height: 360px; }
 .today-question__stem > :first-child, .today-solution__content > :first-child { margin-top: 0; }
@@ -76,7 +76,7 @@
 .today-answer-gate p, .today-rating p, .today-solution__empty { margin: 0; color: var(--ax-text-secondary); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .today-answer-gate .ax-button { margin-top: var(--ax-space-4); }
 .today-solution { display: grid; gap: var(--ax-space-7); }
-.today-solution__content { padding: var(--ax-space-6) 0; color: var(--ax-text-primary); font-size: var(--ax-type-body-size); line-height: 1.75; }
+.today-solution__content { padding: var(--ax-space-6) 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-body-size); line-height: 1.75; }
 .today-rating { display: grid; gap: var(--ax-space-5); padding-top: var(--ax-space-7); border-top: 1px solid var(--ax-border-default); }
 .today-rating > div:first-child { display: grid; gap: var(--ax-space-2); }
 .today-rating__options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--ax-space-4); }

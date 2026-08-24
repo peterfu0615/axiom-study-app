@@ -108,6 +108,18 @@
   --ax-motion-instant: 80ms;
   --ax-motion-fast: 140ms;
   --ax-motion-standard: 180ms;
+  /* Semantic font roles: interface chrome stays neutral and efficient, while
+     problem statements and AI explanations use a more editorial reading face. */
+  --ax-font-ui:
+    "Inter", "Sarasa Gothic SC", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    ui-sans-serif, sans-serif;
+  --ax-font-reading:
+    "Sentient", "Source Han Serif SC", "Noto Serif SC", "Songti SC", Georgia,
+    "Times New Roman", serif;
+  --ax-font-mono:
+    "SFMono-Regular", "Sarasa Mono SC", "JetBrains Mono", Menlo, Monaco,
+    Consolas, ui-monospace, monospace;
   /* macOS typography primitives. Sizes follow Apple's built-in text-style
      hierarchy; leading is opened slightly where Chinese body copy needs it. */
   --ax-type-large-title-size: 26px;
@@ -171,9 +183,7 @@
   --ax-type-caption-weight: 500;
   color: var(--ink);
   background: var(--canvas);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, sans-serif;
+  font-family: var(--ax-font-ui);
   font-synthesis: none;
   font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
@@ -424,6 +434,11 @@ select {
 input,
 textarea {
   font-family: inherit;
+}
+
+code,
+pre {
+  font-family: var(--ax-font-mono);
 }
 
 button:focus-visible,
