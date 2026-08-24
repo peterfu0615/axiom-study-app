@@ -3,6 +3,8 @@ import type { ReviewSessionMode, ReviewSessionSettings, ReviewSkillState, Review
 
 export const PRACTICE_PLANNER_VERSION = 'deterministic-v1'
 
+export type VariantGenerationMode = 'variant_preferred' | 'original_only'
+
 export type PracticeSourceType = 'review_unit' | 'skill' | 'today' | 'practice_attempt'
 export type PracticeItemSourceType = 'existing_problem' | 'generated_variant'
 export type PracticeSetStatus = 'draft' | 'ready' | 'archived'
@@ -43,6 +45,7 @@ export interface PracticePlannerInput {
   sessionSettings?: Partial<ReviewSessionSettings>
   excludedProblemIds?: string[]
   preferredErrorCategories?: string[]
+  variantMode?: VariantGenerationMode
 }
 
 export interface PracticeBlueprintItem {

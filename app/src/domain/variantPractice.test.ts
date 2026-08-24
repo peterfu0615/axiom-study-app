@@ -37,7 +37,11 @@ describe('variant practice contract', () => {
       independentAnswer: '3', independentSolutionJson: JSON.stringify({ contentMarkdown: 'y=3' }),
       conditionComplete: true, uniqueAnswer: true, preservesCoreKnowledge: true, preservesCoreMethod: true,
       preservesCoreModel: true, targetTagIds: candidate.targetTagIds, difficulty: 'basic', diagramCompatible: true,
-      usesOutOfScopeKnowledge: false, notes: [],
+      usesOutOfScopeKnowledge: false,
+      requiredStepCoverage: [
+        { step: '移项得 2x=4', covered: true, evidence: '移项得 3y=9' },
+        { step: 'x=2', covered: true, evidence: 'y=3' },
+      ], notes: [],
     })).toEqual([])
   })
 
@@ -49,7 +53,8 @@ describe('variant practice contract', () => {
     }, {
       independentAnswer: '5', independentSolutionJson: '{}', conditionComplete: false, uniqueAnswer: false,
       preservesCoreKnowledge: false, preservesCoreMethod: false, preservesCoreModel: false,
-      targetTagIds: ['other'], difficulty: 'advanced', diagramCompatible: false, usesOutOfScopeKnowledge: true, notes: [],
+      targetTagIds: ['other'], difficulty: 'advanced', diagramCompatible: false, usesOutOfScopeKnowledge: true,
+      requiredStepCoverage: [], notes: [],
     })
     expect(errors).toEqual(expect.arrayContaining([
       'subject_changed', 'solution_invalid', 'difficulty_mismatch', 'target_mismatch', 'unexpected_target',

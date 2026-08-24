@@ -37,7 +37,11 @@ function provider(independentAnswer = 'y=3'): AIProvider {
         independentAnswer, independentSolutionJson: JSON.stringify({ contentMarkdown: 'y=3' }),
         conditionComplete: true, uniqueAnswer: true, preservesCoreKnowledge: true, preservesCoreMethod: true,
         preservesCoreModel: true, targetTagIds: ['knowledge-1', 'method-1', 'model-1'], difficulty: 'basic',
-        diagramCompatible: true, usesOutOfScopeKnowledge: false, notes: [],
+        diagramCompatible: true, usesOutOfScopeKnowledge: false,
+        requiredStepCoverage: [
+          { step: '移项得 2x=4', covered: true, evidence: '移项得 3y=9' },
+          { step: 'x=2', covered: true, evidence: 'y=3' },
+        ], notes: [],
       },
       rawOutput: '{"verification":true}',
     }),

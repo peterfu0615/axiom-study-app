@@ -143,6 +143,8 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const documentTabs = useMemo(() => practiceSet.sessionMode === 'mock_test' || practiceSet.sessionSettings?.includeAnswerSheet
     ? [baseDocumentTabs[0], { value: 'answer_sheet' as const, label: '答题页' }, baseDocumentTabs[1]]
     : baseDocumentTabs, [practiceSet.sessionMode, practiceSet.sessionSettings?.includeAnswerSheet])
+  const generatedVariantCount = Number(practiceSet.generationMetadata.generatedVariantCount ?? 0)
+  const fallbackCount = Number(practiceSet.generationMetadata.fallbackCount ?? 0)
 
   useEffect(() => {
     let cancelled = false
@@ -463,7 +465,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       className="practice-header"
       eyebrow="打印与作答"
       leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
-      summary={`${practiceSet.items.length} 题 · 已保存`}
+      summary={`${practiceSet.items.length} 题 · 已保存 · ${generatedVariantCount} 道变式${fallbackCount ? ` · ${fallbackCount} 道安全回退原题` : ''}`}
       title={`${practiceSet.subject}练习`}
     />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />

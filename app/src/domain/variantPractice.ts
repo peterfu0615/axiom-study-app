@@ -2,9 +2,11 @@ import type { DifficultyLevel } from './models'
 import type { PracticeProblemCandidate } from './practice'
 import { mathematicallyEquivalent } from './practiceGrading'
 import type { ReviewTag } from './review'
+import type { GeometryScene } from './geometryScene'
+import { normalizeGeometryScene } from './geometryScene'
 
-export const VARIANT_PROMPT_VERSION = 'variant-practice-v1'
-export const VARIANT_SCHEMA_VERSION = 'variant-practice-v1'
+export const VARIANT_PROMPT_VERSION = 'variant-practice-v2'
+export const VARIANT_SCHEMA_VERSION = 'variant-practice-v2'
 
 export type VariantChangeKind =
   | 'numeric_values'
@@ -25,7 +27,7 @@ export interface VariantPlanInvariant {
   targetModelTagIds: string[]
   targetDifficulty: DifficultyLevel
   requiredSteps: string[]
-  diagramPolicy: 'none' | 'preserve_original'
+  diagramPolicy: 'none' | 'preserve_or_regenerate'
 }
 
 export interface PracticeVariantPlan {
@@ -53,7 +55,8 @@ export interface PracticeVariantCandidate {
   difficulty: DifficultyLevel
   targetTagIds: string[]
   changes: Array<{ kind: VariantChangeKind; summary: string }>
-  diagramPolicy: 'none' | 'preserved'
+  diagramPolicy: 'none' | 'preserved' | 'generated'
+  geometryScene?: GeometryScene | null
 }
 
 export interface PracticeVariantVerification {
@@ -68,6 +71,7 @@ export interface PracticeVariantVerification {
   difficulty: DifficultyLevel
   diagramCompatible: boolean
   usesOutOfScopeKnowledge: boolean
+  requiredStepCoverage: Array<{ step: string; covered: boolean; evidence: string }>
   notes: string[]
 }
 
@@ -135,7 +139,7 @@ export function createPracticeVariantPlan(input: {
     targetModelTagIds: tagIds('model'),
     targetDifficulty: input.targetDifficulty,
     requiredSteps: solutionSteps(input.source.solutionJson),
-    diagramPolicy: input.source.diagramImagePaths.length || input.source.diagramIds.length ? 'preserve_original' : 'none',
+    diagramPolicy: input.source.diagramImagePaths.length || input.source.diagramIds.length ? 'preserve_or_regenerate' : 'none',
   }
   return {
     id: input.id,
@@ -210,9 +214,20 @@ export function validatePracticeVariant(
   if (!verification.preservesCoreMethod) errors.push('method_changed')
   if (!verification.preservesCoreModel) errors.push('model_changed')
   if (verification.usesOutOfScopeKnowledge) errors.push('out_of_scope')
+  const coveredSteps = new Map(verification.requiredStepCoverage.map((item) => [normalizedSurface(item.step), item]))
+  if (plan.invariants.requiredSteps.some((step) => {
+    const coverage = coveredSteps.get(normalizedSurface(step))
+    return !coverage?.covered || !coverage.evidence.trim()
+  })) errors.push('required_steps_missing')
   if (!verification.diagramCompatible) errors.push('diagram_incompatible')
-  const expectedDiagramPolicy = plan.invariants.diagramPolicy === 'preserve_original' ? 'preserved' : 'none'
-  if (candidate.diagramPolicy !== expectedDiagramPolicy) errors.push('diagram_policy_changed')
+  if (plan.invariants.diagramPolicy === 'none' && candidate.diagramPolicy !== 'none') errors.push('diagram_policy_changed')
+  if (plan.invariants.diagramPolicy !== 'none' && candidate.diagramPolicy === 'none') errors.push('diagram_policy_changed')
+  if (candidate.changes.some((change) => change.kind === 'diagram_orientation') && candidate.diagramPolicy !== 'generated') {
+    errors.push('diagram_regeneration_required')
+  }
+  if (candidate.diagramPolicy === 'generated' && (!candidate.geometryScene || !normalizeGeometryScene(candidate.geometryScene).valid)) {
+    errors.push('geometry_scene_invalid')
+  }
   if (candidate.options) {
     const options = candidate.options.map((option) => option.trim()).filter(Boolean)
     if (options.length < 2 || new Set(options).size !== options.length) errors.push('options_invalid')

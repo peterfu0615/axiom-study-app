@@ -76,6 +76,14 @@ import {
   reconstructGeometryScene,
 } from '../../platform/geometrySceneDatabase'
 import { getPreferredDiagram } from '../../platform/diagramDatabase'
+import {
+  createPracticeSetFromVariantPreview,
+  prepareSingleProblemVariant,
+  type SingleVariantPreview,
+} from '../../platform/practiceDatabase'
+import type { PracticeSet } from '../../domain/practice'
+import { PracticeSetView } from '../practice/PracticeSetView'
+import { MathMarkdown } from '../../components/MathMarkdown'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
@@ -282,6 +290,9 @@ export function ProblemLibrary() {
   const [generatedDiagram, setGeneratedDiagram] = useState<Diagram | null>(null)
   const [diagramView, setDiagramView] = useState<'generated' | 'original'>('generated')
   const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
+  const [variantBusy, setVariantBusy] = useState(false)
+  const [singleVariantPreview, setSingleVariantPreview] = useState<SingleVariantPreview | null>(null)
+  const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
   const [batchMode, setBatchMode] = useState(false)
   const [batchProblemIds, setBatchProblemIds] = useState<Set<string>>(new Set())
@@ -502,6 +513,15 @@ export function ProblemLibrary() {
   const selectedHasDisplayDiagram =
     Boolean(selectedDiagramRect) &&
     Boolean(selected?.cropImagePath || selectedDiagramPath)
+  const variantPrerequisite = !selected?.stemMarkdown?.trim()
+    ? '请先补全题干'
+    : !solution || solution.status !== 'completed'
+      ? '请先生成有效解答'
+      : !selected.libraryMetadata.difficulty
+        ? '请先确认题目难度'
+        : !selected.libraryMetadata.tags.some((tag) => tag.id && tag.type !== 'error')
+          ? '请先确认至少一个知识、方法或模型标签'
+          : null
   const selectedIsProcessing =
     selected?.aiStatus === 'pending' || selected?.aiStatus === 'processing'
   const activeModelRun =
@@ -751,6 +771,31 @@ export function ProblemLibrary() {
       notify(`几何图重建失败，已保留原图：${String(error)}`, 'error')
     } finally {
       setGeometrySceneBusy(false)
+    }
+  }
+
+  const generateSingleVariant = async () => {
+    if (!selected) return
+    setVariantBusy(true)
+    try {
+      setSingleVariantPreview(await prepareSingleProblemVariant(selected.id))
+    } catch (error) {
+      notify(String(error instanceof Error ? error.message : error), 'error')
+    } finally {
+      setVariantBusy(false)
+    }
+  }
+
+  const startSingleVariantPractice = async () => {
+    if (!singleVariantPreview) return
+    setVariantBusy(true)
+    try {
+      setActivePracticeSet(await createPracticeSetFromVariantPreview(singleVariantPreview))
+      setSingleVariantPreview(null)
+    } catch (error) {
+      notify(`无法创建单题练习：${String(error)}`, 'error')
+    } finally {
+      setVariantBusy(false)
     }
   }
 
@@ -1020,6 +1065,14 @@ export function ProblemLibrary() {
     }
   }
 
+  if (activePracticeSet) {
+    return <PracticeSetView
+      onBack={() => setActivePracticeSet(null)}
+      onOpenPracticeSet={setActivePracticeSet}
+      practiceSet={activePracticeSet}
+    />
+  }
+
   if (recropping && selected) {
     return (
       <ProblemCropEditor
@@ -1208,6 +1261,15 @@ export function ProblemLibrary() {
                     </button>
                   ) : editing ? (
                     <>
+                      <button
+                        className="secondary-action"
+                        disabled={updating || variantBusy || Boolean(variantPrerequisite)}
+                        onClick={() => void generateSingleVariant()}
+                        title={variantPrerequisite ?? '生成并独立审校一道变式题'}
+                        type="button"
+                      >
+                        {variantBusy ? '生成中…' : '生成变式'}
+                      </button>
                       <button
                         className="secondary-action"
                         disabled={updating}
@@ -1833,6 +1895,32 @@ export function ProblemLibrary() {
         </article>
       </section>
 
+      <Dialog
+        onClose={() => { if (!variantBusy) setSingleVariantPreview(null) }}
+        open={Boolean(singleVariantPreview)}
+        title="变式题预览"
+      >
+        {singleVariantPreview?.outcome.variant && <div className="problem-edit-form">
+          <p>该变式已通过独立求解、标签、难度和必要步骤审校。</p>
+          <section>
+            <small>原题</small>
+            <MathMarkdown>{singleVariantPreview.source.statementMarkdown}</MathMarkdown>
+          </section>
+          <section>
+            <small>变式题</small>
+            <MathMarkdown>{singleVariantPreview.outcome.variant.candidate.statementMarkdown}</MathMarkdown>
+          </section>
+          <div>
+            {singleVariantPreview.outcome.variant.candidate.changes.map((change) => (
+              <small key={`${change.kind}:${change.summary}`}>{change.summary}</small>
+            ))}
+          </div>
+          <div className="curriculum-dialog-actions">
+            <Button disabled={variantBusy} onClick={() => setSingleVariantPreview(null)} variant="ghost">关闭</Button>
+            <Button loading={variantBusy} onClick={() => void startSingleVariantPractice()} variant="primary">加入今日练习并开始</Button>
+          </div>
+        </div>}
+      </Dialog>
       <Dialog
         onClose={() => { if (!updating) setSubjectChangeConfirming(false) }}
         open={subjectChangeConfirming}

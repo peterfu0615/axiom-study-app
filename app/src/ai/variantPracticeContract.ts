@@ -5,6 +5,10 @@ import type {
   PracticeVariantVerificationInput,
   VariantChangeKind,
 } from '../domain/variantPractice'
+import { normalizeGeometryScene } from '../domain/geometryScene'
+import { geometrySceneJSONSchema } from './geometrySceneContract'
+
+const { $defs: geometrySceneDefinitions, ...geometrySceneShape } = geometrySceneJSONSchema
 
 const difficulties = ['basic', 'intermediate', 'advanced'] as const
 const changeKinds: VariantChangeKind[] = [
@@ -23,7 +27,7 @@ const solutionSchema = {
 
 export const practiceVariantGenerationJSONSchema = {
   type: 'object', additionalProperties: false,
-  required: ['subject', 'statement_markdown', 'options', 'canonical_answer', 'solution', 'difficulty', 'target_tag_ids', 'changes', 'diagram_policy'],
+  required: ['subject', 'statement_markdown', 'options', 'canonical_answer', 'solution', 'difficulty', 'target_tag_ids', 'changes', 'diagram_policy', 'geometry_scene'],
   properties: {
     subject: { type: 'string' },
     statement_markdown: { type: 'string' },
@@ -39,8 +43,10 @@ export const practiceVariantGenerationJSONSchema = {
         properties: { kind: { type: 'string', enum: changeKinds }, summary: { type: 'string' } },
       },
     },
-    diagram_policy: { type: 'string', enum: ['none', 'preserved'] },
+    diagram_policy: { type: 'string', enum: ['none', 'preserved', 'generated'] },
+    geometry_scene: { anyOf: [{ type: 'null' }, geometrySceneShape] },
   },
+  $defs: geometrySceneDefinitions,
 } as const
 
 export const practiceVariantVerificationJSONSchema = {
@@ -48,7 +54,7 @@ export const practiceVariantVerificationJSONSchema = {
   required: [
     'independent_answer', 'independent_solution', 'condition_complete', 'unique_answer',
     'preserves_core_knowledge', 'preserves_core_method', 'preserves_core_model',
-    'target_tag_ids', 'difficulty', 'diagram_compatible', 'uses_out_of_scope_knowledge', 'notes',
+    'target_tag_ids', 'difficulty', 'diagram_compatible', 'uses_out_of_scope_knowledge', 'required_step_coverage', 'notes',
   ],
   properties: {
     independent_answer: { type: 'string' },
@@ -62,6 +68,13 @@ export const practiceVariantVerificationJSONSchema = {
     difficulty: { type: 'string', enum: difficulties },
     diagram_compatible: { type: 'boolean' },
     uses_out_of_scope_knowledge: { type: 'boolean' },
+    required_step_coverage: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false, required: ['step', 'covered', 'evidence'],
+        properties: { step: { type: 'string' }, covered: { type: 'boolean' }, evidence: { type: 'string' } },
+      },
+    },
     notes: { type: 'array', items: { type: 'string' } },
   },
 } as const
@@ -97,7 +110,7 @@ function bool(value: unknown, field: string) {
 export function buildPracticeVariantGenerationPrompt(input: PracticeVariantGenerationInput) {
   return `你是中国中学受约束变式题生成器。生成一道新题以检验迁移能力，不得只是复制或改写标点。
 必须严格保持 plan.invariants 中的科目、核心知识点、核心方法、题型模型、难度和必要步骤；只能使用 allowedChanges，绝不能使用 forbiddenChanges。
-若原题有图，diagram_policy 必须是 preserved，题干变化不得使原图条件失效；否则使用 none。
+若原题有图且变化后仍完全兼容，diagram_policy 使用 preserved；若改变朝向、标签、数值或关系，必须使用 generated 并返回受控 GeometryScene；无图使用 none。
 选择题 canonical_answer 必须是 options 数组中的完整选项文本。数学内容使用 Markdown/LaTeX。只返回符合 JSON Schema 的 JSON。
 
 <variant_generation_input>
@@ -114,9 +127,10 @@ export function buildPracticeVariantVerificationPrompt(input: PracticeVariantVer
     targetTagIds: input.candidate.targetTagIds,
     changes: input.candidate.changes,
     diagramPolicy: input.candidate.diagramPolicy,
+    geometryScene: input.candidate.geometryScene ?? null,
   }
   return `你是与出题阶段独立的中国中学题目审校器。请从题干重新求解，不要接受或猜测出题器的答案。
-检查条件是否完整、答案是否唯一、核心知识/方法/模型是否保持、难度是否匹配、图形是否仍兼容、是否使用教材范围外知识，并重新映射目标标签。
+检查条件是否完整、答案是否唯一、核心知识/方法/模型是否保持、难度是否匹配、图形是否仍兼容、是否使用教材范围外知识，并重新映射目标标签。对 plan.invariants.requiredSteps 中每一项原文逐项返回覆盖结论和候选解答中的证据。
 只返回符合 JSON Schema 的 JSON。
 
 <variant_plan>
@@ -142,7 +156,9 @@ export function parsePracticeVariantCandidate(raw: string): PracticeVariantCandi
     return { kind, summary: string(record.summary, 'changes.summary') }
   })
   const diagramPolicy = string(value.diagram_policy, 'diagram_policy')
-  if (diagramPolicy !== 'none' && diagramPolicy !== 'preserved') throw new Error('变式图形策略无效')
+  if (diagramPolicy !== 'none' && diagramPolicy !== 'preserved' && diagramPolicy !== 'generated') throw new Error('变式图形策略无效')
+  const geometryScene = value.geometry_scene == null ? null : normalizeGeometryScene(value.geometry_scene)
+  if (diagramPolicy === 'generated' && (!geometryScene || !geometryScene.valid)) throw new Error('变式几何场景无效')
   return {
     subject: string(value.subject, 'subject'),
     statementMarkdown: string(value.statement_markdown, 'statement_markdown'),
@@ -153,6 +169,7 @@ export function parsePracticeVariantCandidate(raw: string): PracticeVariantCandi
     targetTagIds: strings(value.target_tag_ids, 'target_tag_ids'),
     changes,
     diagramPolicy,
+    geometryScene: geometryScene?.scene ?? null,
   }
 }
 
@@ -160,6 +177,12 @@ export function parsePracticeVariantVerification(raw: string): PracticeVariantVe
   const value = JSON.parse(cleanJSON(raw)) as Record<string, unknown>
   const difficulty = string(value.difficulty, 'difficulty')
   if (!difficulties.includes(difficulty as typeof difficulties[number])) throw new Error('变式审校难度不在受控枚举中')
+  if (!Array.isArray(value.required_step_coverage)) throw new Error('变式审校缺少必要步骤覆盖结果')
+  const requiredStepCoverage = value.required_step_coverage.map((entry) => {
+    if (!entry || typeof entry !== 'object') throw new Error('必要步骤覆盖结果格式错误')
+    const record = entry as Record<string, unknown>
+    return { step: string(record.step, 'required_step_coverage.step'), covered: bool(record.covered, 'required_step_coverage.covered'), evidence: string(record.evidence, 'required_step_coverage.evidence') }
+  })
   return {
     independentAnswer: string(value.independent_answer, 'independent_answer'),
     independentSolutionJson: solutionJson(value.independent_solution),
@@ -172,6 +195,7 @@ export function parsePracticeVariantVerification(raw: string): PracticeVariantVe
     difficulty: difficulty as PracticeVariantVerification['difficulty'],
     diagramCompatible: bool(value.diagram_compatible, 'diagram_compatible'),
     usesOutOfScopeKnowledge: bool(value.uses_out_of_scope_knowledge, 'uses_out_of_scope_knowledge'),
+    requiredStepCoverage,
     notes: strings(value.notes, 'notes'),
   }
 }

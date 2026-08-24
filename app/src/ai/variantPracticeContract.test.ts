@@ -18,6 +18,7 @@ describe('variant practice provider contract', () => {
       condition_complete: true, unique_answer: true, preserves_core_knowledge: true,
       preserves_core_method: true, preserves_core_model: true, target_tag_ids: ['k1'], difficulty: 'basic',
       diagram_compatible: true, uses_out_of_scope_knowledge: false, notes: [],
+      required_step_coverage: [{ step: '两边同除以 3', covered: true, evidence: 'x=3' }],
     }
     expect(parsePracticeVariantVerification(JSON.stringify(valid)).independentAnswer).toBe('3')
     expect(() => parsePracticeVariantVerification(JSON.stringify({ ...valid, unique_answer: 'yes' }))).toThrow(/unique_answer/)

@@ -3,7 +3,7 @@ import { Icon } from '../../components/Icon'
 import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
-import type { PracticeSet } from '../../domain/practice'
+import type { PracticeSet, VariantGenerationMode } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
 import type { ReviewSessionMode } from '../../domain/review'
 import {
@@ -245,6 +245,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [todayAttempt, setTodayAttempt] = useState<PracticeAttempt | null>(null)
+  const [variantMode, setVariantMode] = useState<VariantGenerationMode>('variant_preferred')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -299,8 +300,9 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       const budget = sessionMode === 'quick' ? Math.max(1, moduleIds.length)
         : sessionMode === 'mock_test' ? Math.max(4, moduleIds.length * 3) : Math.max(3, moduleIds.length * 2)
       const next = todayPracticeSet?.sessionMode === sessionMode
+        && (todayPracticeSet.generationMetadata.variantMode ?? 'variant_preferred') === variantMode
         ? todayPracticeSet
-        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
+        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode, variantMode)
       setTodayPracticeSet(next); setTodayAttempt(await getLatestPracticeAttempt(next.id)); setActivePracticeSet(next)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
@@ -329,6 +331,12 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   return <main className="workspace today-workspace">
     <PageHeader
       actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
+        <SegmentedControl
+          ariaLabel="题目来源"
+          onChange={(value) => setVariantMode(value as VariantGenerationMode)}
+          options={[{ value: 'variant_preferred', label: '变式优先' }, { value: 'original_only', label: '仅原题' }]}
+          value={variantMode}
+        />
         <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice(plan.preferences.preferredMode)} variant="primary">{practiceCta}</Button>
         <Menu label="选择练习模式">
           <MenuItem disabled={busy} onClick={() => void openTodayPractice('quick')}>快速复习</MenuItem>
@@ -358,7 +366,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
               setBusy(true); setError(null)
               try {
                 const budget = sessionMode === 'quick' ? 1 : sessionMode === 'mock_test' ? 5 : 3
-                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode))
+                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode, variantMode))
               }
               catch (reason) { setError(practiceErrorMessage(reason)) }
               finally { setBusy(false) }
