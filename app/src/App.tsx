@@ -5,7 +5,6 @@ import { resumeSolutionPipeline } from './ai/solutionPipeline'
 import { resumeIntelligencePipeline } from './ai/intelligencePipeline'
 import { resumeGeometryScenePipeline } from './platform/geometrySceneDatabase'
 import { migrateReviewSchedulerState } from './platform/reviewSchedulerMigration'
-import { getPlannerWorkspaceData } from './platform/plannerDatabase'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
 import { Button, Dialog } from './components/ui'
@@ -14,7 +13,6 @@ import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
 import { TodayWorkspace } from './features/today/TodayWorkspace'
-import { PlannerWorkspace } from './features/planner/PlannerWorkspace'
 import { InsightsWorkspace } from './features/insights/InsightsWorkspace'
 import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
 import { AISettings } from './features/settings/AISettings'
@@ -75,8 +73,6 @@ function AppRuntimeShell({
         <CaptureWorkspace onNavigateToLibrary={() => setSection('library')} />
       ) : section === 'today' ? (
         <TodayWorkspace onNavigate={setSection} />
-      ) : section === 'planner' ? (
-        <PlannerWorkspace onNavigate={setSection} />
       ) : section === 'library' ? (
         <ProblemLibrary />
       ) : section === 'curriculum' ? (
@@ -131,8 +127,6 @@ function AppRuntime() {
       }
       try {
         configureAIProviders(await listAIProviderProfiles())
-        try { await getPlannerWorkspaceData() }
-        catch (error) { console.error('初始化统一计划失败', error) }
         await Promise.all([
           resumeProblemAIPipeline(),
           resumeSolutionPipeline(),
@@ -166,7 +160,7 @@ function AppRuntime() {
     return <main className="workspace placeholder-workspace">
       <div className="module-placeholder">
         <span>学习状态迁移已回滚</span>
-        <h2>无法启用新版计划器</h2>
+        <h2>无法升级复习算法</h2>
         <p>{schedulerError}</p>
         <p>旧复习记录未被改写。请查看日志并修复数据库问题后重新启动 Axiom。</p>
       </div>

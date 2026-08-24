@@ -5,7 +5,10 @@ import type { VariantGenerationMode } from '../../domain/practice'
 import {
   DEFAULT_REVIEW_PREFERENCES,
   getReviewPreferences,
+  reviewPaceFromTarget,
   saveReviewPreferences,
+  targetRetentionForPace,
+  type ReviewPace,
   type ReviewPreferences,
 } from '../../platform/reviewPreferencesDatabase'
 
@@ -17,6 +20,11 @@ const modeOptions = [
 const variantOptions = [
   { value: 'variant_preferred', label: '变式优先' },
   { value: 'original_only', label: '仅使用原题' },
+]
+const paceOptions = [
+  { value: 'relaxed', label: '宽松 · 间隔更长，日常任务较少' },
+  { value: 'standard', label: '标准 · 任务量与巩固频率平衡' },
+  { value: 'intensive', label: '强化 · 间隔更短，日常任务较多' },
 ]
 
 // Clamp numeric input immediately: Number('') is 0 and an emptied field used
@@ -41,7 +49,7 @@ export function ReviewSettings() {
     setSaving(true); setMessage(null)
     try {
       setValue(await saveReviewPreferences(value))
-      setMessage('复习设置已保存；保持率会立即用于实时预测。')
+      setMessage('复习设置已保存；今日安排和未来任务量已更新。')
     } catch { setMessage('保存复习设置失败，请重试。') }
     finally { setSaving(false) }
   }
@@ -50,12 +58,22 @@ export function ReviewSettings() {
     <header>
       <p className="eyebrow">学习负担</p>
       <h2>Today 复习设置</h2>
-      <p className="subtitle">保持率控制到期时间，模块数控制单次练习规模；每日硬容量与复习预留请在“计划”中设置。</p>
+      <p className="subtitle">复习节奏控制任务出现的频率；今日上限和模块数控制一次安排的规模。</p>
     </header>
     <div className="settings-form">
+      <ListboxSelect
+        disabled={loading || saving}
+        label="复习节奏"
+        onValueChange={(pace) => setValue((current) => ({
+          ...current,
+          targetRetention: targetRetentionForPace(pace as ReviewPace),
+        }))}
+        options={paceOptions}
+        value={reviewPaceFromTarget(value.targetRetention)}
+      />
       <label>
-        <span>目标保持率（%）</span>
-        <input disabled={loading || saving} max={95} min={75} onChange={(event) => setValue((current) => ({ ...current, targetRetention: parseBoundedNumber(event.target.value, 75, 95, current.targetRetention * 100) / 100 }))} type="number" value={Math.round(value.targetRetention * 100)} />
+        <span>今日复习上限（分钟）</span>
+        <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
       </label>
       <label>
         <span>每日最多复习模块</span>

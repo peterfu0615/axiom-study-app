@@ -3,10 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.hoisted(() => vi.fn())
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 
-import { getReviewPreferences, saveReviewPreferences } from './reviewPreferencesDatabase'
+import {
+  getReviewPreferences,
+  reviewPaceFromTarget,
+  saveReviewPreferences,
+  targetRetentionForPace,
+} from './reviewPreferencesDatabase'
 
 describe('review preferences persistence', () => {
   beforeEach(() => invoke.mockReset())
+
+  it('maps legacy targets to the nearest understandable pace', () => {
+    expect(reviewPaceFromTarget(.79)).toBe('relaxed')
+    expect(reviewPaceFromTarget(.86)).toBe('standard')
+    expect(reviewPaceFromTarget(.94)).toBe('intensive')
+    expect(targetRetentionForPace('relaxed')).toBe(.8)
+    expect(targetRetentionForPace('standard')).toBe(.85)
+    expect(targetRetentionForPace('intensive')).toBe(.9)
+  })
 
   it('reads the durable Today scheduling inputs', async () => {
     invoke.mockResolvedValue([{ max_daily_minutes: 40, max_modules: 4, preferred_mode: 'quick', target_retention: .9, variant_mode: 'original_only' }])

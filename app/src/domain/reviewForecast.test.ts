@@ -28,13 +28,14 @@ describe('seven-day review forecast', () => {
     expect(buildReviewForecast([], now, 30)).toHaveLength(30)
   })
 
-  it('places tomorrow due, overdue and different-day work in the correct buckets', () => {
+  it('places first occurrences correctly and continues later Good-rated reviews', () => {
     const result = buildReviewForecast([
       candidate('overdue', now - day), candidate('tomorrow', now + day), candidate('later', now + 3 * day),
     ], now)
     expect(result[0]).toMatchObject({ estimatedProblemCount: 1, overdueProblemCount: 1 })
     expect(result[1].estimatedProblemCount).toBe(1)
-    expect(result[3].estimatedProblemCount).toBe(1)
+    expect(result[3].estimatedProblemCount).toBeGreaterThanOrEqual(1)
+    expect(result.reduce((sum, item) => sum + item.estimatedProblemCount, 0)).toBeGreaterThan(3)
   })
 
   it('clusters same-skill candidates and supports partial or absent tags and mixed difficulty', () => {
@@ -67,6 +68,23 @@ describe('seven-day review forecast', () => {
     expect(forecast[0].estimatedProblemCount).toBe(0)
     expect(forecast.some((item, index) => index > 0 && item.estimatedProblemCount === 1)).toBe(true)
     expect(JSON.stringify(before)).toBe(snapshot)
+  })
+
+  it('projects repeated Good reviews without mutating current skill state', () => {
+    const current = candidate('repeat', now + day)
+    const snapshot = JSON.stringify(current)
+    const forecast = buildReviewForecast([current], now, 30)
+    expect(forecast.reduce((sum, item) => sum + item.estimatedProblemCount, 0)).toBeGreaterThan(2)
+    expect(forecast.filter((item) => item.estimatedProblemCount > 0).length).toBeGreaterThan(1)
+    expect(JSON.stringify(current)).toBe(snapshot)
+  })
+
+  it('increases projected frequency from relaxed to intensive pace', () => {
+    const current = candidate('pace', now + day)
+    const count = (target: number) => buildReviewForecast([current], now, 30, target)
+      .reduce((sum, item) => sum + item.estimatedProblemCount, 0)
+    expect(count(.85)).toBeGreaterThanOrEqual(count(.8))
+    expect(count(.9)).toBeGreaterThanOrEqual(count(.85))
   })
 
   it('uses immutable review feedback to schedule legacy candidates without tag state', () => {

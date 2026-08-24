@@ -254,16 +254,12 @@ export async function capturePracticeAnswerPages(
   }
 }
 
-export async function getLatestPracticeAttempt(practiceSetId: string): Promise<PracticeAttempt | null> {
-  const attempts = await select<Array<{
+interface PracticeAttemptRow {
     id: string; status: PracticeAttempt['status']; started_at: number; submitted_at: number | null
     corrected_asset_path: string; orientation_degrees: number
-  }>>(`SELECT attempt.id, attempt.status, attempt.started_at, attempt.submitted_at,
-    page.corrected_asset_path, page.orientation_degrees
-    FROM practice_attempts attempt
-    JOIN practice_attempt_pages page ON page.practice_attempt_id=attempt.id
-    WHERE attempt.practice_set_id=$1 ORDER BY attempt.updated_at DESC, page.created_at DESC LIMIT 1`, [practiceSetId])
-  const attempt = attempts[0]
+}
+
+async function readPracticeAttempt(attempt: PracticeAttemptRow | undefined, practiceSetId: string): Promise<PracticeAttempt | null> {
   if (!attempt) return null
   const submissionAssets = await select<Array<{
     id: string; source_kind: 'image' | 'annotated_pdf' | 'camera_scan'; original_asset_path: string
@@ -295,4 +291,23 @@ export async function getLatestPracticeAttempt(practiceSetId: string): Promise<P
         : null,
     })),
   }
+}
+
+export async function getPracticeAttempt(practiceAttemptId: string): Promise<PracticeAttempt | null> {
+  const attempt = (await select<PracticeAttemptRow[]>(`SELECT attempt.id,attempt.status,attempt.started_at,
+    attempt.submitted_at,page.corrected_asset_path,page.orientation_degrees,attempt.practice_set_id
+    FROM practice_attempts attempt
+    JOIN practice_attempt_pages page ON page.practice_attempt_id=attempt.id
+    WHERE attempt.id=$1 ORDER BY page.created_at DESC LIMIT 1`, [practiceAttemptId]))[0] as
+      (PracticeAttemptRow & { practice_set_id: string }) | undefined
+  return readPracticeAttempt(attempt, attempt?.practice_set_id ?? '')
+}
+
+export async function getLatestPracticeAttempt(practiceSetId: string): Promise<PracticeAttempt | null> {
+  const attempt = (await select<PracticeAttemptRow[]>(`SELECT attempt.id, attempt.status, attempt.started_at, attempt.submitted_at,
+    page.corrected_asset_path, page.orientation_degrees
+    FROM practice_attempts attempt
+    JOIN practice_attempt_pages page ON page.practice_attempt_id=attempt.id
+    WHERE attempt.practice_set_id=$1 ORDER BY attempt.updated_at DESC, page.created_at DESC LIMIT 1`, [practiceSetId]))[0]
+  return readPracticeAttempt(attempt, practiceSetId)
 }

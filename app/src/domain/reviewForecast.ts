@@ -1,7 +1,7 @@
 import {
   addLocalReviewDays,
+  applyReviewRating,
   buildReviewUnitPool,
-  candidateRetention,
   candidateDueAt,
   endOfLocalReviewDay,
   estimateReviewProblemSeconds,
@@ -20,9 +20,6 @@ export interface ReviewForecastDay {
   overdueProblemCount: number
   loadLevel: ReviewLoadLevel
   dominantThemes: string[]
-  averageRetention: number
-  minimumRetention: number
-  targetRetention: number
   estimatedMinutes: number
   sourceHash: string
 }
@@ -34,9 +31,8 @@ export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {
   return 'heavy'
 }
 
-function forecastSourceHash(candidates: ReviewCandidate[], now: number, targetRetention: number) {
-  const source = candidates.map((candidate) =>
-    `${candidate.problemId}:${candidateDueAt(candidate, now, targetRetention)}`).sort().join('|')
+function forecastSourceHash(candidates: ReviewCandidate[], date: string) {
+  const source = candidates.map((candidate) => candidate.problemId).sort().join('|') + `:${date}`
   let hash = 2_166_136_261
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index)
@@ -46,9 +42,9 @@ function forecastSourceHash(candidates: ReviewCandidate[], now: number, targetRe
 }
 
 /**
- * Static forward projection. Each current candidate is assigned to its
- * earliest scheduled local day and clustered with the same pure planner used
- * by Today. No future feedback or future session is invented.
+ * Pure forward projection. Future reviews are simulated as being completed
+ * on their due date with a Good rating. The cloned state never crosses the
+ * persistence boundary; real feedback immediately replaces this projection.
  */
 export function buildReviewForecast(
   candidates: ReviewCandidate[],
@@ -60,43 +56,64 @@ export function buildReviewForecast(
   const horizon = Array.from({ length: days }, (_, offset) => addLocalReviewDays(todayStart, offset))
   const buckets = horizon.map(() => [] as ReviewCandidate[])
   const overdue = horizon.map(() => 0)
+  const horizonEnd = endOfLocalReviewDay(horizon.at(-1) ?? todayStart)
 
-  candidates.forEach((candidate) => {
-    if (!candidate.subject.trim() || !candidate.stemMarkdown.trim()) return
-    const dueAt = candidateDueAt(candidate, now, targetRetention)
-    if (dueAt < todayStart) {
-      buckets[0].push(candidate)
-      overdue[0] += 1
-      return
+  candidates.forEach((sourceCandidate) => {
+    let candidate: ReviewCandidate = {
+      ...sourceCandidate,
+      tags: sourceCandidate.tags.map((tag) => ({ ...tag })),
+      skillStates: Object.fromEntries(Object.entries(sourceCandidate.skillStates)
+        .map(([key, state]) => [key, { ...state }])),
     }
-    const index = horizon.findIndex((day) => dueAt <= endOfLocalReviewDay(day))
-    if (index >= 0) buckets[index].push(candidate)
+    if (!candidate.subject.trim() || !candidate.stemMarkdown.trim()) return
+    for (let occurrence = 0; occurrence < 128; occurrence += 1) {
+      const dueAt = candidateDueAt(candidate, now, targetRetention)
+      if (dueAt > horizonEnd) break
+      const index = dueAt < todayStart
+        ? 0
+        : horizon.findIndex((day) => dueAt <= endOfLocalReviewDay(day))
+      if (index < 0) break
+      buckets[index].push(candidate)
+      if (occurrence === 0 && dueAt < todayStart) overdue[index] += 1
+
+      const reviewedAt = index === 0 && dueAt < now ? now : Math.max(dueAt, horizon[index])
+      const difficulty = candidate.difficulty ?? 'intermediate'
+      const stateEntries = Object.entries(candidate.skillStates)
+      candidate = stateEntries.length ? {
+        ...candidate,
+        skillStates: Object.fromEntries(stateEntries.map(([key, state]) => [
+          key,
+          applyReviewRating(state, 'good', difficulty, reviewedAt, { targetRetention }),
+        ])),
+        lastReviewedAt: reviewedAt,
+        lastRating: 'good',
+        reviewCount: candidate.reviewCount + 1,
+      } : {
+        ...candidate,
+        lastReviewedAt: reviewedAt,
+        lastRating: 'good',
+        reviewCount: candidate.reviewCount + 1,
+      }
+    }
   })
 
   return horizon.map((dayStart, index) => {
     const candidatesForDay = buckets[index]
     const displayAt = dayStart + 12 * 60 * 60 * 1000
     const units = buildReviewUnitPool(candidatesForDay, displayAt)
-    const retentions = candidatesForDay.map((candidate) => {
-      return candidateRetention(candidate, displayAt)
-    })
+    const date = localReviewDate(dayStart)
     return {
-      date: localReviewDate(dayStart),
+      date,
       dayStart,
       estimatedUnitCount: units.length,
       estimatedProblemCount: candidatesForDay.length,
       overdueProblemCount: overdue[index],
       loadLevel: reviewLoadLevel(units.length),
       dominantThemes: units.slice(0, 2).map((unit) => unit.title),
-      averageRetention: retentions.length
-        ? retentions.reduce((sum, value) => sum + value, 0) / retentions.length
-        : 1,
-      minimumRetention: retentions.length ? Math.min(...retentions) : 1,
-      targetRetention,
       estimatedMinutes: Math.ceil(candidatesForDay.reduce(
         (sum, candidate) => sum + estimateReviewProblemSeconds(candidate), 0,
       ) / 60),
-      sourceHash: forecastSourceHash(candidatesForDay, now, targetRetention),
+      sourceHash: forecastSourceHash(candidatesForDay, date),
     }
   })
 }

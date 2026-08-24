@@ -15,6 +15,25 @@ export interface ReviewPreferences {
   variantMode: VariantGenerationMode
 }
 
+export type ReviewPace = 'relaxed' | 'standard' | 'intensive'
+
+export const REVIEW_PACE_TARGETS: Record<ReviewPace, number> = {
+  relaxed: .8,
+  standard: .85,
+  intensive: .9,
+}
+
+export function reviewPaceFromTarget(targetRetention: number): ReviewPace {
+  const entries = Object.entries(REVIEW_PACE_TARGETS) as Array<[ReviewPace, number]>
+  return entries.reduce((nearest, entry) =>
+    Math.abs(entry[1] - targetRetention) < Math.abs(nearest[1] - targetRetention) ? entry : nearest,
+  entries[0])[0]
+}
+
+export function targetRetentionForPace(pace: ReviewPace) {
+  return REVIEW_PACE_TARGETS[pace]
+}
+
 export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
   maxDailyMinutes: 25,
   maxModules: 2,

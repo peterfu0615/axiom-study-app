@@ -212,16 +212,6 @@ export async function getReviewForecast(days = 7, timestamp = Date.now()): Promi
   return buildReviewForecast(candidates, timestamp, days, preferences.targetRetention)
 }
 
-async function getPlannerReviewBudget(sessionDate: string) {
-  const rows = await select<Array<{ planned_minutes: number | null }>>(`
-    SELECT SUM(segment.planned_minutes) AS planned_minutes
-    FROM planner_task_segments segment
-    JOIN planner_tasks task ON task.id=segment.task_id
-    WHERE segment.planned_date=$1 AND segment.status='scheduled' AND task.task_type='review'`, [sessionDate])
-  if (!rows.length) return null
-  return number(rows[0].planned_minutes)
-}
-
 /** @deprecated 兼容旧调用；请使用 getReviewForecast。 */
 export async function getSevenDayReviewForecast(timestamp = Date.now()): Promise<ReviewForecastDay[]> {
   return getReviewForecast(7, timestamp)
@@ -254,6 +244,42 @@ export interface TodayReviewUnit {
     diagramImagePaths: string[]
   }
   rating: ReviewRating | null
+}
+
+export interface TodayCorrectionTask {
+  id: string
+  practiceSetId: string
+  practiceAttemptId: string
+  subject: string
+  pendingProblemCount: number
+  estimatedMinutes: number
+  createdAt: number
+}
+
+export async function listTodayCorrectionTasks(): Promise<TodayCorrectionTask[]> {
+  const rows = await select<Array<{
+    attempt_id: string; practice_set_id: string; subject: string
+    pending_count: number; created_at: number
+  }>>(`SELECT attempt.id AS attempt_id,attempt.practice_set_id,set_record.subject,
+    COUNT(response.id) AS pending_count,attempt.started_at AS created_at
+    FROM practice_attempts attempt
+    JOIN practice_sets set_record ON set_record.id=attempt.practice_set_id
+    JOIN practice_responses response ON response.practice_attempt_id=attempt.id
+    WHERE response.status IN ('graded','needs_review','corrected')
+      AND COALESCE(json_extract(response.grading_result_json,'$.correctness'),'needs_review')!='correct'
+      AND NOT EXISTS(SELECT 1 FROM practice_evidences evidence
+        WHERE evidence.practice_response_id=response.id)
+    GROUP BY attempt.id,attempt.practice_set_id,set_record.subject,attempt.started_at
+    ORDER BY attempt.started_at,attempt.id`)
+  return rows.map((row) => ({
+    id: row.attempt_id,
+    practiceSetId: row.practice_set_id,
+    practiceAttemptId: row.attempt_id,
+    subject: text(row.subject, '未分类'),
+    pendingProblemCount: number(row.pending_count),
+    estimatedMinutes: number(row.pending_count) * 15,
+    createdAt: number(row.created_at),
+  }))
 }
 
 export interface TodayReviewPlan {
@@ -479,12 +505,12 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
   const sessionDate = localReviewDate(timestamp)
   const existing = await findTodaySession(sessionDate)
   if (existing) return readTodayPlanBySession(existing)
-  const [candidates, preferences, plannerBudget] = await Promise.all([
-    listReviewCandidates(), getReviewPreferences(), getPlannerReviewBudget(sessionDate),
+  const [candidates, preferences] = await Promise.all([
+    listReviewCandidates(), getReviewPreferences(),
   ])
   const units = buildTodayReviewUnits(candidates, {
     now: timestamp, targetRetention: preferences.targetRetention,
-    maxDailyMinutes: plannerBudget ?? preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
   })
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
@@ -651,8 +677,8 @@ export async function deferTodayReviewUnit(moduleId: string) {
 
 async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: string }) {
   const sessionDate = localReviewDate(input.timestamp)
-  const [session, candidates, preferences, plannerBudget] = await Promise.all([
-    findTodaySession(sessionDate), listReviewCandidates(), getReviewPreferences(), getPlannerReviewBudget(sessionDate),
+  const [session, candidates, preferences] = await Promise.all([
+    findTodaySession(sessionDate), listReviewCandidates(), getReviewPreferences(),
   ])
   if (!session) return getOrCreateTodayPlan(input.timestamp)
   const current = await readTodayPlanBySession(session)
@@ -661,7 +687,7 @@ async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: str
   const candidatesToPlan = candidates.filter((candidate) => !existingProblems.has(candidate.problemId))
   const nextUnit = buildTodayReviewUnits(candidatesToPlan, {
     now: input.timestamp, targetRetention: preferences.targetRetention,
-    maxDailyMinutes: plannerBudget ?? preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
   })
     .find((unit) => !existingKeys.has(unit.canonicalKey))
   if (!nextUnit) return current

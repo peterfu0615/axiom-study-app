@@ -11,24 +11,26 @@ import {
   deferTodayReviewUnit,
   getOrCreateTodayPlan,
   getReviewForecast,
+  listTodayCorrectionTasks,
   refreshTodayPlan,
+  type TodayCorrectionTask,
   replaceTodayReviewUnit,
   type TodayReviewPlan,
   type TodayReviewUnit,
 } from '../../platform/reviewDatabase'
 import {
   findPracticeSetForSource,
+  getPracticeSet,
   getOrCreatePracticeSetFromReviewUnit,
   getOrCreatePracticeSetFromTodayPlan,
 } from '../../platform/practiceDatabase'
 import { PracticeSetView } from '../practice/PracticeSetView'
-import { getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
+import { getLatestPracticeAttempt, getPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { practiceErrorMessage } from '../practice/productLanguage'
 import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
 import './Today.css'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
-const loadLabels = { empty: '无负载', light: '轻', normal: '中', heavy: '重' }
 const unitStatusLabels = { completed: '已完成', deferred: '已稍后处理' }
 
 function minutes(seconds: number) {
@@ -48,29 +50,14 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
   const height = 120
   const padLeft = 24
   const padRight = 24
-  const padTop = 16
+  const padTop = 12
   const padBottom = 24
   const chartW = width - padLeft - padRight
   const chartH = height - padTop - padBottom
 
-  const stepX = days.length > 1 ? chartW / (days.length - 1) : chartW
-
-  const points = days.map((day, i) => {
-    const x = padLeft + i * stepX
-    const y = padTop + chartH - day.averageRetention * chartH
-    const minimumY = padTop + chartH - day.minimumRetention * chartH
-    return { x, y, minimumY, day, index: i }
-  })
-
-  const pathD = points.reduce((acc, pt, i) => {
-    if (i === 0) return `M ${pt.x} ${pt.y}`
-    const prev = points[i - 1]
-    const cx = (prev.x + pt.x) / 2
-    return `${acc} C ${cx} ${prev.y}, ${cx} ${pt.y}, ${pt.x} ${pt.y}`
-  }, '')
-
-  const minimumPath = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.minimumY}`).join(' ')
-  const targetY = padTop + chartH - (days[0]?.targetRetention ?? .85) * chartH
+  const maxMinutes = Math.max(1, ...days.map((day) => day.estimatedMinutes))
+  const stepX = chartW / Math.max(1, days.length)
+  const barWidth = Math.max(4, Math.min(28, stepX * .58))
 
   return (
     <div className="today-forecast__chart-wrapper">
@@ -80,14 +67,6 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        <defs>
-          <linearGradient id="forecastLineGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="var(--brand-pressed)" />
-            <stop offset="50%" stopColor="var(--brand)" />
-            <stop offset="100%" stopColor="var(--brand-hover)" />
-          </linearGradient>
-        </defs>
-        {/* 基线 */}
         <line
           x1={padLeft}
           y1={padTop + chartH}
@@ -96,32 +75,20 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
           stroke="var(--ax-border-subtle)"
           strokeWidth="1"
         />
-        <line x1={padLeft} x2={width - padRight} y1={targetY} y2={targetY}
-          stroke="var(--ax-warning-fg)" strokeDasharray="7 5" strokeWidth="1.5" />
-        {minimumPath && <path d={minimumPath} fill="none" stroke="var(--ax-text-tertiary)"
-          strokeDasharray="4 4" strokeWidth="1.5" />}
-        {pathD && (
-          <path
-            d={pathD}
-            fill="none"
-            stroke="url(#forecastLineGrad)"
-            strokeWidth="2.5"
-            strokeLinecap="round"
+        {days.map((day, index) => {
+          const heightValue = day.estimatedMinutes / maxMinutes * chartH
+          const x = padLeft + index * stepX + (stepX - barWidth) / 2
+          return <rect
+            fill={index === 0 ? 'var(--brand-pressed)' : 'var(--brand)'}
+            height={heightValue}
+            key={day.date}
+            opacity={day.estimatedMinutes ? 1 : .18}
+            rx="3"
+            width={barWidth}
+            x={x}
+            y={padTop + chartH - heightValue}
           />
-        )}
-        {/* 节点标记 */}
-        {points.map((pt) => (
-          <g key={pt.day.date} className="today-forecast__node">
-            <circle
-              cx={pt.x}
-              cy={pt.y}
-              r={pt.index === 0 ? 4.5 : 3.5}
-              fill={pt.index === 0 ? 'var(--brand-pressed)' : 'var(--ax-color-surface)'}
-              stroke="var(--brand)"
-              strokeWidth={pt.index === 0 ? 2 : 1.5}
-            />
-          </g>
-        ))}
+        })}
       </svg>
     </div>
   )
@@ -137,11 +104,11 @@ function ForecastStrip({
   range: ForecastRange
 }) {
   return (
-    <section className="today-forecast" aria-label="未来复习计划与艾宾浩斯记忆负载">
+    <section className="today-forecast" aria-label="未来复习任务量">
       <div className="today-forecast__heading">
         <div>
           <h2>未来复习计划</h2>
-          <small className="today-forecast__subheading">平均/最低保持率 · 目标线 · 每日预计分钟</small>
+          <small className="today-forecast__subheading">预计复习组、题目与每日分钟数</small>
         </div>
         <div className="today-forecast__controls">
           <SegmentedControl
@@ -150,13 +117,12 @@ function ForecastStrip({
             options={forecastRangeOptions}
             value={String(range)}
           />
-          <IconButton appearance="plain" label="基于艾宾浩斯记忆遗忘曲线（Ebbinghaus Curve）动态推导未来到期错题，随作答反馈不断自适应调整。">
+          <IconButton appearance="plain" label="假设每次复习都按时完成且结果良好；真实作答结果会立即重新计算后续任务。">
             <Icon name="info" size={14} />
           </IconButton>
         </div>
       </div>
 
-      {/* 艾宾浩斯平滑折线负荷图 */}
       <ForecastTimelineChart days={days} />
 
       {/* 时间轴详情卡片列表 */}
@@ -176,13 +142,13 @@ function ForecastStrip({
                 <span>{date.getMonth() + 1}/{date.getDate()}</span>
               </div>
               <div className="today-forecast__metric-pill">
-                <strong>{Math.round(day.averageRetention * 100)}%</strong>
-                <span>平均保持</span>
+                <strong>{day.estimatedMinutes}</strong>
+                <span>分钟</span>
               </div>
               <span className="today-forecast__problem-count">
-                最低 {Math.round(day.minimumRetention * 100)}% · {day.estimatedMinutes} 分钟
+                {day.estimatedUnitCount} 组 · {day.estimatedProblemCount} 题
               </span>
-              <small>{loadLabels[day.loadLevel]}</small>
+              <small>{day.overdueProblemCount ? `含 ${day.overdueProblemCount} 道逾期` : '按预计日期安排'}</small>
             </article>
           )
         })}
@@ -235,10 +201,12 @@ function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer, preferre
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [plan, setPlan] = useState<TodayReviewPlan | null>(null)
   const [forecast, setForecast] = useState<ReviewForecastDay[]>([])
+  const [corrections, setCorrections] = useState<TodayCorrectionTask[]>([])
   const [forecastRange, setForecastRange] = useState<ForecastRange>(7)
   const forecastRangeRef = useRef<ForecastRange>(7)
   forecastRangeRef.current = forecastRange
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
+  const [activeAttempt, setActiveAttempt] = useState<PracticeAttempt | null>(null)
   const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [todayAttempt, setTodayAttempt] = useState<PracticeAttempt | null>(null)
   const [variantMode, setVariantMode] = useState<VariantGenerationMode>('variant_preferred')
@@ -257,12 +225,13 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       // The forward forecast is independent of today's plan; overlap it with
       // the practice-set lookup instead of waiting for both sequentially.
       const nextPlan = await getOrCreateTodayPlan()
-      const [nextForecast, existingPracticeSet] = await Promise.all([
+      const [nextForecast, existingPracticeSet, nextCorrections] = await Promise.all([
         getReviewForecast(forecastRangeRef.current),
         findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
+        listTodayCorrectionTasks(),
       ])
       if (isCancelled()) return
-      setPlan(nextPlan); setForecast(nextForecast); setVariantMode(nextPlan.preferences.variantMode)
+      setPlan(nextPlan); setForecast(nextForecast); setCorrections(nextCorrections); setVariantMode(nextPlan.preferences.variantMode)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
@@ -274,7 +243,10 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     return () => { cancelled = true }
   }, [load])
   useEffect(() => {
-    const refresh = () => void refreshForecast(forecastRangeRef.current)
+    const refresh = () => {
+      void refreshForecast(forecastRangeRef.current)
+      void listTodayCorrectionTasks().then(setCorrections).catch(() => undefined)
+    }
     window.addEventListener(LEARNING_STATE_EVENT, refresh)
     window.addEventListener('focus', refresh)
     const timer = window.setInterval(refresh, 60_000)
@@ -310,16 +282,33 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         && (todayPracticeSet.generationMetadata.variantMode ?? 'variant_preferred') === variantMode
         ? todayPracticeSet
         : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode, variantMode)
-      setTodayPracticeSet(next); setTodayAttempt(await getLatestPracticeAttempt(next.id)); setActivePracticeSet(next)
+      const attempt = await getLatestPracticeAttempt(next.id)
+      setTodayPracticeSet(next); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(next)
+    } catch (reason) { setError(practiceErrorMessage(reason)) }
+    finally { setBusy(false) }
+  }
+
+  const openCorrection = async (task: TodayCorrectionTask) => {
+    setBusy(true); setError(null)
+    try {
+      const [practiceSet, attempt] = await Promise.all([
+        getPracticeSet(task.practiceSetId),
+        getPracticeAttempt(task.practiceAttemptId),
+      ])
+      if (!practiceSet || !attempt) throw new Error('找不到这组待订正练习')
+      setActiveAttempt(attempt)
+      setActivePracticeSet(practiceSet)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
 
   if (activePracticeSet) return <PracticeSetView
-    onBack={() => { setActivePracticeSet(null); void load() }}
+    onBack={() => { setActivePracticeSet(null); setActiveAttempt(null); void load() }}
     onOpenPracticeSet={setActivePracticeSet}
-    initialAttempt={todayAttempt?.practiceSetId === activePracticeSet.id ? todayAttempt : undefined}
-    initialMode={todayAttempt?.practiceSetId === activePracticeSet.id && todayAttempt.status === 'completed' ? 'results' : undefined}
+    initialAttempt={activeAttempt?.practiceSetId === activePracticeSet.id ? activeAttempt : undefined}
+    initialMode={activeAttempt?.practiceSetId === activePracticeSet.id && (
+      corrections.some((task) => task.practiceAttemptId === activeAttempt.id) || activeAttempt.status === 'completed'
+    ) ? 'results' : undefined}
     practiceSet={activePracticeSet}
   />
 
@@ -334,7 +323,9 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       ? '查看结果'
       : todayAttempt && ['capturing', 'captured', 'extracting', 'extracted', 'grading'].includes(todayAttempt.status)
         ? '查看批改进度'
-        : '查看今日练习'
+      : '查看今日练习'
+  const correctionProblems = corrections.reduce((sum, task) => sum + task.pendingProblemCount, 0)
+  const correctionMinutes = corrections.reduce((sum, task) => sum + task.estimatedMinutes, 0)
   return <main className="workspace today-workspace">
     <PageHeader
       actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
@@ -352,10 +343,20 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       </div> : undefined}
       className="today-header"
       eyebrow={todayDate}
-      summary={plan ? `${completed} / ${actionableUnits.length} · 共预计 ${minutes(plan.estimatedDurationSeconds)} 分钟` : undefined}
+      summary={plan ? `${completed} / ${actionableUnits.length} · 复习 ${minutes(plan.estimatedDurationSeconds)} 分钟${correctionProblems ? ` · 待订正 ${correctionProblems} 题` : ''}` : undefined}
       title="今日"
     />
     <AsyncState error={error} loading={loading} loadingLabel="正在准备今天的学习内容…" onRetry={load}>
+      {corrections.length > 0 && <section className="today-corrections" aria-label="待订正练习">
+        <header>
+          <div><p className="eyebrow">先完成学习闭环</p><h2>待订正</h2></div>
+          <span>{correctionProblems} 题 · 预计 {correctionMinutes} 分钟</span>
+        </header>
+        {corrections.map((task) => <article key={task.id}>
+          <div><strong>{task.subject}练习</strong><span>{task.pendingProblemCount} 道结果尚未确认</span></div>
+          <Button disabled={busy} onClick={() => void openCorrection(task)} variant="secondary">继续订正</Button>
+        </article>)}
+      </section>}
       {plan && plan.units.length === 0 ? <EmptyState
         action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}
         description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。"

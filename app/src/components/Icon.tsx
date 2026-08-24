@@ -4,7 +4,6 @@ export type IconName =
   | 'library'
   | 'curriculum'
   | 'insights'
-  | 'planner'
   | 'settings'
   | 'camera'
   | 'image'
@@ -60,12 +59,6 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M5 20V9M12 20V4M19 20v-7" />
       <path d="M3 20h18" />
-    </>
-  ),
-  planner: (
-    <>
-      <rect x="4" y="5" width="16" height="15" rx="2" />
-      <path d="M8 3v4M16 3v4M4 10h16M8 14h3M8 17h6" />
     </>
   ),
   settings: (
