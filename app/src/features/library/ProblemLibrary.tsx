@@ -44,7 +44,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
+import { Button, Dialog, ErrorState, FlowingTaskSurface, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -62,6 +62,7 @@ import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../p
 import { findProblemDuplicateSuggestions } from '../../domain/problemDuplicates'
 import {
   createRelabelBatch,
+  setUserProblemDifficulty,
   listTextbooks,
   setProblemTextbookMatches,
 } from '../../platform/horizonDatabase'
@@ -78,7 +79,9 @@ import {
 import { getPreferredDiagram } from '../../platform/diagramDatabase'
 import {
   createPracticeSetFromVariantPreview,
+  getSingleVariantPrerequisites,
   prepareSingleProblemVariant,
+  type SingleVariantPrerequisites,
   type SingleVariantPreview,
 } from '../../platform/practiceDatabase'
 import type { PracticeSet } from '../../domain/practice'
@@ -291,6 +294,12 @@ export function ProblemLibrary() {
   const [diagramView, setDiagramView] = useState<'generated' | 'original'>('generated')
   const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
   const [variantBusy, setVariantBusy] = useState(false)
+  const [variantDialogOpen, setVariantDialogOpen] = useState(false)
+  const [variantPrerequisites, setVariantPrerequisites] = useState<SingleVariantPrerequisites | null>(null)
+  const [variantDialogError, setVariantDialogError] = useState<string | null>(null)
+  const [variantDraftSubject, setVariantDraftSubject] = useState('')
+  const [variantDraftStem, setVariantDraftStem] = useState('')
+  const [variantDraftDifficulty, setVariantDraftDifficulty] = useState<'basic' | 'intermediate' | 'advanced'>('intermediate')
   const [singleVariantPreview, setSingleVariantPreview] = useState<SingleVariantPreview | null>(null)
   const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
@@ -513,17 +522,6 @@ export function ProblemLibrary() {
   const selectedHasDisplayDiagram =
     Boolean(selectedDiagramRect) &&
     Boolean(selected?.cropImagePath || selectedDiagramPath)
-  const variantMissingItems = [
-    !selected?.stemMarkdown?.trim() ? '完整题干' : null,
-    !solution || solution.status !== 'completed' ? '有效解答' : null,
-    !selected?.libraryMetadata.difficulty ? '题目难度' : null,
-    !selected?.libraryMetadata.tags.some((tag) => tag.id && tag.type !== 'error')
-      ? '至少一个已确认知识、方法或模型标签'
-      : null,
-  ].filter((item): item is string => Boolean(item))
-  const variantPrerequisite = variantMissingItems.length
-    ? `生成变式前还需：${variantMissingItems.join('、')}`
-    : null
   const selectedIsProcessing =
     selected?.aiStatus === 'pending' || selected?.aiStatus === 'processing'
   const activeModelRun =
@@ -779,14 +777,88 @@ export function ProblemLibrary() {
   const generateSingleVariant = async () => {
     if (!selected) return
     setVariantBusy(true)
+    setVariantDialogError(null)
     try {
       setSingleVariantPreview(await prepareSingleProblemVariant(selected.id))
     } catch (error) {
-      notify(String(error instanceof Error ? error.message : error), 'error')
+      setVariantDialogError(String(error instanceof Error ? error.message : error))
     } finally {
       setVariantBusy(false)
     }
   }
+
+  const refreshVariantPrerequisites = async (autoGenerate = false) => {
+    if (!selected) return null
+    const snapshot = await getSingleVariantPrerequisites(selected.id)
+    setVariantPrerequisites(snapshot)
+    setVariantDraftSubject((current) => current || snapshot.subject)
+    setVariantDraftStem((current) => current || snapshot.stemMarkdown)
+    if (snapshot.difficulty) setVariantDraftDifficulty(snapshot.difficulty)
+    if (autoGenerate && snapshot.missing.length === 0 && !variantBusy && !singleVariantPreview) {
+      await generateSingleVariant()
+    }
+    return snapshot
+  }
+
+  const openVariantDialog = async () => {
+    if (!selected) return
+    setVariantDialogOpen(true)
+    setSingleVariantPreview(null)
+    setVariantDialogError(null)
+    setVariantPrerequisites(null)
+    setVariantDraftSubject(selected.subject ?? '')
+    setVariantDraftStem(selected.stemMarkdown ?? '')
+    try { await refreshVariantPrerequisites(true) }
+    catch (error) { setVariantDialogError(`无法检查生成条件：${String(error)}`) }
+  }
+
+  const completeVariantProblemFields = async () => {
+    if (!selected) return
+    setVariantBusy(true); setVariantDialogError(null)
+    try {
+      const updated = await updateProblemUserFields(selected.id, {
+        title: selected.title,
+        subject: variantDraftSubject,
+        stemMarkdown: variantDraftStem,
+        knowledgePoints: selected.knowledgePoints,
+      })
+      setProblems((current) => current.map((problem) => problem.id === updated.id ? updated : problem))
+      setVariantBusy(false)
+      await refreshVariantPrerequisites(true)
+    } catch (error) {
+      setVariantDialogError(error instanceof ProblemSubjectChangeConflict
+        ? '更改科目需要先在题目编辑页确认教材与标签重置。'
+        : String(error))
+      setVariantBusy(false)
+    }
+  }
+
+  const completeVariantDifficulty = async () => {
+    if (!selected) return
+    setVariantBusy(true); setVariantDialogError(null)
+    try {
+      await setUserProblemDifficulty(selected.id, variantDraftSubject || selected.subject || '', variantDraftDifficulty)
+      setVariantBusy(false)
+      await refreshVariantPrerequisites(true)
+    } catch (error) { setVariantDialogError(String(error)); setVariantBusy(false) }
+  }
+
+  const completeVariantSolution = async () => {
+    if (!selected) return
+    setVariantDialogError(null)
+    try {
+      setSolution(await queueProblemSolution(selected.id))
+      void runSolutionWorker()
+    } catch (error) { setVariantDialogError(`无法生成解答：${String(error)}`) }
+  }
+
+  useEffect(() => {
+    if (!variantDialogOpen || solution?.status !== 'completed' || variantBusy || singleVariantPreview) return
+    void refreshVariantPrerequisites(true).catch((error) => setVariantDialogError(String(error)))
+    // The completed solution event is the only trigger needed here; the
+    // prerequisite refresh itself updates local dialog state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [solution?.status, variantDialogOpen])
 
   const startSingleVariantPractice = async () => {
     if (!singleVariantPreview) return
@@ -794,6 +866,7 @@ export function ProblemLibrary() {
     try {
       setActivePracticeSet(await createPracticeSetFromVariantPreview(singleVariantPreview))
       setSingleVariantPreview(null)
+      setVariantDialogOpen(false)
     } catch (error) {
       notify(`无法创建单题练习：${String(error)}`, 'error')
     } finally {
@@ -1284,9 +1357,9 @@ export function ProblemLibrary() {
                     <>
                       <button
                         className="secondary-action"
-                        disabled={updating || variantBusy || Boolean(variantPrerequisite)}
-                        onClick={() => void generateSingleVariant()}
-                        title={variantPrerequisite ?? '生成并独立审校一道变式题'}
+                        disabled={updating || variantBusy}
+                        onClick={() => void openVariantDialog()}
+                        title="生成并独立审校一道变式题"
                         type="button"
                       >
                         {variantBusy ? '生成中…' : '生成变式'}
@@ -1335,9 +1408,6 @@ export function ProblemLibrary() {
                   )}
                 </div>
               </div>
-              {!editing && !selected.deletedAt && variantPrerequisite && (
-                <p className="problem-variant-prerequisite" role="status">{variantPrerequisite}</p>
-              )}
 
               {editing ? (
                 <div className="problem-detail-content">
@@ -1901,10 +1971,40 @@ export function ProblemLibrary() {
       </section>
 
       <Dialog
-        onClose={() => { if (!variantBusy) setSingleVariantPreview(null) }}
-        open={Boolean(singleVariantPreview)}
-        title="变式题预览"
+        onClose={() => { if (!variantBusy) { setVariantDialogOpen(false); setSingleVariantPreview(null) } }}
+        open={variantDialogOpen}
+        title={singleVariantPreview ? '变式题预览' : '生成变式'}
       >
+        {!variantPrerequisites && !variantDialogError && <FlowingTaskSurface compact state="running" title="正在检查题目条件" />}
+        {variantBusy && !singleVariantPreview && <FlowingTaskSurface compact detail="正在生成、独立求解并校验题目" state="running" title="正在生成变式题" />}
+        {!variantBusy && solution && ['pending', 'processing'].includes(solution.status) && variantPrerequisites?.missing.includes('solution') && <FlowingTaskSurface compact detail="完成后会自动继续生成变式" state="running" title="正在准备有效解答" />}
+        {!variantBusy && variantPrerequisites && variantPrerequisites.missing.length > 0 && <div className="problem-edit-form">
+          <p>请在这里完成缺少的信息；最后一项完成后会自动开始生成。</p>
+          {(variantPrerequisites.missing.includes('subject') || variantPrerequisites.missing.includes('stem')) && <section>
+            <h3>题目信息</h3>
+            {variantPrerequisites.missing.includes('subject') && <label><span>科目</span><input onChange={(event) => setVariantDraftSubject(event.target.value)} placeholder="例如：数学" value={variantDraftSubject} /></label>}
+            {variantPrerequisites.missing.includes('stem') && <Textarea label="完整题干" onChange={(event) => setVariantDraftStem(event.target.value)} rows={6} value={variantDraftStem} />}
+            <Button disabled={!variantDraftSubject.trim() || !variantDraftStem.trim()} onClick={() => void completeVariantProblemFields()} variant="secondary">完成题目信息</Button>
+          </section>}
+          {variantPrerequisites.missing.includes('solution') && <section>
+            <h3>有效解答</h3><p>变式审校需要一份完整解答作为不变量依据。</p>
+            <Button disabled={solution?.status === 'pending' || solution?.status === 'processing'} onClick={() => void completeVariantSolution()} variant="secondary">生成并完成解答</Button>
+          </section>}
+          {variantPrerequisites.missing.includes('difficulty') && <section>
+            <h3>题目难度</h3>
+            <ListboxSelect ariaLabel="题目难度" onValueChange={(value) => setVariantDraftDifficulty(value as typeof variantDraftDifficulty)} options={[{ value: 'basic', label: '基础' }, { value: 'intermediate', label: '中档' }, { value: 'advanced', label: '进阶' }]} value={variantDraftDifficulty} />
+            <Button onClick={() => void completeVariantDifficulty()} variant="secondary">确认难度</Button>
+          </section>}
+          {variantPrerequisites.missing.includes('tags') && selected && <section>
+            <h3>已确认标签</h3><p>确认或添加至少一个知识、方法或模型标签。</p>
+            <ProblemTags onChange={() => void refreshVariantPrerequisites(true)} problemId={selected.id} subject={selected.subject} subjectId={selected.subjectId} />
+          </section>}
+          <div className="curriculum-dialog-actions"><Button onClick={() => setVariantDialogOpen(false)} variant="ghost">关闭</Button></div>
+        </div>}
+        {variantDialogError && !variantBusy && <div className="problem-edit-form">
+          <ErrorState error={classifyAIError(variantDialogError)} />
+          <div className="curriculum-dialog-actions"><Button onClick={() => setVariantDialogOpen(false)} variant="ghost">关闭</Button><Button onClick={() => void refreshVariantPrerequisites(true)} variant="primary">重试</Button></div>
+        </div>}
         {singleVariantPreview?.outcome.variant && <div className="problem-edit-form">
           <p>该变式已通过独立求解、标签、难度和必要步骤审校。</p>
           <section>
@@ -1921,7 +2021,7 @@ export function ProblemLibrary() {
             ))}
           </div>
           <div className="curriculum-dialog-actions">
-            <Button disabled={variantBusy} onClick={() => setSingleVariantPreview(null)} variant="ghost">关闭</Button>
+            <Button disabled={variantBusy} onClick={() => { setSingleVariantPreview(null); setVariantDialogOpen(false) }} variant="ghost">关闭</Button>
             <Button loading={variantBusy} onClick={() => void startSingleVariantPractice()} variant="primary">加入今日练习并开始</Button>
           </div>
         </div>}

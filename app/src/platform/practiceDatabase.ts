@@ -8,7 +8,6 @@ import {
   type PracticeSet,
   type PracticeSourceType,
   type PracticeTargetSkill,
-  type VariantGenerationMode,
 } from '../domain/practice'
 import type { DifficultyLevel } from '../domain/models'
 import type { ReviewSkillState, ReviewTag } from '../domain/review'
@@ -18,7 +17,7 @@ import { generateVerifiedPracticeVariant } from './variantPracticeDatabase'
 import type { PracticeVariantPreparationOutcome } from './variantPracticeDatabase'
 import { createPracticeReviewSession, transitionPracticeReviewSession } from './practiceSessionDatabase'
 import { getProblemSolution, getSavedProblem } from './database'
-import { listProblemTags } from './horizonDatabase'
+import { getProblemDifficulty, listProblemTags } from './horizonDatabase'
 import { getPreferredDiagram } from './diagramDatabase'
 import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
 import { renderTikz } from './native'
@@ -102,14 +101,35 @@ export async function findPracticeSetForSource(
   sourceType: PracticeSourceType,
   sourceRef: string,
   sessionMode?: PracticeSet['sessionMode'],
-  variantMode?: VariantGenerationMode,
 ) {
   const row = (await select<Array<{ id: string }>>(
     `SELECT id FROM practice_sets WHERE source_type=$1 AND source_ref=$2 AND status='ready'
       ${sessionMode ? 'AND session_mode=$3' : ''}
-      ${variantMode ? `AND COALESCE(json_extract(generation_metadata_json,'$.variantMode'),'variant_preferred')=$${sessionMode ? 4 : 3}` : ''}
       ORDER BY created_at DESC LIMIT 1`,
-    [sourceType, sourceRef, ...(sessionMode ? [sessionMode] : []), ...(variantMode ? [variantMode] : [])],
+    [sourceType, sourceRef, ...(sessionMode ? [sessionMode] : [])],
+  ))[0]
+  return row ? readPracticeSetById(row.id) : null
+}
+
+async function findReusablePracticeSetForSource(
+  sourceType: PracticeSourceType,
+  sourceRef: string,
+  sessionMode: PracticeSet['sessionMode'],
+) {
+  const row = (await select<Array<{ id: string }>>(
+    `SELECT practice_set.id FROM practice_sets practice_set
+     WHERE practice_set.source_type=$1 AND practice_set.source_ref=$2
+       AND practice_set.status='ready' AND practice_set.session_mode=$3
+       AND EXISTS (
+         SELECT 1 FROM practice_items item
+         WHERE item.practice_set_id=practice_set.id AND NOT EXISTS (
+           SELECT 1 FROM practice_responses response
+           JOIN practice_evidences evidence ON evidence.practice_response_id=response.id
+           WHERE response.practice_item_id=item.id
+         )
+       )
+     ORDER BY practice_set.created_at DESC LIMIT 1`,
+    [sourceType, sourceRef, sessionMode],
   ))[0]
   return row ? readPracticeSetById(row.id) : null
 }
@@ -128,10 +148,13 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, operation: (i
 
 export async function createPracticeSet(
   input: PracticePlannerInput,
-  options: { preparedVariants?: Map<string, PracticeVariantPreparationOutcome> } = {},
+  options: {
+    preparedVariants?: Map<string, PracticeVariantPreparationOutcome>
+    forceVariant?: boolean
+  } = {},
 ): Promise<PracticeSet> {
   const mode = input.sessionMode ?? 'standard'
-  const cached = await findPracticeSetForSource(input.sourceType, input.sourceRef, mode, input.variantMode ?? 'variant_preferred')
+  const cached = await findReusablePracticeSetForSource(input.sourceType, input.sourceRef, mode)
   if (cached) return cached
   const blueprint = buildPracticeBlueprint(input)
   if (!blueprint.items.length) throw new Error('没有带有效题干、答案和解法的关联题，无法创建练习集')
@@ -142,10 +165,9 @@ export async function createPracticeSet(
     settings: input.sessionSettings,
   })
   try {
-    const variantMode = input.variantMode ?? 'variant_preferred'
     const preparedOutcomes = await mapWithConcurrency(blueprint.items, 2, async (planned) => ({
       planned,
-      outcome: options.preparedVariants?.get(planned.problem.problemId) ?? (variantMode === 'original_only'
+      outcome: options.preparedVariants?.get(planned.problem.problemId) ?? (!options.forceVariant && planned.requestedSourceType === 'existing_problem'
         ? { planId: '', variant: null, fallbackCode: 'original_only' }
         : await generateVerifiedPracticeVariant({ source: planned.problem, targetDifficulty: planned.difficulty })),
     }))
@@ -169,7 +191,7 @@ export async function createPracticeSet(
     return await withTransactionLock(async () => {
       await execute('BEGIN IMMEDIATE')
       try {
-        const existing = await findPracticeSetForSource(input.sourceType, input.sourceRef, mode, variantMode)
+        const existing = await findReusablePracticeSetForSource(input.sourceType, input.sourceRef, mode)
         if (existing) {
           const now = Date.now()
           await execute("UPDATE review_sessions SET status='cancelled',failure_code='source_race_reused',updated_at=$1 WHERE id=$2 AND status='draft'", [now, session.id])
@@ -188,7 +210,7 @@ export async function createPracticeSet(
           JSON.stringify(session.settings), PRACTICE_PLANNER_VERSION, JSON.stringify(input.targetSkills), JSON.stringify({
             plannerVersion: blueprint.plannerVersion, masteryBand: blueprint.masteryBand,
             requestedBudget: blueprint.requestedBudget, warnings: blueprint.warnings,
-            variantMode,
+            sourcePolicy: options.forceVariant ? 'explicit-variant-v1' : 'alternating-v1',
             variantPlanIds: prepared.map((item) => item.outcome.planId).filter(Boolean),
             generatedVariantCount: prepared.filter((item) => item.outcome.variant).length,
             fallbackCount: prepared.filter((item) => !item.outcome.variant).length,
@@ -209,6 +231,7 @@ export async function createPracticeSet(
           if (!bundleId) throw new Error(`练习题 ${index + 1} 缺少 SkillBundle，无法建立 ReviewSession`)
           const generationMetadata = variant ? {
             variantPlanId: variant.plan.id, sourceProblemId: problem.problemId,
+            requestedSourceType: planned.requestedSourceType,
             changes: variant.candidate.changes, verification: variant.verification,
             provider: variant.provider, model: variant.model,
             promptVersion: variant.plan.promptVersion, schemaVersion: variant.plan.schemaVersion,
@@ -218,6 +241,7 @@ export async function createPracticeSet(
             diagramImagePaths: variant.candidate.diagramPolicy === 'preserved' ? problem.diagramImagePaths : [],
           } : {
             variantFallbackPlanId: outcome.planId, variantFallbackCode: outcome.fallbackCode,
+            requestedSourceType: planned.requestedSourceType,
             diagramIds: problem.diagramIds, questionImagePath: problem.questionImagePath,
             diagramImagePaths: problem.diagramImagePaths,
           }
@@ -318,6 +342,12 @@ interface RelatedProblemRow {
   question_image_path: string | null; diagram_image_path: string | null; diagram_ids_json: string
 }
 interface SkillStateRow extends Partial<ReviewSkillState> { tag_id: string }
+interface ConfirmedPracticeHistoryRow {
+  problem_id: string
+  confirmed_count: number
+  last_confirmed_at: number
+  last_source_type: PracticeItem['sourceType']
+}
 
 function optionsFromStructured(value: string) {
   const parsed = parseJSON<{ options?: unknown[] }>(value, {})
@@ -370,8 +400,26 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
     LEFT JOIN problem_difficulties difficulty ON difficulty.problem_id=problem.id
     CROSS JOIN (SELECT $1 AS subject) context
     WHERE link.skill_bundle_id=$2 ORDER BY link.similarity_score DESC, problem.id`, [context.subject, context.skill_bundle_id])
+  const relatedIds = [...new Set(related.map((row) => row.problem_id))]
+  const historyRows = relatedIds.length ? await select<ConfirmedPracticeHistoryRow[]>(`
+    WITH confirmed AS (
+      SELECT item.source_problem_id AS problem_id,item.source_type,evidence.created_at,
+        row_number() OVER (
+          PARTITION BY item.source_problem_id
+          ORDER BY evidence.created_at DESC,evidence.id DESC
+        ) AS recent_rank
+      FROM practice_items item
+      JOIN practice_responses response ON response.practice_item_id=item.id
+      JOIN practice_evidences evidence ON evidence.practice_response_id=response.id
+      WHERE item.source_problem_id IN (${relatedIds.map((_, index) => `$${index + 1}`).join(',')})
+    )
+    SELECT problem_id,count(*) AS confirmed_count,max(created_at) AS last_confirmed_at,
+      max(CASE WHEN recent_rank=1 THEN source_type END) AS last_source_type
+    FROM confirmed GROUP BY problem_id`, relatedIds) : []
+  const history = new Map(historyRows.map((row) => [row.problem_id, row]))
   const candidates: PracticeProblemCandidate[] = related.map((row) => {
     const solutionJson = JSON.stringify({ contentMarkdown: row.solution_content ?? '', steps: parseJSON(row.solution_steps_json, []) })
+    const confirmed = history.get(row.problem_id)
     return {
       problemId: row.problem_id, targetSkillBundleId: context.skill_bundle_id,
       subject: row.subject, statementMarkdown: row.stem_markdown,
@@ -380,6 +428,9 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
       diagramIds: parseJSON<string[]>(row.diagram_ids_json, []),
       questionImagePath: row.question_image_path, diagramImagePaths: row.diagram_image_path ? [row.diagram_image_path] : [],
       originalDifficulty: row.difficulty ?? context.target_difficulty, relevance: numeric(row.similarity_score, 1),
+      confirmedPracticeCount: numeric(confirmed?.confirmed_count),
+      lastConfirmedAt: confirmed ? numeric(confirmed.last_confirmed_at) : null,
+      lastConfirmedSourceType: confirmed?.last_source_type ?? null,
     }
   })
   return {
@@ -392,6 +443,36 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
 export interface SingleVariantPreview {
   source: PracticeProblemCandidate
   outcome: PracticeVariantPreparationOutcome
+}
+
+export interface SingleVariantPrerequisites {
+  subject: string
+  stemMarkdown: string
+  hasValidSolution: boolean
+  difficulty: DifficultyLevel | null
+  confirmedTagCount: number
+  missing: Array<'subject' | 'stem' | 'solution' | 'difficulty' | 'tags'>
+}
+
+export async function getSingleVariantPrerequisites(problemId: string): Promise<SingleVariantPrerequisites> {
+  const [problem, solution, tags, difficulty] = await Promise.all([
+    getSavedProblem(problemId), getProblemSolution(problemId), listProblemTags(problemId), getProblemDifficulty(problemId),
+  ])
+  if (!problem) throw new Error('找不到这道题')
+  const hasValidSolution = Boolean(solution && solution.status === 'completed' &&
+    (solution.contentMarkdown.trim() || solution.steps.length))
+  const confirmedTagCount = tags.filter((tag) => tag.tagId && tag.tagType !== 'error' &&
+    tag.mappingStatus !== 'rejected' && tag.verificationStatus === 'user_verified').length
+  const missing: SingleVariantPrerequisites['missing'] = []
+  if (!problem.subject?.trim()) missing.push('subject')
+  if (!problem.stemMarkdown?.trim()) missing.push('stem')
+  if (!hasValidSolution) missing.push('solution')
+  if (!difficulty) missing.push('difficulty')
+  if (!confirmedTagCount) missing.push('tags')
+  return {
+    subject: problem.subject?.trim() ?? '', stemMarkdown: problem.stemMarkdown?.trim() ?? '',
+    hasValidSolution, difficulty: difficulty?.level ?? null, confirmedTagCount, missing,
+  }
 }
 
 async function ensureSingleProblemBundle(source: PracticeProblemCandidate) {
@@ -454,7 +535,7 @@ export async function prepareSingleProblemVariant(problemId: string): Promise<Si
   }
   if (!problem.libraryMetadata.difficulty) throw new Error('请先确认题目难度')
   const targetTags: ReviewTag[] = problemTags
-    .filter((tag) => tag.tagId && tag.tagType !== 'error' && tag.mappingStatus !== 'rejected' && tag.verificationStatus !== 'rejected')
+    .filter((tag) => tag.tagId && tag.tagType !== 'error' && tag.mappingStatus !== 'rejected' && tag.verificationStatus === 'user_verified')
     .map((tag) => ({ id: tag.tagId, name: tag.canonicalName, type: tag.tagType, role: tag.role }))
   if (!targetTags.length) throw new Error('请先确认至少一个知识、方法或模型标签')
   const solutionJson = JSON.stringify({ contentMarkdown: solution.contentMarkdown, steps: solution.steps })
@@ -484,31 +565,28 @@ export async function createPracticeSetFromVariantPreview(preview: SingleVariant
   return createPracticeSet({
     sourceType: 'skill', sourceRef: `variant:${preview.outcome.planId}`, subject: preview.source.subject,
     targetSkills: targets, relatedProblems: [preview.source], recentFailureCount: 0,
-    desiredBudget: 1, sessionMode: 'standard', variantMode: 'variant_preferred',
-  }, { preparedVariants: new Map([[preview.source.problemId, preview.outcome]]) })
+    desiredBudget: 1, sessionMode: 'standard',
+  }, { preparedVariants: new Map([[preview.source.problemId, preview.outcome]]), forceVariant: true })
 }
 
 export async function getOrCreatePracticeSetFromReviewUnit(
   moduleId: string, budget = 3, sessionMode: PracticeSet['sessionMode'] = 'standard',
-  variantMode: VariantGenerationMode = 'variant_preferred',
 ) {
-  const existing = await findPracticeSetForSource('review_unit', moduleId, sessionMode, variantMode)
-  return existing ?? createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'review_unit', budget)), sessionMode, variantMode })
+  const existing = await findReusablePracticeSetForSource('review_unit', moduleId, sessionMode)
+  return existing ?? createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'review_unit', budget)), sessionMode })
 }
 
 export async function getOrCreatePracticeSetFromToday(
   moduleId: string, budget = 3, sessionMode: PracticeSet['sessionMode'] = 'standard',
-  variantMode: VariantGenerationMode = 'variant_preferred',
 ) {
-  return createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'today', budget)), sessionMode, variantMode })
+  return createPracticeSet({ ...(await plannerInputForReviewModule(moduleId, 'today', budget)), sessionMode })
 }
 
 export async function getOrCreatePracticeSetFromTodayPlan(
   sessionId: string, moduleIds: string[], budget = 6,
   sessionMode: PracticeSet['sessionMode'] = 'standard',
-  variantMode: VariantGenerationMode = 'variant_preferred',
 ) {
-  const existing = await findPracticeSetForSource('today', sessionId, sessionMode, variantMode)
+  const existing = await findReusablePracticeSetForSource('today', sessionId, sessionMode)
   if (existing) return existing
   const uniqueModuleIds = [...new Set(moduleIds)]
   if (!uniqueModuleIds.length) throw new Error('今天没有可用于生成练习的学习主题')
@@ -526,7 +604,7 @@ export async function getOrCreatePracticeSetFromTodayPlan(
     targetSkills,
     relatedProblems,
     recentFailureCount: Math.max(...inputs.map((input) => input.recentFailureCount), 0),
-    desiredBudget: Math.max(uniqueModuleIds.length, budget), sessionMode, variantMode,
+    desiredBudget: Math.max(uniqueModuleIds.length, budget), sessionMode,
   })
 }
 

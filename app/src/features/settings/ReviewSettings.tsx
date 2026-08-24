@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, ListboxSelect } from '../../components/ui'
 import type { ReviewSessionMode } from '../../domain/review'
-import type { VariantGenerationMode } from '../../domain/practice'
 import {
   DEFAULT_REVIEW_PREFERENCES,
   getReviewPreferences,
@@ -16,10 +15,6 @@ const modeOptions = [
   { value: 'quick', label: '快速复习' },
   { value: 'standard', label: '标准练习' },
   { value: 'mock_test', label: '模拟测试' },
-]
-const variantOptions = [
-  { value: 'variant_preferred', label: '变式优先' },
-  { value: 'original_only', label: '仅使用原题' },
 ]
 const paceOptions = [
   { value: 'relaxed', label: '宽松 · 间隔更长，日常任务较少' },
@@ -85,13 +80,6 @@ export function ReviewSettings() {
         onValueChange={(preferredMode) => setValue((current) => ({ ...current, preferredMode: preferredMode as ReviewSessionMode }))}
         options={modeOptions}
         value={value.preferredMode}
-      />
-      <ListboxSelect
-        disabled={loading || saving}
-        label="默认题目来源"
-        onValueChange={(variantMode) => setValue((current) => ({ ...current, variantMode: variantMode as VariantGenerationMode }))}
-        options={variantOptions}
-        value={value.variantMode}
       />
     </div>
     <div className="settings-save-row">

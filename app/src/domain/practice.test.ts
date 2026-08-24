@@ -66,6 +66,34 @@ describe('practice planner', () => {
     expect(blueprint.items.map((item) => item.problem.problemId)).toEqual(['math-high', 'physics'])
   })
 
+  it('alternates each source from confirmed evidence and starts with a variant', () => {
+    const blueprint = buildPracticeBlueprint({
+      sourceType: 'today', sourceRef: 'today', subject: '数学', targetSkills: [],
+      relatedProblems: [
+        problem('new'),
+        { ...problem('after-variant'), confirmedPracticeCount: 1, lastConfirmedAt: 10, lastConfirmedSourceType: 'generated_variant' },
+        { ...problem('after-original'), confirmedPracticeCount: 1, lastConfirmedAt: 20, lastConfirmedSourceType: 'existing_problem' },
+      ], recentFailureCount: 0, desiredBudget: 3,
+    })
+    expect(blueprint.items.map((item) => [item.problem.problemId, item.requestedSourceType])).toEqual([
+      ['new', 'generated_variant'],
+      ['after-variant', 'existing_problem'],
+      ['after-original', 'generated_variant'],
+    ])
+  })
+
+  it('prioritizes never-confirmed and least-recently confirmed sources', () => {
+    const blueprint = buildPracticeBlueprint({
+      sourceType: 'today', sourceRef: 'today', subject: '数学', targetSkills: [],
+      relatedProblems: [
+        { ...problem('recent', 100), confirmedPracticeCount: 2, lastConfirmedAt: 200 },
+        { ...problem('never', 1), confirmedPracticeCount: 0, lastConfirmedAt: null },
+        { ...problem('old', 1), confirmedPracticeCount: 1, lastConfirmedAt: 100 },
+      ], recentFailureCount: 0, desiredBudget: 3,
+    })
+    expect(blueprint.items.map((item) => item.problem.problemId)).toEqual(['never', 'old', 'recent'])
+  })
+
   it('rejects generated schema success when semantics are invalid', () => {
     expect(validateGeneratedPracticeItem({
       statementMarkdown: '选择正确答案', canonicalAnswer: 'C', solutionJson: '{}', difficulty: 'hard',

@@ -59,6 +59,12 @@ async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPra
      JOIN variant_model_runs verification ON verification.id=candidate.verification_model_run_id
      WHERE plan.source_problem_id=$1 AND plan.target_difficulty=$2 AND plan.source_input_hash=$3
        AND plan.prompt_version=$4 AND plan.schema_version=$5 AND plan.status='verified'
+       AND NOT EXISTS (
+         SELECT 1 FROM practice_items used_item
+         JOIN practice_responses used_response ON used_response.practice_item_id=used_item.id
+         JOIN practice_evidences used_evidence ON used_evidence.practice_response_id=used_response.id
+         WHERE used_item.variant_plan_id=plan.id
+       )
      ORDER BY plan.updated_at DESC LIMIT 1`,
     [plan.sourceProblemId, plan.targetDifficulty, plan.sourceInputHash, plan.promptVersion, plan.schemaVersion],
   )

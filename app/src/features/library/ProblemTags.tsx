@@ -9,6 +9,8 @@ import {
 } from '../../domain/horizon'
 import {
   addProblemTag,
+  confirmProblemTag,
+  createTagDefinition,
   getAvailableHorizonTags,
   getProblemDifficulty,
   listProblemTags,
@@ -22,7 +24,7 @@ const labels: Record<HorizonTagType, string> = {
 }
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '压轴' }
 
-export function ProblemTags({ problemId, subjectId, subject }: { problemId: string; subjectId: string | null; subject: string | null }) {
+export function ProblemTags({ problemId, subjectId, subject, onChange }: { problemId: string; subjectId: string | null; subject: string | null; onChange?: () => void }) {
   const [tags, setTags] = useState<ProblemTag[]>([])
   const [definitions, setDefinitions] = useState<TagDefinition[]>([])
   const [difficulty, setDifficulty] = useState<ProblemDifficultyView | null>(null)
@@ -30,6 +32,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
   const [message, setMessage] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ type: HorizonTagType } | null>(null)
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
+  const [newTagName, setNewTagName] = useState('')
   const reqSeqRef = useRef(0)
   // Two-step removal: the first click arms the ×, the second removes.
   // Prevents accidental one-click deletes; auto-disarms shortly after.
@@ -57,7 +60,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
     }
     setArmedTagId(null)
     void removeProblemTag(tagId)
-      .then(() => refresh())
+      .then(async () => { await refresh(); onChange?.() })
       .catch((error) => setMessage(`移除标签失败：${String(error)}`))
   }
 
@@ -120,11 +123,37 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
       await addProblemTag(problemId, subjectId, definition)
       setPicker(null)
       await refresh()
+      onChange?.()
     } catch (error) {
       // Surface the failure inside the picker instead of swallowing it as an
       // unhandled rejection (e.g. cross-subject tag rejections).
       setMessage(`添加标签失败：${String(error)}`)
     }
+  }
+
+  const createAndApplyTag = async () => {
+    if (!picker || !subjectId || !subject?.trim() || !newTagName.trim() || picker.type === 'knowledge') return
+    try {
+      const tagId = await createTagDefinition({
+        subject: subject.trim(), tagType: picker.type, canonicalName: newTagName.trim(), approved: true,
+        methodClass: picker.type === 'method' ? 'optional' : null,
+      })
+      const available = await getAvailableHorizonTags(subjectId)
+      const definition = available.tags.find((item) => item.id === tagId)
+      if (!definition) throw new Error('新标签创建后无法读取')
+      await addProblemTag(problemId, subjectId, definition)
+      setPicker(null); setNewTagName('')
+      await refresh()
+      onChange?.()
+    } catch (error) { setMessage(`创建标签失败：${String(error)}`) }
+  }
+
+  const confirmTag = async (tagId: string) => {
+    try {
+      await confirmProblemTag(tagId)
+      await refresh()
+      onChange?.()
+    } catch (error) { setMessage(`确认标签失败：${String(error)}`) }
   }
 
   const pickerOptions = picker
@@ -145,6 +174,7 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
         <div className="problem-tag-collection">
           {grouped[type].map((tag) => <article className="controlled-problem-tag" key={tag.id}>
             <Badge>{tag.canonicalName}</Badge>
+            {tag.tagId && tag.verificationStatus !== 'user_verified' && tag.verificationStatus !== 'rejected' && <Button onClick={() => void confirmTag(tag.id)} variant="ghost">确认</Button>}
             <IconButton
               appearance="plain"
               aria-pressed={armedTagId === tag.id}
@@ -169,7 +199,8 @@ export function ProblemTags({ problemId, subjectId, subject }: { problemId: stri
         <p>选择一个已有的{picker ? labels[picker.type] : '标签'}。</p>
         <ListboxSelect label="选择标签" onValueChange={setSelectedDefinitionId} options={[{ value: '', label: '请选择' }, ...pickerOptions.map((item) => ({ value: item.id, label: item.canonicalName }))]} value={selectedDefinitionId} />
         {!pickerOptions.length && <p className="problem-tag-picker__empty">{emptyPickerMessage}</p>}
-        <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button><Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button></div>
+        {picker && picker.type !== 'knowledge' && <label><span>或创建新的{labels[picker.type]}</span><input onChange={(event) => setNewTagName(event.target.value)} placeholder={`输入${labels[picker.type]}名称`} value={newTagName} /></label>}
+        <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button>{newTagName.trim() && picker?.type !== 'knowledge' ? <Button onClick={() => void createAndApplyTag()} variant="primary">创建并使用</Button> : <Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button>}</div>
       </div>
     </Dialog>
   </section>

@@ -3,7 +3,7 @@ import { Icon } from '../../components/Icon'
 import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
-import type { PracticeSet, VariantGenerationMode } from '../../domain/practice'
+import type { PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
 import type { ReviewSessionMode } from '../../domain/review'
 import {
@@ -46,18 +46,21 @@ const forecastRangeOptions: Array<{ value: string; label: string }> = [
 ]
 
 function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
+  const [activeIndex, setActiveIndex] = useState(0)
   const width = 1000
-  const height = 120
-  const padLeft = 24
+  const height = 170
+  const padLeft = 46
   const padRight = 24
   const padTop = 12
-  const padBottom = 24
+  const padBottom = 38
   const chartW = width - padLeft - padRight
   const chartH = height - padTop - padBottom
 
   const maxMinutes = Math.max(1, ...days.map((day) => day.estimatedMinutes))
   const stepX = chartW / Math.max(1, days.length)
   const barWidth = Math.max(4, Math.min(28, stepX * .58))
+  const labelEvery = days.length <= 7 ? 1 : days.length <= 14 ? 2 : 5
+  const active = days[Math.min(activeIndex, Math.max(0, days.length - 1))]
 
   return (
     <div className="today-forecast__chart-wrapper">
@@ -65,8 +68,16 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
         className="today-forecast__chart"
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
-        aria-hidden="true"
+        aria-label="未来每日预计复习分钟数"
+        role="img"
       >
+        {[0, .5, 1].map((fraction) => {
+          const y = padTop + chartH * (1 - fraction)
+          return <g key={fraction}>
+            <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="var(--ax-border-subtle)" strokeWidth="1" />
+            <text className="today-forecast__axis-label" textAnchor="end" x={padLeft - 8} y={y + 4}>{Math.round(maxMinutes * fraction)}</text>
+          </g>
+        })}
         <line
           x1={padLeft}
           y1={padTop + chartH}
@@ -78,18 +89,39 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
         {days.map((day, index) => {
           const heightValue = day.estimatedMinutes / maxMinutes * chartH
           const x = padLeft + index * stepX + (stepX - barWidth) / 2
-          return <rect
-            fill={index === 0 ? 'var(--brand-pressed)' : 'var(--brand)'}
-            height={heightValue}
+          const date = new Date(day.dayStart)
+          const label = `${date.getMonth() + 1}/${date.getDate()}`
+          const detail = `${label}，预计 ${day.estimatedMinutes} 分钟，${day.estimatedUnitCount} 组，${day.estimatedProblemCount} 题${day.overdueProblemCount ? `，含 ${day.overdueProblemCount} 道逾期` : ''}`
+          return <g
+            aria-label={detail}
+            className={`today-forecast__bar${activeIndex === index ? ' is-active' : ''}`}
             key={day.date}
-            opacity={day.estimatedMinutes ? 1 : .18}
-            rx="3"
-            width={barWidth}
-            x={x}
-            y={padTop + chartH - heightValue}
-          />
+            onBlur={() => undefined}
+            onFocus={() => setActiveIndex(index)}
+            onMouseEnter={() => setActiveIndex(index)}
+            role="img"
+            tabIndex={0}
+          >
+            <title>{detail}</title>
+            <rect fill="transparent" height={chartH + 14} width={Math.max(20, stepX)} x={padLeft + index * stepX} y={padTop - 7} />
+            <rect
+              className="today-forecast__bar-value"
+              fill={index === 0 ? 'var(--brand-pressed)' : 'var(--brand)'}
+              height={Math.max(day.estimatedMinutes ? 2 : 0, heightValue)}
+              opacity={day.estimatedMinutes ? 1 : .18}
+              rx="3"
+              width={barWidth}
+              x={x}
+              y={padTop + chartH - heightValue}
+            />
+            {(index % labelEvery === 0 || index === days.length - 1) && <text className="today-forecast__axis-label" textAnchor="middle" x={x + barWidth / 2} y={height - 14}>{index === 0 ? '今天' : label}</text>}
+          </g>
         })}
       </svg>
+      {active && <div aria-live="polite" className="today-forecast__tooltip">
+        <strong>{activeIndex === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', weekday: 'short' }).format(new Date(active.dayStart))}</strong>
+        <span>{active.estimatedMinutes} 分钟 · {active.estimatedUnitCount} 组 · {active.estimatedProblemCount} 题{active.overdueProblemCount ? ` · ${active.overdueProblemCount} 道逾期` : ''}</span>
+      </div>}
     </div>
   )
 }
@@ -124,35 +156,6 @@ function ForecastStrip({
       </div>
 
       <ForecastTimelineChart days={days} />
-
-      {/* 时间轴详情卡片列表 */}
-      <div className={`today-forecast__days${range > 7 ? ' is-scrollable' : ''}`}>
-        {days.map((day, index) => {
-          const date = new Date(day.dayStart)
-          const weekday = index === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)
-          return (
-            <article
-              className={`today-forecast__day today-forecast__day--${day.loadLevel}${
-                index === 0 ? ' is-today' : ''
-              }`}
-              key={day.date}
-            >
-              <div>
-                <strong>{weekday}</strong>
-                <span>{date.getMonth() + 1}/{date.getDate()}</span>
-              </div>
-              <div className="today-forecast__metric-pill">
-                <strong>{day.estimatedMinutes}</strong>
-                <span>分钟</span>
-              </div>
-              <span className="today-forecast__problem-count">
-                {day.estimatedUnitCount} 组 · {day.estimatedProblemCount} 题
-              </span>
-              <small>{day.overdueProblemCount ? `含 ${day.overdueProblemCount} 道逾期` : '按预计日期安排'}</small>
-            </article>
-          )
-        })}
-      </div>
     </section>
   )
 }
@@ -209,7 +212,6 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [activeAttempt, setActiveAttempt] = useState<PracticeAttempt | null>(null)
   const [todayPracticeSet, setTodayPracticeSet] = useState<PracticeSet | null>(null)
   const [todayAttempt, setTodayAttempt] = useState<PracticeAttempt | null>(null)
-  const [variantMode, setVariantMode] = useState<VariantGenerationMode>('variant_preferred')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -231,7 +233,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         listTodayCorrectionTasks(),
       ])
       if (isCancelled()) return
-      setPlan(nextPlan); setForecast(nextForecast); setCorrections(nextCorrections); setVariantMode(nextPlan.preferences.variantMode)
+      setPlan(nextPlan); setForecast(nextForecast); setCorrections(nextCorrections)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
@@ -279,9 +281,8 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       const budget = sessionMode === 'quick' ? Math.max(1, moduleIds.length)
         : sessionMode === 'mock_test' ? Math.max(4, moduleIds.length * 3) : Math.max(3, moduleIds.length * 2)
       const next = todayPracticeSet?.sessionMode === sessionMode
-        && (todayPracticeSet.generationMetadata.variantMode ?? 'variant_preferred') === variantMode
         ? todayPracticeSet
-        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode, variantMode)
+        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
       const attempt = await getLatestPracticeAttempt(next.id)
       setTodayPracticeSet(next); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(next)
     } catch (reason) { setError(practiceErrorMessage(reason)) }
@@ -329,12 +330,6 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   return <main className="workspace today-workspace">
     <PageHeader
       actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
-        <SegmentedControl
-          ariaLabel="题目来源"
-          onChange={(value) => setVariantMode(value as VariantGenerationMode)}
-          options={[{ value: 'variant_preferred', label: '变式优先' }, { value: 'original_only', label: '仅原题' }]}
-          value={variantMode}
-        />
         <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice(plan.preferences.preferredMode)} variant="primary">{practiceCta}</Button>
         <Menu label="选择练习模式">
           <MenuItem disabled={busy} onClick={() => void openTodayPractice('quick')}>快速复习</MenuItem>
@@ -359,7 +354,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       </section>}
       {plan && plan.units.length === 0 ? <EmptyState
         action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}
-        description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。生成练习时会优先创建并审校变式题，失败则安全回退原题。"
+        description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。题目会根据上一次已确认练习在原题与变式间自动轮换。"
         icon={<Icon name="today" size={22} />}
         secondaryAction={<><Button onClick={() => onNavigate('library')} variant="secondary">前往错题库</Button><Button onClick={() => onNavigate('curriculum')} variant="ghost">查看课程</Button></>}
         title="今天暂时没有学习安排"
@@ -374,7 +369,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
               setBusy(true); setError(null)
               try {
                 const budget = sessionMode === 'quick' ? 1 : sessionMode === 'mock_test' ? 5 : 3
-                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode, variantMode))
+                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode))
               }
               catch (reason) { setError(practiceErrorMessage(reason)) }
               finally { setBusy(false) }

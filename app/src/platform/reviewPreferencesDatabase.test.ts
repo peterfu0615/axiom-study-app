@@ -24,13 +24,13 @@ describe('review preferences persistence', () => {
 
   it('reads the durable Today scheduling inputs', async () => {
     invoke.mockResolvedValue([{ max_daily_minutes: 40, max_modules: 4, preferred_mode: 'quick', target_retention: .9, variant_mode: 'original_only' }])
-    await expect(getReviewPreferences()).resolves.toEqual({ maxDailyMinutes: 40, maxModules: 4, preferredMode: 'quick', targetRetention: .9, variantMode: 'original_only' })
+    await expect(getReviewPreferences()).resolves.toEqual({ maxDailyMinutes: 40, maxModules: 4, preferredMode: 'quick', targetRetention: .9 })
   })
 
   it('normalizes unsafe values before saving', async () => {
     invoke.mockResolvedValue({ rowsAffected: 1, lastInsertId: 0 })
-    await expect(saveReviewPreferences({ maxDailyMinutes: 999, maxModules: 0, preferredMode: 'mock_test', targetRetention: 1, variantMode: 'variant_preferred' }))
-      .resolves.toEqual({ maxDailyMinutes: 180, maxModules: 1, preferredMode: 'mock_test', targetRetention: .95, variantMode: 'variant_preferred' })
-    expect(invoke).toHaveBeenCalledWith('db_execute', expect.objectContaining({ params: [180, 1, 'mock_test', .95, 'variant_preferred', expect.any(Number)] }))
+    await expect(saveReviewPreferences({ maxDailyMinutes: 999, maxModules: 0, preferredMode: 'mock_test', targetRetention: 1 }))
+      .resolves.toEqual({ maxDailyMinutes: 180, maxModules: 1, preferredMode: 'mock_test', targetRetention: .95 })
+    expect(invoke).toHaveBeenCalledWith('db_execute', expect.objectContaining({ params: [180, 1, 'mock_test', .95, expect.any(Number)] }))
   })
 })

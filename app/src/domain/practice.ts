@@ -3,8 +3,6 @@ import type { ReviewSessionMode, ReviewSessionSettings, ReviewSkillState, Review
 
 export const PRACTICE_PLANNER_VERSION = 'deterministic-v1'
 
-export type VariantGenerationMode = 'variant_preferred' | 'original_only'
-
 export type PracticeSourceType = 'review_unit' | 'skill' | 'today' | 'practice_attempt'
 export type PracticeItemSourceType = 'existing_problem' | 'generated_variant'
 export type PracticeSetStatus = 'draft' | 'ready' | 'archived'
@@ -30,6 +28,9 @@ export interface PracticeProblemCandidate {
   diagramImagePaths: string[]
   originalDifficulty: DifficultyLevel
   relevance: number
+  confirmedPracticeCount?: number
+  lastConfirmedAt?: number | null
+  lastConfirmedSourceType?: PracticeItemSourceType | null
 }
 
 export interface PracticePlannerInput {
@@ -45,13 +46,13 @@ export interface PracticePlannerInput {
   sessionSettings?: Partial<ReviewSessionSettings>
   excludedProblemIds?: string[]
   preferredErrorCategories?: string[]
-  variantMode?: VariantGenerationMode
 }
 
 export interface PracticeBlueprintItem {
   sourceType: 'existing_problem'
   problem: PracticeProblemCandidate
   difficulty: DifficultyLevel
+  requestedSourceType: PracticeItemSourceType
 }
 
 export interface PracticeBlueprint {
@@ -129,9 +130,15 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
   const candidates = [...input.relatedProblems]
     .filter((candidate) => allowedSubjects.has(candidate.subject) && !excluded.has(candidate.problemId) && validatePracticeCandidate(candidate).length === 0)
     .sort((left, right) => {
+      const leftNeverPracticed = (left.confirmedPracticeCount ?? 0) === 0 ? 1 : 0
+      const rightNeverPracticed = (right.confirmedPracticeCount ?? 0) === 0 ? 1 : 0
+      const leftLastPracticed = left.lastConfirmedAt ?? Number.NEGATIVE_INFINITY
+      const rightLastPracticed = right.lastConfirmedAt ?? Number.NEGATIVE_INFINITY
       const leftErrorMatch = left.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
       const rightErrorMatch = right.targetTags.some((tag) => tag.type === 'error' && preferredErrors.has(tag.id ?? tag.name)) ? 1 : 0
-      return rightErrorMatch - leftErrorMatch || right.relevance - left.relevance || left.problemId.localeCompare(right.problemId)
+      return rightNeverPracticed - leftNeverPracticed || leftLastPracticed - rightLastPracticed ||
+        (left.confirmedPracticeCount ?? 0) - (right.confirmedPracticeCount ?? 0) ||
+        rightErrorMatch - leftErrorMatch || right.relevance - left.relevance || left.problemId.localeCompare(right.problemId)
     })
     .filter((candidate) => !seen.has(candidate.problemId) && Boolean(seen.add(candidate.problemId)))
   const selected: PracticeProblemCandidate[] = []
@@ -160,6 +167,9 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
       sourceType: 'existing_problem',
       problem,
       difficulty: plan[index % plan.length],
+      requestedSourceType: problem.lastConfirmedSourceType === 'generated_variant'
+        ? 'existing_problem'
+        : 'generated_variant',
     })),
     warnings,
   }

@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { ReviewSessionMode } from '../domain/review'
-import type { VariantGenerationMode } from '../domain/practice'
 import { notifyLearningStateChanged } from './learningStateEvents'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
@@ -12,7 +11,6 @@ export interface ReviewPreferences {
   maxModules: number
   preferredMode: ReviewSessionMode
   targetRetention: number
-  variantMode: VariantGenerationMode
 }
 
 export type ReviewPace = 'relaxed' | 'standard' | 'intensive'
@@ -39,14 +37,12 @@ export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
   maxModules: 2,
   preferredMode: 'standard',
   targetRetention: .85,
-  variantMode: 'variant_preferred',
 }
 
 function normalize(value: Partial<ReviewPreferences>): ReviewPreferences {
   const preferredMode = ['quick', 'standard', 'mock_test'].includes(String(value.preferredMode))
     ? value.preferredMode as ReviewSessionMode
     : DEFAULT_REVIEW_PREFERENCES.preferredMode
-  const variantMode = value.variantMode === 'original_only' ? 'original_only' : 'variant_preferred'
   return {
     maxDailyMinutes: Math.max(5, Math.min(180, Math.round(Number.isFinite(Number(value.maxDailyMinutes))
       ? Number(value.maxDailyMinutes) : DEFAULT_REVIEW_PREFERENCES.maxDailyMinutes))),
@@ -55,7 +51,6 @@ function normalize(value: Partial<ReviewPreferences>): ReviewPreferences {
     preferredMode,
     targetRetention: Math.max(.75, Math.min(.95, Number.isFinite(Number(value.targetRetention))
       ? Number(value.targetRetention) : DEFAULT_REVIEW_PREFERENCES.targetRetention)),
-    variantMode,
   }
 }
 
@@ -65,15 +60,13 @@ export async function getReviewPreferences(): Promise<ReviewPreferences> {
     max_modules: number
     preferred_mode: ReviewSessionMode
     target_retention: number
-    variant_mode: VariantGenerationMode
-  }>>(`SELECT max_daily_minutes,max_modules,preferred_mode,target_retention,variant_mode
+  }>>(`SELECT max_daily_minutes,max_modules,preferred_mode,target_retention
     FROM review_preferences WHERE id='default' LIMIT 1`))[0]
   return normalize(row ? {
     maxDailyMinutes: Number(row.max_daily_minutes),
     maxModules: Number(row.max_modules),
     preferredMode: row.preferred_mode,
     targetRetention: Number(row.target_retention),
-    variantMode: row.variant_mode,
   } : DEFAULT_REVIEW_PREFERENCES)
 }
 
@@ -82,10 +75,10 @@ export async function saveReviewPreferences(value: ReviewPreferences) {
   const now = Date.now()
   await execute(`INSERT INTO review_preferences(
       id,max_daily_minutes,max_modules,preferred_mode,target_retention,variant_mode,created_at,updated_at
-    ) VALUES('default',$1,$2,$3,$4,$5,$6,$6)
+    ) VALUES('default',$1,$2,$3,$4,'variant_preferred',$5,$5)
     ON CONFLICT(id) DO UPDATE SET max_daily_minutes=$1,max_modules=$2,
-      preferred_mode=$3,target_retention=$4,variant_mode=$5,updated_at=$6`, [
-    next.maxDailyMinutes, next.maxModules, next.preferredMode, next.targetRetention, next.variantMode, now,
+      preferred_mode=$3,target_retention=$4,updated_at=$5`, [
+    next.maxDailyMinutes, next.maxModules, next.preferredMode, next.targetRetention, now,
   ])
   notifyLearningStateChanged('review_preferences_changed')
   return next

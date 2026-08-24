@@ -2474,6 +2474,36 @@ export async function confirmProblemDifficulty(
   )
 }
 
+export async function setUserProblemDifficulty(
+  problemId: string,
+  subject: string,
+  level: ProblemDifficultyView['level'],
+) {
+  if (!['basic', 'intermediate', 'advanced'].includes(level)) throw new Error('题目难度无效')
+  const now = Date.now()
+  await transaction(async () => {
+    const locked = (await select<Array<{ id: string }>>(
+      `SELECT id FROM problem_difficulties WHERE problem_id=$1 AND superseded_at IS NULL
+       AND (is_locked=1 OR verification_status='user_verified') LIMIT 1`, [problemId],
+    ))[0]
+    if (locked) {
+      await confirmProblemDifficulty(locked.id, level)
+      return
+    }
+    await execute(
+      `UPDATE problem_difficulties SET superseded_at=$1,updated_at=$1
+       WHERE problem_id=$2 AND superseded_at IS NULL`, [now, problemId],
+    )
+    await execute(
+      `INSERT INTO problem_difficulties(
+        id,problem_id,subject,level,score,reason,confidence,source,
+        verification_status,is_locked,created_at,updated_at
+      ) VALUES($1,$2,$3,$4,NULL,'用户在生成变式前确认',1,'user','user_verified',1,$5,$5)`,
+      [id(), problemId, subject.trim(), level, now],
+    )
+  })
+}
+
 // 受控标签映射拆成两个阶段：
 // - prepare：只读（题目科目、教材、标签定义），可在事务外安全执行；
 //   科目缺失或 AI 科目与题目不符时返回 null（沿用历史 no-op 语义）。

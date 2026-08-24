@@ -28,7 +28,7 @@
 /* 未来任务分钟柱状图 */
 .today-forecast__chart-wrapper {
   width: 100%;
-  height: 120px;
+  min-height: 208px;
   margin: var(--ax-space-3) 0 var(--ax-space-5);
   padding: var(--ax-space-2) var(--ax-space-3);
   border: 1px solid var(--ax-border-subtle);
@@ -37,28 +37,23 @@
 }
 .today-forecast__chart {
   width: 100%;
-  height: 100%;
+  height: 170px;
   overflow: visible;
 }
-.today-forecast__node {
-  transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+.today-forecast__bar { outline: none; }
+.today-forecast__bar-value {
+  transform-origin: center bottom;
+  transition: opacity var(--ax-motion-fast) ease, filter var(--ax-motion-fast) ease;
 }
-.today-forecast__node:hover {
-  transform: scale(1.4);
+.today-forecast__bar:hover .today-forecast__bar-value,
+.today-forecast__bar:focus .today-forecast__bar-value,
+.today-forecast__bar.is-active .today-forecast__bar-value {
+  filter: saturate(1.15) brightness(.96);
+  opacity: 1;
 }
-
-.today-forecast__days { display: grid; grid-template-columns: repeat(7, minmax(84px, 1fr)); gap: var(--ax-space-3); overflow-x: auto; padding-bottom: var(--ax-space-2); }
-/* 14/30 天时间轴：固定卡片宽度，横向滚动浏览 */
-.today-forecast__days.is-scrollable { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
-.today-forecast__days.is-scrollable .today-forecast__day { min-width: 104px; }
-.today-forecast__day { min-width: 84px; display: flex; flex-direction: column; gap: var(--ax-space-2); padding: var(--ax-space-3) var(--ax-space-4); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); background: var(--ax-surface-subtle); }
-.today-forecast__day.is-today { border-color: var(--ax-accent-border); background: var(--ax-color-selected); }
-.today-forecast__day > div:first-child { display: flex; justify-content: space-between; gap: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
-.today-forecast__metric-pill { display: flex; align-items: baseline; gap: 3px; margin: 4px 0 2px; }
-.today-forecast__metric-pill > strong { color: var(--ax-text-primary); font-size: 18px; line-height: 1.1; }
-.today-forecast__metric-pill > span { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
-.today-forecast__problem-count { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
-.today-forecast__day > small { margin-top: auto; color: var(--ax-text-tertiary); font-size: 10px; }
+.today-forecast__axis-label { fill: var(--ax-text-tertiary); font-size: 10px; }
+.today-forecast__tooltip { display: flex; align-items: baseline; gap: var(--ax-space-3); min-height: 20px; padding: 0 var(--ax-space-4) var(--ax-space-3); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
+.today-forecast__tooltip strong { color: var(--ax-text-primary); }
 .today-corrections { display: grid; gap: var(--ax-space-3); padding: var(--ax-space-5); border: 1px solid var(--ax-warning-border); border-radius: var(--ax-radius-lg); background: var(--ax-warning-bg); }
 .today-corrections > header, .today-corrections > article { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-4); }
 .today-corrections > header h2 { margin: 0; }
@@ -95,7 +90,6 @@
   .today-unit__aside { grid-column: 2; width: 100%; justify-items: start; }
   .today-unit__statuses, .today-unit__actions { justify-content: flex-start; }
   .today-rating__options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .today-forecast__days { grid-template-columns: repeat(7, minmax(112px, 1fr)); }
 }
 
 @media (max-width: 620px) {
