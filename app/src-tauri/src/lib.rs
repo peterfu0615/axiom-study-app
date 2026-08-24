@@ -387,6 +387,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0057_advanced_practice_submission.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 58,
+            description: "unified_scheduler",
+            sql: include_str!("../migrations/0058_unified_scheduler.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

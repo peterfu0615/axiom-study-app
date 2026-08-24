@@ -2,10 +2,12 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   REVIEW_SCHEDULER_VERSION,
   applyReviewRating,
+  applyWeightedReviewRating,
   buildTodayReviewUnits,
   initialReviewSkillState,
   localReviewDate,
   ratingEvidence,
+  reviewTagEvidenceWeight,
   type ReviewCandidate,
   type ReviewRating,
   type ReviewSkillState,
@@ -17,6 +19,7 @@ import type { DifficultyLevel, HorizonTagType } from '../domain/models'
 import { buildReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
 import { DEFAULT_REVIEW_PREFERENCES, getReviewPreferences, type ReviewPreferences } from './reviewPreferencesDatabase'
 import { withTransactionLock } from './transactionLock'
+import { notifyLearningStateChanged } from './reviewSchedulerMigration'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -205,7 +208,8 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
 }
 
 export async function getReviewForecast(days = 7, timestamp = Date.now()): Promise<ReviewForecastDay[]> {
-  return buildReviewForecast(await listReviewCandidates(), timestamp, days)
+  const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
+  return buildReviewForecast(candidates, timestamp, days, preferences.targetRetention)
 }
 
 /** @deprecated 兼容旧调用；请使用 getReviewForecast。 */
@@ -389,7 +393,7 @@ function planningTags(unit: ReviewUnitDraft) {
     })
 }
 
-async function persistUnit(sessionId: string, unit: ReviewUnitDraft, orderIndex: number, now: number) {
+async function persistUnit(sessionId: string, unit: ReviewUnitDraft, orderIndex: number, now: number, targetRetention: number) {
   const bundleId = uuid()
   const moduleId = uuid()
   const questionId = uuid()
@@ -414,11 +418,15 @@ async function persistUnit(sessionId: string, unit: ReviewUnitDraft, orderIndex:
       skill_bundle_id, problem_id, similarity_score, role, created_at
     ) VALUES ($1,$2,$3,$4,$5)`, [persistedBundle.id, problemId, index === 0 ? 1 : .8, index === 0 ? 'primary' : 'supporting', now])
   }
+  const initial = initialReviewSkillState(targetRetention)
   await execute(`INSERT OR IGNORE INTO skill_bundle_states (
     subject, skill_bundle_id, mastery_estimate, stability, retrievability,
     transfer_score, evidence_count, last_practiced_at, next_review_at,
     uncertainty, scheduler_version, updated_at
-  ) VALUES ($1,$2,.45,1,.65,0,0,NULL,NULL,1,1,$3)`, [unit.subject, persistedBundle.id, now])
+  ) VALUES ($1,$2,$3,$4,$5,0,0,NULL,NULL,1,$6,$7)`, [
+    unit.subject, persistedBundle.id, initial.masteryEstimate, initial.stability,
+    initial.retrievability, REVIEW_SCHEDULER_VERSION, now,
+  ])
 
   for (const tag of planningTags(unit)) {
     if (!tag.id) continue
@@ -427,7 +435,10 @@ async function persistUnit(sessionId: string, unit: ReviewUnitDraft, orderIndex:
       evidence_count, success_count, failure_count, transfer_score,
       max_stable_difficulty, last_practiced_at, next_review_at, uncertainty,
       scheduler_version, created_at, updated_at
-    ) VALUES ($1,$2,$3,.45,1,.65,0,0,0,0,NULL,NULL,NULL,1,$4,$5,$5)`, [uuid(), unit.subject, tag.id, REVIEW_SCHEDULER_VERSION, now])
+    ) VALUES ($1,$2,$3,$4,$5,$6,0,0,0,0,NULL,NULL,NULL,1,$7,$8,$8)`, [
+      uuid(), unit.subject, tag.id, initial.masteryEstimate, initial.stability,
+      initial.retrievability, REVIEW_SCHEDULER_VERSION, now,
+    ])
   }
 
   await execute(`INSERT INTO review_modules (
@@ -459,7 +470,10 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
   const existing = await findTodaySession(sessionDate)
   if (existing) return readTodayPlanBySession(existing)
   const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
-  const units = buildTodayReviewUnits(candidates, { now: timestamp })
+  const units = buildTodayReviewUnits(candidates, {
+    now: timestamp, targetRetention: preferences.targetRetention,
+    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+  })
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
@@ -477,7 +491,9 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
         sessionId, sessionDate, units.length ? 'generated' : 'empty', units.length, estimated,
         JSON.stringify(preferences), timestamp,
       ])
-      for (const [index, unit] of units.entries()) await persistUnit(sessionId, unit, index, timestamp)
+      for (const [index, unit] of units.entries()) {
+        await persistUnit(sessionId, unit, index, timestamp, preferences.targetRetention)
+      }
       await execute('COMMIT')
       const session = await findTodaySession(sessionDate)
       if (!session) throw new Error('今日计划创建后无法读取')
@@ -504,8 +520,9 @@ export async function recordTodayReviewResult(input: {
   reviewedAt?: number
 }) {
   const reviewedAt = input.reviewedAt ?? Date.now()
+  const { targetRetention } = await getReviewPreferences()
   const resultKey = `today:${input.questionId}`
-  return withTransactionLock(async () => {
+  const recorded = await withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
       const existing = await select<Array<{ id: string }>>('SELECT id FROM review_attempts WHERE result_key = $1', [resultKey])
@@ -537,8 +554,11 @@ export async function recordTodayReviewResult(input: {
         const currentRow = (await select<StateRow[]>(`
           SELECT * FROM skill_states WHERE subject = $1 AND tag_id = $2 LIMIT 1
         `, [context.subject, tag.id]))[0]
-        const current = currentRow ? skillFromRow(currentRow) : initialReviewSkillState()
-        const next = applyReviewRating(current, input.rating, context.difficulty, reviewedAt)
+        const current = currentRow ? skillFromRow(currentRow) : initialReviewSkillState(targetRetention)
+        const next = applyWeightedReviewRating(
+          current, input.rating, context.difficulty, reviewedAt,
+          reviewTagEvidenceWeight(tag), false, targetRetention,
+        )
         if (currentRow) {
           await execute(`UPDATE skill_states SET
             mastery_estimate=$1, stability=$2, retrievability=$3, evidence_count=$4,
@@ -555,7 +575,8 @@ export async function recordTodayReviewResult(input: {
           user_verified, created_at
         ) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,0,$9,1,$10)`, [
           uuid(), context.subject, attemptId, tag.id, context.skill_bundle_id,
-          evidence.result, evidence.weight, '用户完成今日复习后的自评结果', context.difficulty, reviewedAt,
+          evidence.result, evidence.weight * reviewTagEvidenceWeight(tag),
+          '用户完成今日复习后的自评结果', context.difficulty, reviewedAt,
         ])
       }
 
@@ -565,7 +586,7 @@ export async function recordTodayReviewResult(input: {
         next_review_at: number | null; uncertainty: number
       }>>('SELECT * FROM skill_bundle_states WHERE subject=$1 AND skill_bundle_id=$2', [context.subject, context.skill_bundle_id]))[0]
       const previousBundle = bundleRow ? {
-        ...initialReviewSkillState(),
+        ...initialReviewSkillState(targetRetention),
         masteryEstimate: number(bundleRow.mastery_estimate, .45),
         stability: number(bundleRow.stability, 1),
         retrievability: number(bundleRow.retrievability, .65),
@@ -574,16 +595,17 @@ export async function recordTodayReviewResult(input: {
         lastPracticedAt: nullableNumber(bundleRow.last_practiced_at),
         nextReviewAt: nullableNumber(bundleRow.next_review_at),
         uncertainty: number(bundleRow.uncertainty, 1),
-      } : initialReviewSkillState()
-      const nextBundle = applyReviewRating(previousBundle, input.rating, context.difficulty, reviewedAt)
+      } : initialReviewSkillState(targetRetention)
+      const nextBundle = applyReviewRating(previousBundle, input.rating, context.difficulty, reviewedAt, { targetRetention })
       await execute(`UPDATE skill_bundle_states SET
         mastery_estimate=$1, stability=$2, retrievability=$3, transfer_score=$4,
         evidence_count=$5, last_practiced_at=$6, next_review_at=$7,
-        uncertainty=$8, scheduler_version=1, updated_at=$9
-        WHERE subject=$10 AND skill_bundle_id=$11`, [
+        uncertainty=$8, scheduler_version=$9, updated_at=$10
+        WHERE subject=$11 AND skill_bundle_id=$12`, [
         nextBundle.masteryEstimate, nextBundle.stability, nextBundle.retrievability,
         nextBundle.transferScore, nextBundle.evidenceCount, nextBundle.lastPracticedAt,
-        nextBundle.nextReviewAt, nextBundle.uncertainty, reviewedAt, context.subject, context.skill_bundle_id,
+        nextBundle.nextReviewAt, nextBundle.uncertainty, REVIEW_SCHEDULER_VERSION,
+        reviewedAt, context.subject, context.skill_bundle_id,
       ])
       await execute(`INSERT INTO horizon_review_logs (
         id, review_attempt_id, subject, skill_bundle_id, rating,
@@ -607,6 +629,8 @@ export async function recordTodayReviewResult(input: {
       throw error
     }
   })
+  if (recorded) notifyLearningStateChanged('today_review_recorded')
+  return recorded
 }
 
 export async function deferTodayReviewUnit(moduleId: string) {
@@ -615,13 +639,18 @@ export async function deferTodayReviewUnit(moduleId: string) {
 
 async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: string }) {
   const sessionDate = localReviewDate(input.timestamp)
-  const [session, candidates] = await Promise.all([findTodaySession(sessionDate), listReviewCandidates()])
+  const [session, candidates, preferences] = await Promise.all([
+    findTodaySession(sessionDate), listReviewCandidates(), getReviewPreferences(),
+  ])
   if (!session) return getOrCreateTodayPlan(input.timestamp)
   const current = await readTodayPlanBySession(session)
   const existingKeys = new Set(current.units.map((unit) => unit.canonicalKey))
   const existingProblems = new Set(current.units.map((unit) => unit.question.sourceProblemId))
   const candidatesToPlan = candidates.filter((candidate) => !existingProblems.has(candidate.problemId))
-  const nextUnit = buildTodayReviewUnits(candidatesToPlan, { now: input.timestamp })
+  const nextUnit = buildTodayReviewUnits(candidatesToPlan, {
+    now: input.timestamp, targetRetention: preferences.targetRetention,
+    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+  })
     .find((unit) => !existingKeys.has(unit.canonicalKey))
   if (!nextUnit) return current
 
@@ -635,7 +664,7 @@ async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: str
         'SELECT COALESCE(MAX(order_index), -1) + 1 AS next_order FROM review_modules WHERE session_id=$1',
         [session.id],
       ))[0]?.next_order ?? current.units.length
-      await persistUnit(session.id, nextUnit, number(order), input.timestamp)
+      await persistUnit(session.id, nextUnit, number(order), input.timestamp, preferences.targetRetention)
       await execute(`UPDATE review_sessions SET
         status='in_progress', planned_problem_count=planned_problem_count+1,
         estimated_duration_seconds=estimated_duration_seconds+$1, completed_at=NULL

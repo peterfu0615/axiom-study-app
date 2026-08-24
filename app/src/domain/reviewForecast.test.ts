@@ -10,9 +10,10 @@ const candidate = (id: string, dueAt?: number | null, tags: ReviewTag[] = [tag('
   problemId: id, subject: '数学', title: id, stemMarkdown: id, structuredContentJson: '{}', solutionJson: '{}',
   createdAt: now - 10 * day, difficulty: 'intermediate', tags,
   skillStates: dueAt === undefined ? {} : { [tags[0]?.id ?? id]: {
-    masteryEstimate: .55, stability: 2, retrievability: .7, evidenceCount: 1,
+    masteryEstimate: .55, stability: dueAt == null ? 2 : 1 / -Math.log(.85), retrievability: .7, evidenceCount: 1,
     successCount: 1, failureCount: 0, transferScore: 0, maxStableDifficulty: 'intermediate',
-    lastPracticedAt: now - day, nextReviewAt: dueAt ?? null, uncertainty: .6,
+    lastPracticedAt: dueAt == null ? now - day : dueAt - day,
+    nextReviewAt: dueAt ?? null, uncertainty: .6,
   } }, lastReviewedAt: null, reviewCount: 0, lastRating: null,
 })
 

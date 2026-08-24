@@ -3,11 +3,17 @@ import {
   applyReviewRating,
   applyWeightedReviewRating,
   buildTodayReviewUnits,
+  candidateDueAt,
+  candidateRetention,
   canTransitionReviewSession,
   defaultReviewSessionSettings,
+  effectiveSkillRetention,
   initialReviewSkillState,
   localReviewDate,
+  reviewDueAt,
+  reviewRetrievability,
   reviewSimilarity,
+  reviewTagEvidenceWeight,
   type ReviewCandidate,
   type ReviewTag,
 } from './review'
@@ -127,6 +133,46 @@ describe('Horizon Today planner', () => {
 })
 
 describe('Horizon review scheduler', () => {
+  it('uses a monotonic exponential curve and crosses the configured target', () => {
+    const state = { ...initialReviewSkillState(), stability: 8, lastPracticedAt: now, nextReviewAt: null }
+    const dueAt = reviewDueAt(state, .85)!
+    expect(reviewRetrievability(state, now)).toBe(1)
+    expect(reviewRetrievability(state, now + 2 * 86_400_000)).toBeLessThan(1)
+    expect(reviewRetrievability(state, now + 4 * 86_400_000))
+      .toBeLessThan(reviewRetrievability(state, now + 2 * 86_400_000))
+    expect(reviewRetrievability(state, dueAt)).toBeCloseTo(.85, 5)
+    expect(reviewDueAt(state, .9)).toBeLessThan(dueAt)
+  })
+
+  it('combines bundle retention as weakest 60% and weighted average 40%', () => {
+    const strong = { ...initialReviewSkillState(), stability: 20, lastPracticedAt: now }
+    const weak = { ...initialReviewSkillState(), stability: 2, lastPracticedAt: now }
+    const at = now + 86_400_000
+    const combined = effectiveSkillRetention([
+      { state: strong, weight: 1 }, { state: weak, weight: .75 },
+    ], at)
+    expect(combined).toBeLessThan(reviewRetrievability(strong, at))
+    expect(combined).toBeGreaterThanOrEqual(reviewRetrievability(weak, at))
+    expect(reviewTagEvidenceWeight(tag('knowledge', '函数'))).toBe(1)
+    expect(reviewTagEvidenceWeight(tag('method', '数形结合'))).toBe(.85)
+    expect(reviewTagEvidenceWeight(tag('model', '函数模型'))).toBe(.75)
+  })
+
+  it('uses the same bundle curve for due time and live retention', () => {
+    const knowledge = tag('knowledge', '函数')
+    const method = tag('method', '数形结合')
+    const base = { ...initialReviewSkillState(), lastPracticedAt: now }
+    const item = candidate('bundle', {
+      tags: [knowledge, method],
+      skillStates: {
+        [knowledge.id!]: { ...base, stability: 8 },
+        [method.id!]: { ...base, stability: 3 },
+      },
+    })
+    const due = candidateDueAt(item, now, .85)
+    expect(candidateRetention(item, due)).toBeCloseTo(.85, 5)
+  })
+
   it('updates mastery, evidence, next review and difficulty for all ratings', () => {
     const again = applyReviewRating(null, 'again', 'intermediate', now)
     const hard = applyReviewRating(null, 'hard', 'intermediate', now)
@@ -193,7 +239,8 @@ describe('Horizon review scheduler', () => {
       candidate('budget-b', { tags: [tag('knowledge', '全等'), tag('method', '倍长中线')] }),
       candidate('budget-c', { tags: [tag('knowledge', '圆'), tag('method', '辅助线')] }),
     ]
-    // 今日安排由复习调度决定：到期多少主题就安排多少，不再按数量/时长截断
-    expect(buildTodayReviewUnits(candidates, { now })).toHaveLength(3)
+    expect(buildTodayReviewUnits(candidates, {
+      now, maxModules: 3, maxDailyMinutes: 30,
+    })).toHaveLength(3)
   })
 })

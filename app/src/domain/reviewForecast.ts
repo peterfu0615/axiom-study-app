@@ -1,8 +1,10 @@
 import {
   addLocalReviewDays,
-  applyReviewRating,
   buildReviewUnitPool,
+  candidateRetention,
+  candidateDueAt,
   endOfLocalReviewDay,
+  estimateReviewProblemSeconds,
   localReviewDate,
   startOfLocalReviewDay,
   type ReviewCandidate,
@@ -18,36 +20,10 @@ export interface ReviewForecastDay {
   overdueProblemCount: number
   loadLevel: ReviewLoadLevel
   dominantThemes: string[]
-}
-
-function earliestDueAt(candidate: ReviewCandidate, todayStart: number) {
-  const states = Object.values(candidate.skillStates)
-  const scheduled = states
-    .map((state) => state.nextReviewAt)
-    .filter((value): value is number => value !== null)
-    .sort((left, right) => left - right)[0]
-  if (scheduled !== undefined) return scheduled
-  // 未曾复习的新录入错题或带历史记录的题目：
-  // 艾宾浩斯记忆遗忘曲线（Ebbinghaus Forgetting Curve）：
-  // 遗忘在学习后立即开始，且初期极快。
-  // 新题目标准复习周期：Day 0 (录入当天) -> Day 1 -> Day 2 -> Day 4 -> Day 7 -> Day 15 -> Day 30。
-  // 若未完成复习或仅刚录入，若已跨过录入当天则基于其录入时间与难度推导首轮到期日。
-  if (candidate.lastReviewedAt && candidate.lastRating) {
-    return applyReviewRating(
-      null,
-      candidate.lastRating,
-      candidate.difficulty ?? 'intermediate',
-      candidate.lastReviewedAt,
-    ).nextReviewAt ?? todayStart
-  }
-  // 未复习过的新题：若录入时间小于今天起始，则已在第一轮到期（今天）；
-  // 否则安排在录入次日（Day 1 艾宾浩斯第一记忆复习点）
-  const createdDayStart = startOfLocalReviewDay(candidate.createdAt || todayStart)
-  if (createdDayStart < todayStart) {
-    return todayStart
-  }
-  // 录入当天的新题，艾宾浩斯第 1 个巩固周期在第 1 天（明天）
-  return addLocalReviewDays(todayStart, 1)
+  averageRetention: number
+  minimumRetention: number
+  targetRetention: number
+  estimatedMinutes: number
 }
 
 export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {
@@ -66,6 +42,7 @@ export function buildReviewForecast(
   candidates: ReviewCandidate[],
   now: number,
   days = 7,
+  targetRetention = .85,
 ): ReviewForecastDay[] {
   const todayStart = startOfLocalReviewDay(now)
   const horizon = Array.from({ length: days }, (_, offset) => addLocalReviewDays(todayStart, offset))
@@ -74,7 +51,7 @@ export function buildReviewForecast(
 
   candidates.forEach((candidate) => {
     if (!candidate.subject.trim() || !candidate.stemMarkdown.trim()) return
-    const dueAt = earliestDueAt(candidate, todayStart)
+    const dueAt = candidateDueAt(candidate, now, targetRetention)
     if (dueAt < todayStart) {
       buckets[0].push(candidate)
       overdue[0] += 1
@@ -86,7 +63,11 @@ export function buildReviewForecast(
 
   return horizon.map((dayStart, index) => {
     const candidatesForDay = buckets[index]
-    const units = buildReviewUnitPool(candidatesForDay, dayStart + 12 * 60 * 60 * 1000)
+    const displayAt = dayStart + 12 * 60 * 60 * 1000
+    const units = buildReviewUnitPool(candidatesForDay, displayAt)
+    const retentions = candidatesForDay.map((candidate) => {
+      return candidateRetention(candidate, displayAt)
+    })
     return {
       date: localReviewDate(dayStart),
       dayStart,
@@ -95,6 +76,14 @@ export function buildReviewForecast(
       overdueProblemCount: overdue[index],
       loadLevel: reviewLoadLevel(units.length),
       dominantThemes: units.slice(0, 2).map((unit) => unit.title),
+      averageRetention: retentions.length
+        ? retentions.reduce((sum, value) => sum + value, 0) / retentions.length
+        : 1,
+      minimumRetention: retentions.length ? Math.min(...retentions) : 1,
+      targetRetention,
+      estimatedMinutes: Math.ceil(candidatesForDay.reduce(
+        (sum, candidate) => sum + estimateReviewProblemSeconds(candidate), 0,
+      ) / 60),
     }
   })
 }

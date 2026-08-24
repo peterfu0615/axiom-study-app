@@ -30,6 +30,7 @@ interface ReplayRow {
   tag_id: string | null
   evidence_source: 'today_review' | 'practice_attempt'
   effective_grading_json: string | null
+  scheduler_version: string
 }
 
 interface StateRow {
@@ -72,7 +73,7 @@ async function loadReplayEvents(): Promise<ReviewReplayEvent[]> {
   const rows = await select<ReplayRow[]>(`
     SELECT log.id AS log_id, log.reviewed_at, log.subject, log.skill_bundle_id,
       log.rating, log.previous_state_json, instance.difficulty, evidence.tag_id,
-      attempt.evidence_source, effective.effective_grading_json
+      attempt.evidence_source, effective.effective_grading_json, log.scheduler_version
     FROM horizon_review_logs log
     JOIN review_attempts attempt ON attempt.id = log.review_attempt_id
     JOIN question_instances instance ON instance.id = attempt.question_instance_id
@@ -97,6 +98,7 @@ async function loadReplayEvents(): Promise<ReviewReplayEvent[]> {
       skillBundleId: row.skill_bundle_id, rating,
       difficulty: row.difficulty ?? 'intermediate', tagIds: row.tag_id ? [row.tag_id] : [],
       previousBundleState: parseState(row.previous_state_json),
+      schedulerVersion: row.scheduler_version,
     })
   })
   return [...events.values()]
@@ -166,7 +168,7 @@ async function writeExpected(item: ExpectedReplayState, now: number) {
       evidence_count, success_count, failure_count, transfer_score,
       max_stable_difficulty, last_practiced_at, next_review_at, uncertainty,
       scheduler_version, created_at, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'horizon-v1',$15,$15)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
     ON CONFLICT(subject, tag_id) DO UPDATE SET
       mastery_estimate=excluded.mastery_estimate, stability=excluded.stability,
       retrievability=excluded.retrievability, evidence_count=excluded.evidence_count,
@@ -178,14 +180,14 @@ async function writeExpected(item: ExpectedReplayState, now: number) {
       uuid(), item.subject, item.entityId, state.masteryEstimate, state.stability,
       state.retrievability, state.evidenceCount, state.successCount, state.failureCount,
       state.transferScore, state.maxStableDifficulty, state.lastPracticedAt,
-      state.nextReviewAt, state.uncertainty, now,
+      state.nextReviewAt, state.uncertainty, item.schedulerVersion, now,
     ])
   } else {
     await execute(`INSERT INTO skill_bundle_states (
       subject, skill_bundle_id, mastery_estimate, stability, retrievability,
       transfer_score, evidence_count, last_practiced_at, next_review_at,
       uncertainty, scheduler_version, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
     ON CONFLICT(subject, skill_bundle_id) DO UPDATE SET
       mastery_estimate=excluded.mastery_estimate, stability=excluded.stability,
       retrievability=excluded.retrievability, transfer_score=excluded.transfer_score,
@@ -194,7 +196,8 @@ async function writeExpected(item: ExpectedReplayState, now: number) {
       scheduler_version=excluded.scheduler_version, updated_at=excluded.updated_at`, [
       item.subject, item.entityId, state.masteryEstimate, state.stability,
       state.retrievability, state.transferScore, state.evidenceCount,
-      state.lastPracticedAt, state.nextReviewAt, state.uncertainty, now,
+      state.lastPracticedAt, state.nextReviewAt, state.uncertainty,
+      item.schedulerVersion, now,
     ])
   }
 }

@@ -77,26 +77,26 @@ mod tests {
             .expect("迁移记录表必须可读")
     }
 
-    /// 全新库必须能一路跑到 57（含 codex 原文的 24–27 与后续迁移的衔接）。
+    /// 全新库必须能一路跑到 58（含 codex 原文的 24–27 与后续迁移的衔接）。
     /// 随后用与 sqlx Migrator 完全一致的校验逻辑重跑两遍：
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_57_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_58_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(57);
+            let migrations = migrations_up_to(58);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 57（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 57);
+                .expect("全新库必须能完整迁移到 58（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 58);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 57);
+            assert_eq!(max_applied_version(&mut conn).await, 58);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -287,6 +287,40 @@ mod tests {
             conn.execute("INSERT INTO planner_tasks(id,title,task_type,subject,due_date,estimated_minutes,priority,splittable,earliest_date,status,source_type,created_at,updated_at) VALUES('task','作业','homework','数学','2026-08-22',30,3,1,'2026-08-21','pending','user',1,1)").await.expect("valid task");
             conn.execute("INSERT INTO planner_schedule_runs(id,start_date,horizon_days,scheduler_version,input_hash,summary_json,created_at) VALUES('run','2026-08-21',14,'planner-v1','hash','{}',1)").await.expect("schedule run");
             conn.execute("INSERT INTO planner_task_segments(id,task_id,schedule_run_id,planned_date,planned_minutes,order_index,status,created_at,updated_at) VALUES('segment','task','run','2026-08-21',30,0,'scheduled',1,1)").await.expect("schedule segment");
+        });
+    }
+
+    #[test]
+    fn unified_scheduler_adds_preferences_due_time_and_audit_log() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("unified-scheduler");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(58))
+                .await
+                .expect("统一计划器 schema 必须迁移成功");
+            let preferences: (f64, String) = sqlx::query_as(
+                "SELECT target_retention,variant_mode FROM review_preferences WHERE id='default'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("统一计划器偏好默认值");
+            assert_eq!(preferences, (0.85, "variant_preferred".into()));
+            assert!(conn
+                .execute("UPDATE review_preferences SET target_retention=0.5 WHERE id='default'")
+                .await
+                .is_err());
+            let planner_columns: Vec<String> = sqlx::query("PRAGMA table_info(planner_tasks)")
+                .fetch_all(&mut conn)
+                .await
+                .expect("Planner 精确到期时间 schema")
+                .into_iter()
+                .map(|row| row.get::<String, _>("name"))
+                .collect();
+            assert!(planner_columns.iter().any(|column| column == "due_at"));
+            conn.execute("INSERT INTO review_scheduler_migrations(id,state_kind,subject,entity_id,from_version,to_version,previous_state_json,new_state_json,migrated_at) VALUES('audit','skill','数学','tag','horizon-v1','ebbinghaus-v2','{}','{}',1)")
+                .await
+                .expect("调度器迁移审计可写入");
+            assert!(conn.execute("INSERT INTO review_scheduler_migrations(id,state_kind,subject,entity_id,from_version,to_version,previous_state_json,new_state_json,migrated_at) VALUES('duplicate','skill','数学','tag','horizon-v1','ebbinghaus-v2','{}','{}',2)").await.is_err());
         });
     }
 

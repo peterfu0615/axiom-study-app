@@ -1,7 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { DifficultyLevel } from '../domain/models'
 import type { ReviewSkillState, ReviewTag } from '../domain/review'
-import { REVIEW_SCHEDULER_VERSION, applyWeightedReviewRating, initialReviewSkillState, ratingEvidence } from '../domain/review'
+import {
+  REVIEW_SCHEDULER_VERSION,
+  applyWeightedReviewRating,
+  initialReviewSkillState,
+  ratingEvidence,
+  reviewTagEvidenceWeight,
+} from '../domain/review'
 import type { PracticeSet } from '../domain/practice'
 import type { PracticeAttempt } from '../domain/practiceAttempt'
 import { normalizePracticeGradingResult, type PracticeGradingResult, type StructuredStudentAnswer } from '../domain/practiceGrading'
@@ -9,6 +15,8 @@ import { decidePracticeLoop, practiceRating, tagEvidenceUpdate, type PracticeLoo
 import { getOrCreatePracticeSetFromPracticeAttempt } from './practiceDatabase'
 import { withTransactionLock } from './transactionLock'
 import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
+import { getReviewPreferences } from './reviewPreferencesDatabase'
+import { notifyLearningStateChanged } from './reviewSchedulerMigration'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -73,6 +81,7 @@ async function applyPracticeEvidence(input: {
   itemId: string; sourceProblemId: string; skillBundleId: string; difficulty: DifficultyLevel
   targetTags: ReviewTag[]; answer: StructuredStudentAnswer; answerImagePath: string
   grading: PracticeGradingResult; reviewedAt: number
+  targetRetention: number
 }) {
   const resultKey = `practice:${input.responseId}`
   const existing = await select<Array<{ id: string }>>('SELECT id FROM review_attempts WHERE result_key=$1 LIMIT 1', [resultKey])
@@ -125,11 +134,12 @@ async function applyPracticeEvidence(input: {
     const row = (await select<Array<Record<string, unknown>>>(
       'SELECT * FROM skill_states WHERE subject=$1 AND tag_id=$2 LIMIT 1', [input.subject, tag.id],
     ))[0]
-    const current = row ? skillFromRow(row) : initialReviewSkillState()
+    const current = row ? skillFromRow(row) : initialReviewSkillState(input.targetRetention)
     const tagUpdate = tagEvidenceUpdate(gradedEvidence, input.grading)
     const next = tagUpdate.rating
       ? applyWeightedReviewRating(current, tagUpdate.rating, input.difficulty, input.reviewedAt,
-        tagUpdate.strength, input.grading.bundleEvidence.transfer)
+        tagUpdate.strength * reviewTagEvidenceWeight(tag),
+        input.grading.bundleEvidence.transfer, input.targetRetention)
       : current
     if (row && tagUpdate.rating) await execute(`UPDATE skill_states SET mastery_estimate=$1,stability=$2,retrievability=$3,
       evidence_count=$4,success_count=$5,failure_count=$6,transfer_score=$7,max_stable_difficulty=$8,
@@ -141,7 +151,7 @@ async function applyPracticeEvidence(input: {
       confidence,weight,evidence_text,transfer_flag,difficulty_context,grading_model_run_id,user_verified,created_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
       uuid(), input.subject, reviewAttemptId, tag.id, input.skillBundleId, gradedEvidence.result,
-      gradedEvidence.confidence, gradedEvidence.weight, gradedEvidence.evidence,
+      gradedEvidence.confidence, gradedEvidence.weight * reviewTagEvidenceWeight(tag), gradedEvidence.evidence,
       input.grading.bundleEvidence.transfer ? 1 : 0, input.difficulty, input.grading.modelRunId,
       input.grading.userConfirmed ? 1 : 0, input.reviewedAt,
     ])
@@ -149,7 +159,7 @@ async function applyPracticeEvidence(input: {
   const bundleRow = (await select<Array<Record<string, unknown>>>(
     'SELECT * FROM skill_bundle_states WHERE subject=$1 AND skill_bundle_id=$2 LIMIT 1', [input.subject, input.skillBundleId],
   ))[0]
-  const previousBundle = bundleRow ? skillFromRow(bundleRow) : initialReviewSkillState()
+  const previousBundle = bundleRow ? skillFromRow(bundleRow) : initialReviewSkillState(input.targetRetention)
   const bundleRating = input.grading.bundleEvidence.result === 'demonstrated' ? 'good'
     : input.grading.bundleEvidence.result === 'contradicted' ? 'again' : null
   const bundleStrength = bundleRating
@@ -158,14 +168,15 @@ async function applyPracticeEvidence(input: {
     : 0
   const nextBundle = bundleRating
     ? applyWeightedReviewRating(previousBundle, bundleRating, input.difficulty, input.reviewedAt,
-      bundleStrength, input.grading.bundleEvidence.transfer)
+      bundleStrength, input.grading.bundleEvidence.transfer, input.targetRetention)
     : previousBundle
   if (bundleRow && bundleRating) await execute(`UPDATE skill_bundle_states SET mastery_estimate=$1,stability=$2,
     retrievability=$3,transfer_score=$4,evidence_count=$5,last_practiced_at=$6,next_review_at=$7,
-    uncertainty=$8,scheduler_version=1,updated_at=$9 WHERE subject=$10 AND skill_bundle_id=$11`, [
+    uncertainty=$8,scheduler_version=$9,updated_at=$10 WHERE subject=$11 AND skill_bundle_id=$12`, [
     nextBundle.masteryEstimate, nextBundle.stability, nextBundle.retrievability,
     nextBundle.transferScore, nextBundle.evidenceCount, nextBundle.lastPracticedAt,
-    nextBundle.nextReviewAt, nextBundle.uncertainty, input.reviewedAt, input.subject, input.skillBundleId,
+    nextBundle.nextReviewAt, nextBundle.uncertainty, REVIEW_SCHEDULER_VERSION,
+    input.reviewedAt, input.subject, input.skillBundleId,
   ])
   await execute(`INSERT INTO horizon_review_logs(id,review_attempt_id,subject,skill_bundle_id,rating,
     previous_state_json,evidence_json,new_state_json,scheduler_version,reviewed_at)
@@ -214,6 +225,7 @@ async function completeSourceLearningTopics(practiceSet: PracticeSet, completedA
 }
 
 export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt: PracticeAttempt, itemBudget = 6) {
+  const { targetRetention } = await getReviewPreferences()
   const finalized = await withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
     try {
@@ -263,6 +275,7 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
           itemId: row.item_id, sourceProblemId: row.source_problem_id, skillBundleId: row.target_skill_bundle_id,
           difficulty: row.difficulty, targetTags: parseJSON(row.target_tags_json, []), answer,
           answerImagePath: row.answer_asset_path, grading: grades[index]!, reviewedAt: now,
+          targetRetention,
         })) inserted += 1
       }
       const consumedItems = Math.min(loopRow.item_budget, loopRow.consumed_items + inserted)
@@ -291,6 +304,7 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
   await transitionPracticeSessionForSet(practiceSet.id, {
     to: 'applied', safeCode: 'learning_state_applied', metadata: { attemptId: attempt.id },
   })
+  notifyLearningStateChanged('practice_learning_state_applied')
   await transitionPracticeSessionForSet(practiceSet.id, { to: 'completed', safeCode: 'practice_completed' })
   if (finalized.status !== 'needs_reinforcement' || finalized.nextPracticeSetId) return finalized
   try {

@@ -1,6 +1,7 @@
 import type { DifficultyLevel, HorizonTagRole, HorizonTagType } from './models'
 
-export const REVIEW_SCHEDULER_VERSION = 'horizon-v1'
+export const REVIEW_SCHEDULER_VERSION = 'ebbinghaus-v2'
+export const DEFAULT_TARGET_RETENTION = .85
 
 export type ReviewRating = 'again' | 'hard' | 'good' | 'easy'
 export type ReviewUnitStatus = 'pending' | 'completed' | 'deferred'
@@ -111,6 +112,9 @@ export interface ReviewUnitDraft {
 
 export interface ReviewPlanOptions {
   now: number
+  targetRetention?: number
+  maxDailyMinutes?: number
+  maxModules?: number
 }
 
 const DAY_MS = 86_400_000
@@ -122,6 +126,32 @@ const difficultyRank: Record<DifficultyLevel, number> = {
 
 const clamp = (value: number, minimum = 0, maximum = 1) =>
   Math.min(maximum, Math.max(minimum, value))
+
+export function normalizeTargetRetention(value = DEFAULT_TARGET_RETENTION) {
+  return clamp(Number.isFinite(value) ? value : DEFAULT_TARGET_RETENTION, .75, .95)
+}
+
+export function reviewRetrievability(state: ReviewSkillState, now: number) {
+  if (state.lastPracticedAt == null) return state.retrievability
+  const elapsedDays = Math.max(0, now - state.lastPracticedAt) / DAY_MS
+  return clamp(Math.exp(-elapsedDays / Math.max(.5, state.stability)))
+}
+
+export function reviewDueAt(state: ReviewSkillState, targetRetention = DEFAULT_TARGET_RETENTION) {
+  if (state.lastPracticedAt == null) return state.nextReviewAt
+  return state.lastPracticedAt + Math.round(
+    Math.max(.5, state.stability) * -Math.log(normalizeTargetRetention(targetRetention)) * DAY_MS,
+  )
+}
+
+export function effectiveSkillRetention(states: Array<{ state: ReviewSkillState; weight: number }>, now: number) {
+  if (!states.length) return 1
+  const values = states.map(({ state, weight }) => ({ value: reviewRetrievability(state, now), weight }))
+  const weakest = Math.min(...values.map(({ value }) => value))
+  const totalWeight = values.reduce((sum, item) => sum + item.weight, 0) || 1
+  const average = values.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight
+  return clamp(weakest * .6 + average * .4)
+}
 
 function uniqueTags(tags: ReviewTag[]) {
   const seen = new Set<string>()
@@ -186,11 +216,12 @@ export function reviewCandidatePriority(candidate: ReviewCandidate, now: number)
   const state = averageSkillState(candidate)
   const lastActivity = candidate.lastReviewedAt ?? candidate.createdAt
   const daysSince = Math.max(0, (now - lastActivity) / DAY_MS)
-  const dueDays = state?.nextReviewAt === null || state?.nextReviewAt === undefined
-    ? 0
-    : (now - state.nextReviewAt) / DAY_MS
-  const due = state?.nextReviewAt == null ? 0 : clamp((dueDays + 2) / 16)
-  const forgetting = state ? 1 - state.retrievability : clamp(daysSince / 75)
+  const dueAt = candidateDueAt(candidate, now)
+  const dueDays = (now - dueAt) / DAY_MS
+  const due = clamp((dueDays + 2) / 16)
+  const forgetting = state
+    ? 1 - candidateRetention(candidate, now)
+    : clamp(daysSince / 75)
   const masteryGap = state ? 1 - state.mastery : .45
   const uncertainty = state?.uncertainty ?? .9
   const firstReview = candidate.reviewCount === 0 ? (now - candidate.createdAt <= 14 * DAY_MS ? 1 : .55) : 0
@@ -229,6 +260,12 @@ function commonTags(candidates: ReviewCandidate[], type: HorizonTagType, limit: 
     .sort((left, right) => right.count - left.count || left.tag.name.localeCompare(right.tag.name, 'zh-CN'))
     .slice(0, limit)
     .map(({ tag }) => tag)
+}
+
+export function reviewTagEvidenceWeight(tag: Pick<ReviewTag, 'type' | 'role'>) {
+  if (tag.type === 'method') return .85
+  if (tag.type === 'model') return .75
+  return tag.role === 'primary' ? 1 : .85
 }
 
 function dominantDifficulty(candidates: ReviewCandidate[]): DifficultyLevel {
@@ -278,7 +315,8 @@ function buildUnit(candidates: ReviewCandidate[], now: number): ReviewUnitDraft 
     difficulty,
     priorityScore: Math.round(clamp(averagePriority + repetitionBonus, 0, 100) * 100) / 100,
     selectionReason: reasonFor(sorted, now),
-    estimatedDurationSeconds: Math.min(720, 240 + Math.max(0, sorted.length - 1) * 60 + difficultyRank[difficulty] * 60),
+    estimatedDurationSeconds: sorted.slice(0, 3).reduce((total, candidate) =>
+      total + estimateReviewProblemSeconds(candidate), 0),
     representativeProblems: sorted.slice(0, 3),
     allProblemIds: sorted.map((candidate) => candidate.problemId),
   }
@@ -318,26 +356,74 @@ export function buildReviewUnitPool(candidates: ReviewCandidate[], now: number) 
 }
 
 export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: ReviewPlanOptions) {
-  const available = buildReviewUnitPool(candidates, options.now)
+  const targetRetention = normalizeTargetRetention(options.targetRetention)
+  const endOfToday = endOfLocalReviewDay(options.now)
+  const dueCandidates = candidates.filter((candidate) => candidateDueAt(candidate, options.now, targetRetention) <= endOfToday)
+  const available = buildReviewUnitPool(dueCandidates, options.now)
   const selected: ReviewUnitDraft[] = []
-  // 今日安排完全由复习调度（记忆衰减决定的到期主题）驱动，不再人为限制
-  // 主题数量或时长：到期多少就安排多少，与预测/Planner 口径一致。
+  const maxSeconds = Math.max(5, options.maxDailyMinutes ?? 25) * 60
+  const maxModules = Math.max(1, options.maxModules ?? 2)
   while (available.length) {
     available.sort((left, right) => {
       const leftPenalty = selected.length ? Math.max(...selected.map((item) => unitSimilarity(left, item))) * 24 : 0
       const rightPenalty = selected.length ? Math.max(...selected.map((item) => unitSimilarity(right, item))) * 24 : 0
       return (right.priorityScore - rightPenalty) - (left.priorityScore - leftPenalty) || left.canonicalKey.localeCompare(right.canonicalKey)
     })
-    selected.push(available.shift()!)
+    const next = available.shift()!
+    if (selected.length >= maxModules) break
+    if (selected.length && selected.reduce((sum, item) => sum + item.estimatedDurationSeconds, 0) + next.estimatedDurationSeconds > maxSeconds) continue
+    selected.push(next)
   }
   return selected
 }
 
-export function initialReviewSkillState(): ReviewSkillState {
+export function candidateDueAt(candidate: ReviewCandidate, now: number, targetRetention = DEFAULT_TARGET_RETENTION) {
+  const states = Object.values(candidate.skillStates)
+  if (states.length) {
+    const practicedAt = states
+      .map((state) => state.lastPracticedAt)
+      .filter((value): value is number => value != null)
+    if (practicedAt.length) {
+      const target = normalizeTargetRetention(targetRetention)
+      let low = Math.min(...practicedAt)
+      let high = Math.max(now, low) + 3650 * DAY_MS
+      for (let iteration = 0; iteration < 48; iteration += 1) {
+        const middle = (low + high) / 2
+        if (candidateRetention(candidate, middle) > target) low = middle
+        else high = middle
+      }
+      return Math.round(high)
+    }
+  }
+  if (candidate.lastReviewedAt && candidate.lastRating) {
+    return applyReviewRating(null, candidate.lastRating, candidate.difficulty ?? 'intermediate', candidate.lastReviewedAt, { targetRetention }).nextReviewAt ?? now
+  }
+  const todayStart = startOfLocalReviewDay(now)
+  const createdStart = startOfLocalReviewDay(candidate.createdAt || now)
+  return createdStart < todayStart ? todayStart : addLocalReviewDays(createdStart, 1)
+}
+
+export function candidateRetention(candidate: ReviewCandidate, at: number) {
+  const tagById = new Map(candidate.tags.filter((tag) => tag.id).map((tag) => [tag.id!, tag]))
+  return effectiveSkillRetention(Object.entries(candidate.skillStates).map(([tagId, state]) => ({
+    state,
+    weight: reviewTagEvidenceWeight(tagById.get(tagId) ?? { type: 'knowledge', role: 'primary' }),
+  })), at)
+}
+
+export function estimateReviewProblemSeconds(candidate: Pick<ReviewCandidate, 'difficulty' | 'tags' | 'diagramImagePaths'>) {
+  const base = candidate.difficulty === 'advanced' ? 10 : candidate.difficulty === 'intermediate' ? 7 : 4
+  const complexity = Math.min(3, Math.max(0,
+    candidate.tags.filter((tag) => tag.type === 'method' || tag.type === 'model').length - 1))
+  const diagram = candidate.diagramImagePaths?.length ? 2 : 0
+  return Math.max(3, Math.min(15, base + complexity + diagram)) * 60
+}
+
+export function initialReviewSkillState(targetRetention = DEFAULT_TARGET_RETENTION): ReviewSkillState {
   return {
     masteryEstimate: .45,
-    stability: 1,
-    retrievability: .65,
+    stability: 1 / -Math.log(normalizeTargetRetention(targetRetention)),
+    retrievability: 1,
     evidenceCount: 0,
     successCount: 0,
     failureCount: 0,
@@ -349,13 +435,37 @@ export function initialReviewSkillState(): ReviewSkillState {
   }
 }
 
-export function applyReviewRating(
+export function initialReviewSkillStateV1(): ReviewSkillState {
+  return { ...initialReviewSkillState(), stability: 1, retrievability: .65 }
+}
+
+export function convertReviewStateV1ToV2(
+  state: ReviewSkillState,
+  now = Date.now(),
+  targetRetention = DEFAULT_TARGET_RETENTION,
+): ReviewSkillState {
+  const target = normalizeTargetRetention(targetRetention)
+  const intervalDays = state.lastPracticedAt != null && state.nextReviewAt != null
+    ? Math.max(.25, (state.nextReviewAt - state.lastPracticedAt) / DAY_MS)
+    : 1
+  const stability = Math.max(.5, Math.min(3650, intervalDays / -Math.log(target)))
+  const converted = { ...state, stability }
+  return {
+    ...converted,
+    retrievability: converted.lastPracticedAt == null ? 1 : reviewRetrievability(converted, now),
+    nextReviewAt: converted.lastPracticedAt == null
+      ? converted.nextReviewAt
+      : reviewDueAt(converted, target),
+  }
+}
+
+export function applyReviewRatingV1(
   current: ReviewSkillState | null,
   rating: ReviewRating,
   difficulty: DifficultyLevel,
   reviewedAt: number,
 ): ReviewSkillState {
-  const state = current ?? initialReviewSkillState()
+  const state = current ?? initialReviewSkillStateV1()
   const config = {
     again: { mastery: -.18, stability: .55, retrievability: .3, interval: 1, uncertainty: .08, success: 0, failure: 1 },
     hard: { mastery: .03, stability: 1.15, retrievability: .66, interval: 1.2, uncertainty: .1, success: 0, failure: 0 },
@@ -384,6 +494,47 @@ export function applyReviewRating(
   }
 }
 
+export function applyReviewRating(
+  current: ReviewSkillState | null,
+  rating: ReviewRating,
+  difficulty: DifficultyLevel,
+  reviewedAt: number,
+  options: { targetRetention?: number; transfer?: boolean } = {},
+): ReviewSkillState {
+  const targetRetention = normalizeTargetRetention(options.targetRetention)
+  const state = current ?? initialReviewSkillState(targetRetention)
+  const before = reviewRetrievability(state, reviewedAt)
+  const baseMultiplier = { again: .55, hard: 1.25, good: 1.9, easy: 2.8 }[rating]
+  const successDifficulty = { basic: .9, intermediate: 1, advanced: 1.15 }[difficulty]
+  const failureDifficulty = { basic: .8, intermediate: .9, advanced: 1 }[difficulty]
+  const spacing = rating === 'again' ? 1 : 1 + .35 * (1 - before)
+  const transfer = options.transfer && (rating === 'good' || rating === 'easy') ? 1.12 : 1
+  const stability = Math.max(.5, Math.min(3650,
+    state.stability * baseMultiplier * (rating === 'again' ? failureDifficulty : successDifficulty) * spacing * transfer))
+  const masteryDelta = { again: -.18, hard: .03, good: .12, easy: .2 }[rating]
+  const previousDifficulty = state.maxStableDifficulty
+  const promoteDifficulty = rating === 'good' || rating === 'easy'
+  const maxStableDifficulty = promoteDifficulty && (
+    previousDifficulty === null || difficultyRank[difficulty] > difficultyRank[previousDifficulty]
+  ) ? difficulty : previousDifficulty
+  return {
+    ...state,
+    masteryEstimate: clamp(state.masteryEstimate + masteryDelta),
+    stability,
+    retrievability: 1,
+    evidenceCount: state.evidenceCount + 1,
+    successCount: state.successCount + (rating === 'good' || rating === 'easy' ? 1 : 0),
+    failureCount: state.failureCount + (rating === 'again' ? 1 : 0),
+    transferScore: options.transfer && (rating === 'good' || rating === 'easy')
+      ? clamp(state.transferScore + (1 - state.transferScore) * .16)
+      : state.transferScore,
+    maxStableDifficulty,
+    lastPracticedAt: reviewedAt,
+    nextReviewAt: reviewedAt + Math.round(stability * -Math.log(targetRetention) * DAY_MS),
+    uncertainty: clamp(state.uncertainty - ({ again: .08, hard: .1, good: .14, easy: .18 }[rating])),
+  }
+}
+
 export function applyWeightedReviewRating(
   current: ReviewSkillState | null,
   rating: ReviewRating,
@@ -391,18 +542,18 @@ export function applyWeightedReviewRating(
   reviewedAt: number,
   strength: number,
   transfer = false,
+  targetRetention = DEFAULT_TARGET_RETENTION,
 ): ReviewSkillState {
-  const state = current ?? initialReviewSkillState()
+  const state = current ?? initialReviewSkillState(targetRetention)
   const factor = clamp(strength, 0, 1)
   if (factor === 0) return state
-  const full = applyReviewRating(state, rating, difficulty, reviewedAt)
+  const full = applyReviewRating(state, rating, difficulty, reviewedAt, { transfer, targetRetention })
   const interpolate = (from: number, to: number) => from + (to - from) * factor
-  const fullInterval = Math.max(DAY_MS, (full.nextReviewAt ?? reviewedAt + DAY_MS) - reviewedAt)
-  const interval = DAY_MS + (fullInterval - DAY_MS) * factor
+  const stability = Math.max(.5, interpolate(state.stability, full.stability))
   return {
     ...state,
     masteryEstimate: clamp(interpolate(state.masteryEstimate, full.masteryEstimate)),
-    stability: Math.max(.5, interpolate(state.stability, full.stability)),
+    stability,
     retrievability: clamp(interpolate(state.retrievability, full.retrievability)),
     evidenceCount: state.evidenceCount + 1,
     successCount: state.successCount + (rating === 'good' || rating === 'easy' ? 1 : 0),
@@ -412,7 +563,7 @@ export function applyWeightedReviewRating(
       : state.transferScore,
     maxStableDifficulty: factor >= .5 ? full.maxStableDifficulty : state.maxStableDifficulty,
     lastPracticedAt: reviewedAt,
-    nextReviewAt: reviewedAt + Math.round(interval),
+    nextReviewAt: reviewedAt + Math.round(stability * -Math.log(normalizeTargetRetention(targetRetention)) * DAY_MS),
     uncertainty: clamp(interpolate(state.uncertainty, full.uncertainty)),
   }
 }
