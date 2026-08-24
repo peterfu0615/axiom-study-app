@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v2";
+pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v3";
 pub const TIKZ_PREAMBLE_VERSION: &str = "axiom-tikz-preamble-v2";
-pub const TIKZ_VALIDATOR_VERSION: &str = "axiom-diagram-validator-v1";
+pub const TIKZ_VALIDATOR_VERSION: &str = "axiom-diagram-validator-v2";
 const MAX_SOURCE_BYTES: usize = 32 * 1024;
 const MAX_COMMANDS: usize = 500;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -132,6 +132,10 @@ enum Primitive {
         thick: bool,
         arrow: bool,
         right_angle: bool,
+        parallel: bool,
+        equal_length: bool,
+        tangent: bool,
+        collinear: bool,
     },
     Circle {
         center: Point,
@@ -334,6 +338,10 @@ fn parse_primitives(normalized: &str, deadline: Instant) -> Result<Vec<Primitive
                 thick: options.contains("thick"),
                 arrow: options.contains("->"),
                 right_angle: options.contains("axiomRightAngle"),
+                parallel: options.contains("axiomParallel"),
+                equal_length: options.contains("axiomEqualLength"),
+                tangent: options.contains("axiomTangent"),
+                collinear: options.contains("axiomCollinear"),
             });
         }
     }
@@ -398,6 +406,10 @@ fn validate_primitives(
     let mut ink_area = 0.0;
     let mut labels = Vec::new();
     let mut has_right_angle = false;
+    let mut has_parallel = false;
+    let mut has_equal_length = false;
+    let mut has_tangent = false;
+    let mut has_collinear = false;
     for primitive in primitives {
         match primitive {
             Primitive::Path {
@@ -406,6 +418,10 @@ fn validate_primitives(
                 fill,
                 thick,
                 right_angle,
+                parallel,
+                equal_length,
+                tangent,
+                collinear,
                 ..
             } => {
                 let length = points
@@ -432,6 +448,10 @@ fn validate_primitives(
                     ink_area += polygon_area;
                 }
                 has_right_angle |= *right_angle;
+                has_parallel |= *parallel;
+                has_equal_length |= *equal_length;
+                has_tangent |= *tangent;
+                has_collinear |= *collinear;
             }
             Primitive::Circle { radius, fill, .. } => {
                 ink_area += if *fill {
@@ -475,6 +495,21 @@ fn validate_primitives(
             "缺少垂直关系标记".to_string(),
         ));
     }
+    for (relation, present, message) in [
+        ("parallel", has_parallel, "缺少平行关系标记"),
+        ("equal_length", has_equal_length, "缺少等长关系标记"),
+        ("tangent", has_tangent, "缺少相切关系标记"),
+        ("collinear", has_collinear, "缺少共线关系标记"),
+    ] {
+        if contract
+            .required_relations
+            .iter()
+            .any(|required| required == relation)
+            && !present
+        {
+            return Err(RenderError::SemanticValidation(message.to_string()));
+        }
+    }
     let padding = ((max_x - min_x).max(max_y - min_y) * 0.08).max(0.35);
     min_x -= padding;
     min_y -= padding;
@@ -515,6 +550,10 @@ fn primitives_to_svg(
                 thick,
                 arrow,
                 right_angle: _,
+                parallel: _,
+                equal_length: _,
+                tangent: _,
+                collinear: _,
             } => {
                 let rendered = points
                     .iter()

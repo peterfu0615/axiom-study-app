@@ -36,6 +36,11 @@ const { resolveProblemTextbookContextBeforeAnalysis } = vi.hoisted(() => ({
   resolveProblemTextbookContextBeforeAnalysis: vi.fn(),
 }))
 
+const { queueGeometryScene, runGeometrySceneWorker } = vi.hoisted(() => ({
+  queueGeometryScene: vi.fn(),
+  runGeometrySceneWorker: vi.fn(),
+}))
+
 vi.mock('../platform/database', () => ({
   claimNextProblemAIModelRun,
   completeProblemAIModelRun,
@@ -61,6 +66,11 @@ vi.mock('../platform/native', () => ({
 
 vi.mock('../platform/horizonDatabase', () => ({
   resolveProblemTextbookContextBeforeAnalysis,
+}))
+
+vi.mock('../platform/geometrySceneDatabase', () => ({
+  queueGeometryScene,
+  runGeometrySceneWorker,
 }))
 
 import { resumeProblemAIPipeline, runProblemAIWorker } from './pipeline'
@@ -113,6 +123,8 @@ describe('problem AI worker', () => {
     completeProblemAIModelRun.mockResolvedValue(null)
     queueProblemSolution.mockResolvedValue(undefined)
     queueStudentAttempt.mockResolvedValue(undefined)
+    queueGeometryScene.mockResolvedValue('geometry-run-1')
+    runGeometrySceneWorker.mockResolvedValue(undefined)
     getProblemRegions.mockResolvedValue([])
     cropProblemDiagram.mockResolvedValue({
       path: '/tmp/diagram.jpg',
@@ -215,6 +227,11 @@ describe('problem AI worker', () => {
     expect(removeProblemDiagram).toHaveBeenCalledWith(
       '/tmp/old-diagram.jpg',
     )
+    expect(queueGeometryScene).toHaveBeenCalledWith({
+      problemId: run.problemId,
+      imagePath: '/tmp/diagram.jpg',
+      stemMarkdown: '题干',
+    })
   })
 
   it('sends and preserves a manual diagram instead of recropping the AI box', async () => {

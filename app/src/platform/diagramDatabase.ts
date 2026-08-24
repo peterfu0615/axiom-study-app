@@ -130,6 +130,18 @@ export async function listDiagrams(ownerType: DiagramOwnerType, ownerId: string)
   return rows.map(fromRow)
 }
 
+export async function getPreferredDiagram(ownerType: DiagramOwnerType, ownerId: string) {
+  const row = (await select<DiagramRow[]>(
+    `SELECT * FROM diagrams
+     WHERE owner_type=$1 AND owner_id=$2
+       AND render_status='rendered' AND validation_status='validated'
+       AND rendered_asset_path IS NOT NULL
+     ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1`,
+    [ownerType, ownerId],
+  ))[0]
+  return row ? fromRow(row) : null
+}
+
 export async function retryTikzDiagram(diagram: Diagram) {
   if (diagram.sourceType !== 'tikz') throw new Error('只有 TikZ 图形可以重新渲染')
   const render = await renderTikz(diagram.source, diagram.contract)

@@ -723,6 +723,7 @@ function validateBlocksForSave(blocks: ProblemBlock[]) {
 }
 
 const AI_TASK_TYPE = 'analyze_problem_image'
+const GEOMETRY_SCENE_TASK_TYPE = 'geometry_scene'
 const SOLUTION_TASK_TYPE = 'generate_solution'
 const STUDENT_ATTEMPT_TASK_TYPE = 'extract_student_attempt'
 const REASONING_TASK_TYPE = 'analyze_student_reasoning'
@@ -730,6 +731,7 @@ const EXPLAIN_TASK_TYPE = 'explain_selection'
 // model_runs 表中出现的全部任务类型（题目理解/正解/作答/推理/解释）
 const MODEL_RUN_TASK_TYPES = [
   AI_TASK_TYPE,
+  GEOMETRY_SCENE_TASK_TYPE,
   SOLUTION_TASK_TYPE,
   STUDENT_ATTEMPT_TASK_TYPE,
   REASONING_TASK_TYPE,

@@ -68,11 +68,14 @@ import {
 import { startRelabelBatchWorker } from '../curriculum/relabelWorker'
 import type { Textbook } from '../../domain/horizon'
 import type { PersistedGeometryScene } from '../../domain/geometryScene'
-import { GeometrySceneView } from '../../components/GeometrySceneView'
+import type { Diagram } from '../../domain/diagram'
+import { DiagramView } from '../../components/DiagramView'
 import {
+  GEOMETRY_SCENE_STATUS_EVENT,
   getLatestGeometryScene,
   reconstructGeometryScene,
 } from '../../platform/geometrySceneDatabase'
+import { getPreferredDiagram } from '../../platform/diagramDatabase'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 type DetailTab = 'content' | 'info'
@@ -87,6 +90,7 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
 
 const modelRunTaskLabels: Record<string, string> = {
   analyze_problem_image: '题目理解',
+  geometry_scene: '几何图重建',
   generate_solution: '正解生成',
   extract_student_attempt: '作答识别',
   analyze_student_reasoning: '错因推理',
@@ -275,6 +279,8 @@ export function ProblemLibrary() {
   const [selectedRegions, setSelectedRegions] = useState<ProblemRegion[]>([])
   const [reviewHistory, setReviewHistory] = useState<ProblemReviewHistoryEntry[]>([])
   const [geometryScene, setGeometryScene] = useState<PersistedGeometryScene | null>(null)
+  const [generatedDiagram, setGeneratedDiagram] = useState<Diagram | null>(null)
+  const [diagramView, setDiagramView] = useState<'generated' | 'original'>('generated')
   const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
   const [batchMode, setBatchMode] = useState(false)
@@ -525,13 +531,30 @@ export function ProblemLibrary() {
     let cancelled = false
     if (!selectedId) {
       setGeometryScene(null)
+      setGeneratedDiagram(null)
       return
     }
-    void getLatestGeometryScene(selectedId)
-      .then((scene) => { if (!cancelled) setGeometryScene(scene) })
-      .catch(() => { if (!cancelled) setGeometryScene(null) })
+    void Promise.all([getLatestGeometryScene(selectedId), getPreferredDiagram('problem', selectedId)])
+      .then(([scene, diagram]) => {
+        if (!cancelled) { setGeometryScene(scene); setGeneratedDiagram(diagram) }
+      })
+      .catch(() => {
+        if (!cancelled) { setGeometryScene(null); setGeneratedDiagram(null) }
+      })
     return () => { cancelled = true }
   }, [selectedId])
+
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const problemId = (event as CustomEvent<{ problemId?: string }>).detail?.problemId
+      if (!problemId || problemId !== selectedIdRef.current) return
+      void Promise.all([getLatestGeometryScene(problemId), getPreferredDiagram('problem', problemId)])
+        .then(([scene, diagram]) => { setGeometryScene(scene); setGeneratedDiagram(diagram) })
+        .catch(() => undefined)
+    }
+    window.addEventListener(GEOMETRY_SCENE_STATUS_EVENT, refresh)
+    return () => window.removeEventListener(GEOMETRY_SCENE_STATUS_EVENT, refresh)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -716,6 +739,8 @@ export function ProblemLibrary() {
         stemMarkdown: selected.stemMarkdown ?? '',
       })
       setGeometryScene(scene)
+      setGeneratedDiagram(await getPreferredDiagram('problem', selected.id))
+      setDiagramView('generated')
       notify(
         scene.validationStatus === 'validated'
           ? '几何图已重建；可随时回看原图'
@@ -1405,22 +1430,22 @@ export function ProblemLibrary() {
 
                           {selectedDiagramRect && selectedHasDisplayDiagram && (
                             <div className="problem-geometry-scene">
-                              <GeometrySceneView
-                                alt={`${selected.title}的结构化几何图`}
-                                fallback={(
-                                  <ProblemDiagramImage
-                                    alt={`${selected.title}中的题目图形`}
+                              {generatedDiagram && diagramView === 'generated'
+                                ? <DiagramView alt={`${selected.title}的 TikZ 几何图`} diagram={generatedDiagram} />
+                                : <ProblemDiagramImage
+                                    alt={`${selected.title}中的题目原图`}
                                     croppedPath={selectedDiagramPath}
                                     path={selected.cropImagePath}
                                     rect={selectedDiagramRect}
-                                  />
-                                )}
-                                scene={geometryScene?.validationStatus === 'validated'
-                                  ? geometryScene.scene
-                                  : null}
-                              />
+                                  />}
                               {selected.aiDiagramKind === 'geometry' && (
                                 <div className="problem-geometry-scene__actions">
+                                  {generatedDiagram && <SegmentedControl
+                                    ariaLabel="图形版本"
+                                    onChange={(value) => setDiagramView(value as 'generated' | 'original')}
+                                    options={[{ value: 'generated', label: 'TikZ' }, { value: 'original', label: '原图' }]}
+                                    value={diagramView}
+                                  />}
                                   <Button
                                     disabled={geometrySceneBusy}
                                     onClick={() => void rebuildGeometryScene()}
@@ -1428,9 +1453,9 @@ export function ProblemLibrary() {
                                   >
                                     {geometrySceneBusy
                                       ? '正在重建…'
-                                      : geometryScene?.validationStatus === 'validated'
-                                        ? '重新重建几何图'
-                                        : '重建几何图（实验）'}
+                                      : generatedDiagram
+                                        ? '重新生成 TikZ'
+                                        : '生成 TikZ 几何图'}
                                   </Button>
                                   {geometryScene?.validationStatus === 'rejected' && (
                                     <small>{geometryScene.validationErrors[0]}</small>

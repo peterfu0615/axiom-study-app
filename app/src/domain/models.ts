@@ -447,6 +447,7 @@ export interface SolutionModelRun {
 
 export type IntelligenceTaskType =
   | 'analyze_problem_image'
+  | 'geometry_scene'
   | 'generate_solution'
   | 'extract_student_attempt'
   | 'analyze_student_reasoning'

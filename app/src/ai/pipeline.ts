@@ -34,6 +34,7 @@ import {
 import { runSolutionWorker } from './solutionPipeline'
 import { runIntelligenceWorker } from './intelligencePipeline'
 import { runWithAIBackoff } from './retryPolicy'
+import { queueGeometryScene, runGeometrySceneWorker } from '../platform/geometrySceneDatabase'
 
 export const AI_STATUS_EVENT = 'axiom:problem-ai-status'
 
@@ -182,6 +183,20 @@ async function drainPendingProblemAI() {
       }
       if (previousDiagramImagePath && previousDiagramImagePath !== diagramImagePath) {
         removeProblemDiagram(previousDiagramImagePath).catch(() => {})
+      }
+      if (result.hasDiagram && result.diagramKind === 'geometry') {
+        try {
+          await queueGeometryScene({
+            problemId: activeRun.problemId,
+            imagePath: manualDiagram?.imagePath ?? diagramImagePath ?? activeRun.input.cropImagePath,
+            stemMarkdown: result.stemMarkdown,
+          })
+          void runGeometrySceneWorker()
+        } catch (error) {
+          // TikZ is an enhancement: a missing provider or render failure must
+          // never roll back the successfully persisted problem analysis.
+          console.error('[ProblemAI] 几何图任务排队失败，保留原图', error)
+        }
       }
       try {
         await queueProblemSolution(activeRun.problemId)

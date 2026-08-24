@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { resumeProblemAIPipeline } from './ai/pipeline'
 import { resumeSolutionPipeline } from './ai/solutionPipeline'
 import { resumeIntelligencePipeline } from './ai/intelligencePipeline'
+import { resumeGeometryScenePipeline } from './platform/geometrySceneDatabase'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
 import { Button, Dialog } from './components/ui'
@@ -121,6 +122,7 @@ function AppRuntime() {
           resumeProblemAIPipeline(),
           resumeSolutionPipeline(),
           resumeIntelligencePipeline(),
+          resumeGeometryScenePipeline(),
         ])
       } catch (error) {
         console.error('恢复 AI Pipeline 失败', error)

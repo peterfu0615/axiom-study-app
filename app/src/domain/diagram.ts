@@ -5,7 +5,7 @@ export type DiagramValidationStatus = 'unvalidated' | 'validated' | 'rejected'
 
 export interface DiagramValidationContract {
   requiredLabels: string[]
-  requiredRelations: Array<'perpendicular' | 'right_angle'>
+  requiredRelations: Array<'parallel' | 'perpendicular' | 'equal_length' | 'tangent' | 'collinear' | 'right_angle'>
 }
 
 export interface Diagram {

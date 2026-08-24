@@ -187,6 +187,20 @@ export async function createPracticeSet(input: PracticePlannerInput): Promise<Pr
             JSON.stringify({ criteria: ['答案正确', '关键步骤完整', '表达清晰'], maxScore: 100 }),
             JSON.stringify(generationMetadata), now,
           ])
+          const preservedDiagramIds = !variant || variant.candidate.diagramPolicy === 'preserved'
+            ? problem.diagramIds : []
+          for (const diagramId of preservedDiagramIds) {
+            await execute(`INSERT INTO diagrams(
+              id,owner_type,owner_id,source_type,source,render_status,rendered_asset_path,
+              rendered_mime_type,render_hash,renderer_version,render_error_code,render_error_message,
+              validation_status,validation_json,contract_json,width_units,height_units,repair_attempts,
+              created_at,updated_at
+            ) SELECT $1,'practice_item',$2,source_type,source,render_status,rendered_asset_path,
+              rendered_mime_type,render_hash,renderer_version,render_error_code,render_error_message,
+              validation_status,validation_json,contract_json,width_units,height_units,repair_attempts,$3,$3
+              FROM diagrams WHERE id=$4 AND render_status='rendered' AND validation_status='validated'`,
+            [uuid(), itemId, now, diagramId])
+          }
           const moduleId = uuid()
           await execute(`INSERT INTO review_modules(
             id,subject,session_id,skill_bundle_id,priority_score,selection_reason,target_difficulty,
@@ -238,7 +252,7 @@ interface RelatedProblemRow {
   problem_id: string; subject: string; stem_markdown: string; structured_content_json: string
   solution_content: string | null; solution_steps_json: string | null
   difficulty: DifficultyLevel | null; similarity_score: number
-  question_image_path: string | null; diagram_image_path: string | null
+  question_image_path: string | null; diagram_image_path: string | null; diagram_ids_json: string
 }
 interface SkillStateRow extends Partial<ReviewSkillState> { tag_id: string }
 
@@ -278,6 +292,12 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
       COALESCE(problem.structured_content_json, '{}') AS structured_content_json,
       solution.content_markdown AS solution_content, solution.steps_json AS solution_steps_json,
       difficulty.level AS difficulty, link.similarity_score, problem.crop_image_path AS question_image_path,
+      COALESCE((SELECT json_group_array(id) FROM (
+        SELECT diagram.id FROM diagrams diagram
+        WHERE diagram.owner_type='problem' AND diagram.owner_id=problem.id
+          AND diagram.render_status='rendered' AND diagram.validation_status='validated'
+        ORDER BY diagram.updated_at DESC,diagram.id DESC LIMIT 1
+      )), '[]') AS diagram_ids_json,
       COALESCE((SELECT region.image_path FROM problem_regions region
         WHERE region.problem_id=problem.id AND region.region_type='diagram' AND region.image_path IS NOT NULL
         ORDER BY CASE region.source WHEN 'manual' THEN 0 ELSE 1 END, region.updated_at DESC LIMIT 1
@@ -293,7 +313,8 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
       problemId: row.problem_id, targetSkillBundleId: context.skill_bundle_id,
       subject: row.subject, statementMarkdown: row.stem_markdown,
       solutionJson, canonicalAnswer: canonicalAnswerFromSolution(solutionJson),
-      options: optionsFromStructured(row.structured_content_json), targetTags: tags, diagramIds: [],
+      options: optionsFromStructured(row.structured_content_json), targetTags: tags,
+      diagramIds: parseJSON<string[]>(row.diagram_ids_json, []),
       questionImagePath: row.question_image_path, diagramImagePaths: row.diagram_image_path ? [row.diagram_image_path] : [],
       originalDifficulty: row.difficulty ?? context.target_difficulty, relevance: numeric(row.similarity_score, 1),
     }
