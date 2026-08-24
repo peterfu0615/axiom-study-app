@@ -24,6 +24,7 @@ export interface ReviewForecastDay {
   minimumRetention: number
   targetRetention: number
   estimatedMinutes: number
+  sourceHash: string
 }
 
 export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {
@@ -31,6 +32,17 @@ export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {
   if (unitCount === 1) return 'light'
   if (unitCount <= 3) return 'normal'
   return 'heavy'
+}
+
+function forecastSourceHash(candidates: ReviewCandidate[], now: number, targetRetention: number) {
+  const source = candidates.map((candidate) =>
+    `${candidate.problemId}:${candidateDueAt(candidate, now, targetRetention)}`).sort().join('|')
+  let hash = 2_166_136_261
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index)
+    hash = Math.imul(hash, 16_777_619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
 /**
@@ -84,6 +96,7 @@ export function buildReviewForecast(
       estimatedMinutes: Math.ceil(candidatesForDay.reduce(
         (sum, candidate) => sum + estimateReviewProblemSeconds(candidate), 0,
       ) / 60),
+      sourceHash: forecastSourceHash(candidatesForDay, now, targetRetention),
     }
   })
 }

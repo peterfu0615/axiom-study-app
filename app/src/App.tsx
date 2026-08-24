@@ -5,6 +5,7 @@ import { resumeSolutionPipeline } from './ai/solutionPipeline'
 import { resumeIntelligencePipeline } from './ai/intelligencePipeline'
 import { resumeGeometryScenePipeline } from './platform/geometrySceneDatabase'
 import { migrateReviewSchedulerState } from './platform/reviewSchedulerMigration'
+import { getPlannerWorkspaceData } from './platform/plannerDatabase'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
 import { Button, Dialog } from './components/ui'
@@ -13,6 +14,7 @@ import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
 import { CurriculumWorkspace } from './features/curriculum/CurriculumWorkspace'
 import { TodayWorkspace } from './features/today/TodayWorkspace'
+import { PlannerWorkspace } from './features/planner/PlannerWorkspace'
 import { InsightsWorkspace } from './features/insights/InsightsWorkspace'
 import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
 import { AISettings } from './features/settings/AISettings'
@@ -73,6 +75,8 @@ function AppRuntimeShell({
         <CaptureWorkspace onNavigateToLibrary={() => setSection('library')} />
       ) : section === 'today' ? (
         <TodayWorkspace onNavigate={setSection} />
+      ) : section === 'planner' ? (
+        <PlannerWorkspace onNavigate={setSection} />
       ) : section === 'library' ? (
         <ProblemLibrary />
       ) : section === 'curriculum' ? (
@@ -93,6 +97,7 @@ function AppRuntime() {
   const [section, setSection] = useState<AppSection>('capture')
   const [pendingSection, setPendingSection] = useState<AppSection | null>(null)
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
+  const [schedulerError, setSchedulerError] = useState<string | null>(null)
   const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
 
   // Navigation with an unsaved-changes guard: pages holding local form state
@@ -118,8 +123,16 @@ function AppRuntime() {
         return
       }
       try {
-        configureAIProviders(await listAIProviderProfiles())
         await migrateReviewSchedulerState()
+      } catch (error) {
+        console.error('升级学习状态失败', error)
+        setSchedulerError(String(error))
+        return
+      }
+      try {
+        configureAIProviders(await listAIProviderProfiles())
+        try { await getPlannerWorkspaceData() }
+        catch (error) { console.error('初始化统一计划失败', error) }
         await Promise.all([
           resumeProblemAIPipeline(),
           resumeSolutionPipeline(),
@@ -148,6 +161,16 @@ function AppRuntime() {
   // 数据库路径不一致时，阻塞整个应用并显示错误对话框
   if (dbCheck && !dbCheck.ok) {
     return <DatabaseLocationErrorDialog check={dbCheck} />
+  }
+  if (schedulerError) {
+    return <main className="workspace placeholder-workspace">
+      <div className="module-placeholder">
+        <span>学习状态迁移已回滚</span>
+        <h2>无法启用新版计划器</h2>
+        <p>{schedulerError}</p>
+        <p>旧复习记录未被改写。请查看日志并修复数据库问题后重新启动 Axiom。</p>
+      </div>
+    </main>
   }
 
   return <CurriculumAnalysisProvider enabled={dbCheck?.ok === true}>

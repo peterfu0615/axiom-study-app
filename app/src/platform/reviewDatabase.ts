@@ -19,7 +19,7 @@ import type { DifficultyLevel, HorizonTagType } from '../domain/models'
 import { buildReviewForecast, type ReviewForecastDay } from '../domain/reviewForecast'
 import { DEFAULT_REVIEW_PREFERENCES, getReviewPreferences, type ReviewPreferences } from './reviewPreferencesDatabase'
 import { withTransactionLock } from './transactionLock'
-import { notifyLearningStateChanged } from './reviewSchedulerMigration'
+import { notifyLearningStateChanged } from './learningStateEvents'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -210,6 +210,16 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
 export async function getReviewForecast(days = 7, timestamp = Date.now()): Promise<ReviewForecastDay[]> {
   const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
   return buildReviewForecast(candidates, timestamp, days, preferences.targetRetention)
+}
+
+async function getPlannerReviewBudget(sessionDate: string) {
+  const rows = await select<Array<{ planned_minutes: number | null }>>(`
+    SELECT SUM(segment.planned_minutes) AS planned_minutes
+    FROM planner_task_segments segment
+    JOIN planner_tasks task ON task.id=segment.task_id
+    WHERE segment.planned_date=$1 AND segment.status='scheduled' AND task.task_type='review'`, [sessionDate])
+  if (!rows.length) return null
+  return number(rows[0].planned_minutes)
 }
 
 /** @deprecated 兼容旧调用；请使用 getReviewForecast。 */
@@ -469,10 +479,12 @@ export async function getOrCreateTodayPlan(timestamp = Date.now()): Promise<Toda
   const sessionDate = localReviewDate(timestamp)
   const existing = await findTodaySession(sessionDate)
   if (existing) return readTodayPlanBySession(existing)
-  const [candidates, preferences] = await Promise.all([listReviewCandidates(), getReviewPreferences()])
+  const [candidates, preferences, plannerBudget] = await Promise.all([
+    listReviewCandidates(), getReviewPreferences(), getPlannerReviewBudget(sessionDate),
+  ])
   const units = buildTodayReviewUnits(candidates, {
     now: timestamp, targetRetention: preferences.targetRetention,
-    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+    maxDailyMinutes: plannerBudget ?? preferences.maxDailyMinutes, maxModules: preferences.maxModules,
   })
   return withTransactionLock(async () => {
     await execute('BEGIN IMMEDIATE')
@@ -639,8 +651,8 @@ export async function deferTodayReviewUnit(moduleId: string) {
 
 async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: string }) {
   const sessionDate = localReviewDate(input.timestamp)
-  const [session, candidates, preferences] = await Promise.all([
-    findTodaySession(sessionDate), listReviewCandidates(), getReviewPreferences(),
+  const [session, candidates, preferences, plannerBudget] = await Promise.all([
+    findTodaySession(sessionDate), listReviewCandidates(), getReviewPreferences(), getPlannerReviewBudget(sessionDate),
   ])
   if (!session) return getOrCreateTodayPlan(input.timestamp)
   const current = await readTodayPlanBySession(session)
@@ -649,7 +661,7 @@ async function extendTodayPlan(input: { timestamp: number; replaceModuleId?: str
   const candidatesToPlan = candidates.filter((candidate) => !existingProblems.has(candidate.problemId))
   const nextUnit = buildTodayReviewUnits(candidatesToPlan, {
     now: input.timestamp, targetRetention: preferences.targetRetention,
-    maxDailyMinutes: preferences.maxDailyMinutes, maxModules: preferences.maxModules,
+    maxDailyMinutes: plannerBudget ?? preferences.maxDailyMinutes, maxModules: preferences.maxModules,
   })
     .find((unit) => !existingKeys.has(unit.canonicalKey))
   if (!nextUnit) return current

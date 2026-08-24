@@ -8,7 +8,7 @@ import {
   ratingEvidence,
   reviewTagEvidenceWeight,
 } from '../domain/review'
-import type { PracticeSet } from '../domain/practice'
+import type { PracticeItemSourceType, PracticeSet } from '../domain/practice'
 import type { PracticeAttempt } from '../domain/practiceAttempt'
 import { normalizePracticeGradingResult, type PracticeGradingResult, type StructuredStudentAnswer } from '../domain/practiceGrading'
 import { decidePracticeLoop, practiceRating, tagEvidenceUpdate, type PracticeLoop, type PracticeLoopStopReason, type PracticeLoopStatus } from '../domain/practiceLoop'
@@ -16,7 +16,7 @@ import { getOrCreatePracticeSetFromPracticeAttempt } from './practiceDatabase'
 import { withTransactionLock } from './transactionLock'
 import { transitionPracticeSessionForSet } from './practiceSessionDatabase'
 import { getReviewPreferences } from './reviewPreferencesDatabase'
-import { notifyLearningStateChanged } from './reviewSchedulerMigration'
+import { notifyLearningStateChanged } from './learningStateEvents'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -82,6 +82,7 @@ async function applyPracticeEvidence(input: {
   targetTags: ReviewTag[]; answer: StructuredStudentAnswer; answerImagePath: string
   grading: PracticeGradingResult; reviewedAt: number
   targetRetention: number
+  verifiedVariant: boolean
 }) {
   const resultKey = `practice:${input.responseId}`
   const existing = await select<Array<{ id: string }>>('SELECT id FROM review_attempts WHERE result_key=$1 LIMIT 1', [resultKey])
@@ -139,7 +140,7 @@ async function applyPracticeEvidence(input: {
     const next = tagUpdate.rating
       ? applyWeightedReviewRating(current, tagUpdate.rating, input.difficulty, input.reviewedAt,
         tagUpdate.strength * reviewTagEvidenceWeight(tag),
-        input.grading.bundleEvidence.transfer, input.targetRetention)
+        input.verifiedVariant && input.grading.bundleEvidence.transfer, input.targetRetention)
       : current
     if (row && tagUpdate.rating) await execute(`UPDATE skill_states SET mastery_estimate=$1,stability=$2,retrievability=$3,
       evidence_count=$4,success_count=$5,failure_count=$6,transfer_score=$7,max_stable_difficulty=$8,
@@ -152,7 +153,8 @@ async function applyPracticeEvidence(input: {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [
       uuid(), input.subject, reviewAttemptId, tag.id, input.skillBundleId, gradedEvidence.result,
       gradedEvidence.confidence, gradedEvidence.weight * reviewTagEvidenceWeight(tag), gradedEvidence.evidence,
-      input.grading.bundleEvidence.transfer ? 1 : 0, input.difficulty, input.grading.modelRunId,
+      input.verifiedVariant && input.grading.bundleEvidence.transfer ? 1 : 0,
+      input.difficulty, input.grading.modelRunId,
       input.grading.userConfirmed ? 1 : 0, input.reviewedAt,
     ])
   }
@@ -168,7 +170,7 @@ async function applyPracticeEvidence(input: {
     : 0
   const nextBundle = bundleRating
     ? applyWeightedReviewRating(previousBundle, bundleRating, input.difficulty, input.reviewedAt,
-      bundleStrength, input.grading.bundleEvidence.transfer, input.targetRetention)
+      bundleStrength, input.verifiedVariant && input.grading.bundleEvidence.transfer, input.targetRetention)
     : previousBundle
   if (bundleRow && bundleRating) await execute(`UPDATE skill_bundle_states SET mastery_estimate=$1,stability=$2,
     retrievability=$3,transfer_score=$4,evidence_count=$5,last_practiced_at=$6,next_review_at=$7,
@@ -249,9 +251,10 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
         extracted_answer_json: string | null; grading_result_json: string | null
         item_id: string; subject: string; source_problem_id: string | null
         target_skill_bundle_id: string | null; target_tags_json: string; difficulty: DifficultyLevel
+        source_type: PracticeItemSourceType
       }>>(`SELECT response.id AS response_id,response.answer_asset_path,response.corrected_answer_json,
         response.extracted_answer_json,response.grading_result_json,item.id AS item_id,item.subject,
-        item.source_problem_id,item.target_skill_bundle_id,item.target_tags_json,item.difficulty
+        item.source_problem_id,item.target_skill_bundle_id,item.target_tags_json,item.difficulty,item.source_type
         FROM practice_responses response JOIN practice_items item ON item.id=response.practice_item_id
         WHERE response.practice_attempt_id=$1 ORDER BY item.order_index`, [attempt.id])
       if (!contexts.length || contexts.length !== practiceSet.items.length) throw new Error('作答区域不完整，不能提交学习证据')
@@ -275,7 +278,7 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
           itemId: row.item_id, sourceProblemId: row.source_problem_id, skillBundleId: row.target_skill_bundle_id,
           difficulty: row.difficulty, targetTags: parseJSON(row.target_tags_json, []), answer,
           answerImagePath: row.answer_asset_path, grading: grades[index]!, reviewedAt: now,
-          targetRetention,
+          targetRetention, verifiedVariant: row.source_type === 'generated_variant',
         })) inserted += 1
       }
       const consumedItems = Math.min(loopRow.item_budget, loopRow.consumed_items + inserted)

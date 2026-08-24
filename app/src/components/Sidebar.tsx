@@ -2,6 +2,7 @@ import { Icon } from './Icon'
 
 export type AppSection =
   | 'today'
+  | 'planner'
   | 'capture'
   | 'library'
   | 'curriculum'
@@ -14,6 +15,7 @@ const items: Array<{
   icon: Parameters<typeof Icon>[0]['name']
 }> = [
   { id: 'today', label: '今日', icon: 'today' },
+  { id: 'planner', label: '计划', icon: 'planner' },
   { id: 'capture', label: '采集', icon: 'capture' },
   { id: 'library', label: '错题库', icon: 'library' },
   { id: 'curriculum', label: '课程', icon: 'curriculum' },

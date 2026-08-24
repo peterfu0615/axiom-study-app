@@ -24,6 +24,7 @@ import {
 import { PracticeSetView } from '../practice/PracticeSetView'
 import { getLatestPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { practiceErrorMessage } from '../practice/productLanguage'
+import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
 import './Today.css'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
@@ -43,7 +44,6 @@ const forecastRangeOptions: Array<{ value: string; label: string }> = [
 ]
 
 function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
-  const maxProblems = Math.max(1, ...days.map((d) => d.estimatedProblemCount))
   const width = 1000
   const height = 120
   const padLeft = 24
@@ -57,9 +57,9 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
 
   const points = days.map((day, i) => {
     const x = padLeft + i * stepX
-    const yRatio = day.estimatedProblemCount / maxProblems
-    const y = padTop + chartH - yRatio * chartH
-    return { x, y, day, index: i }
+    const y = padTop + chartH - day.averageRetention * chartH
+    const minimumY = padTop + chartH - day.minimumRetention * chartH
+    return { x, y, minimumY, day, index: i }
   })
 
   const pathD = points.reduce((acc, pt, i) => {
@@ -69,9 +69,8 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
     return `${acc} C ${cx} ${prev.y}, ${cx} ${pt.y}, ${pt.x} ${pt.y}`
   }, '')
 
-  const areaD = pathD
-    ? `${pathD} L ${points[points.length - 1].x} ${padTop + chartH} L ${points[0].x} ${padTop + chartH} Z`
-    : ''
+  const minimumPath = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.minimumY}`).join(' ')
+  const targetY = padTop + chartH - (days[0]?.targetRetention ?? .85) * chartH
 
   return (
     <div className="today-forecast__chart-wrapper">
@@ -82,10 +81,6 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
         aria-hidden="true"
       >
         <defs>
-          <linearGradient id="forecastAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--brand)" stopOpacity="0.32" />
-            <stop offset="100%" stopColor="var(--brand)" stopOpacity="0.0" />
-          </linearGradient>
           <linearGradient id="forecastLineGrad" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="var(--brand-pressed)" />
             <stop offset="50%" stopColor="var(--brand)" />
@@ -101,9 +96,10 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
           stroke="var(--ax-border-subtle)"
           strokeWidth="1"
         />
-        {/* 区域渐变 */}
-        {areaD && <path d={areaD} fill="url(#forecastAreaGrad)" />}
-        {/* 平滑曲线 */}
+        <line x1={padLeft} x2={width - padRight} y1={targetY} y2={targetY}
+          stroke="var(--ax-warning-fg)" strokeDasharray="7 5" strokeWidth="1.5" />
+        {minimumPath && <path d={minimumPath} fill="none" stroke="var(--ax-text-tertiary)"
+          strokeDasharray="4 4" strokeWidth="1.5" />}
         {pathD && (
           <path
             d={pathD}
@@ -119,7 +115,7 @@ function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
             <circle
               cx={pt.x}
               cy={pt.y}
-              r={pt.day.estimatedProblemCount > 0 ? (pt.index === 0 ? 4.5 : 3.5) : 2}
+              r={pt.index === 0 ? 4.5 : 3.5}
               fill={pt.index === 0 ? 'var(--brand-pressed)' : 'var(--ax-color-surface)'}
               stroke="var(--brand)"
               strokeWidth={pt.index === 0 ? 2 : 1.5}
@@ -145,7 +141,7 @@ function ForecastStrip({
       <div className="today-forecast__heading">
         <div>
           <h2>未来复习计划</h2>
-          <small className="today-forecast__subheading">艾宾浩斯遗忘衰减负荷曲线预测</small>
+          <small className="today-forecast__subheading">平均/最低保持率 · 目标线 · 每日预计分钟</small>
         </div>
         <div className="today-forecast__controls">
           <SegmentedControl
@@ -180,11 +176,11 @@ function ForecastStrip({
                 <span>{date.getMonth() + 1}/{date.getDate()}</span>
               </div>
               <div className="today-forecast__metric-pill">
-                <strong>{day.estimatedUnitCount}</strong>
-                <span>组主题</span>
+                <strong>{Math.round(day.averageRetention * 100)}%</strong>
+                <span>平均保持</span>
               </div>
               <span className="today-forecast__problem-count">
-                {day.estimatedProblemCount ? `约 ${day.estimatedProblemCount} 题` : '无到期题'}
+                最低 {Math.round(day.minimumRetention * 100)}% · {day.estimatedMinutes} 分钟
               </span>
               <small>{loadLabels[day.loadLevel]}</small>
             </article>
@@ -266,7 +262,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
       ])
       if (isCancelled()) return
-      setPlan(nextPlan); setForecast(nextForecast)
+      setPlan(nextPlan); setForecast(nextForecast); setVariantMode(nextPlan.preferences.variantMode)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
@@ -277,6 +273,17 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     void load(() => cancelled)
     return () => { cancelled = true }
   }, [load])
+  useEffect(() => {
+    const refresh = () => void refreshForecast(forecastRangeRef.current)
+    window.addEventListener(LEARNING_STATE_EVENT, refresh)
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 60_000)
+    return () => {
+      window.removeEventListener(LEARNING_STATE_EVENT, refresh)
+      window.removeEventListener('focus', refresh)
+      window.clearInterval(timer)
+    }
+  }, [refreshForecast])
 
   const changeForecastRange = (range: ForecastRange) => {
     setForecastRange(range)

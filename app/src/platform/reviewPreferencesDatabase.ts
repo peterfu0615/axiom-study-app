@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { ReviewSessionMode } from '../domain/review'
 import type { VariantGenerationMode } from '../domain/practice'
+import { notifyLearningStateChanged } from './learningStateEvents'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -67,5 +68,6 @@ export async function saveReviewPreferences(value: ReviewPreferences) {
       preferred_mode=$3,target_retention=$4,variant_mode=$5,updated_at=$6`, [
     next.maxDailyMinutes, next.maxModules, next.preferredMode, next.targetRetention, next.variantMode, now,
   ])
+  notifyLearningStateChanged('review_preferences_changed')
   return next
 }

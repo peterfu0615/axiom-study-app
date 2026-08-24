@@ -41,7 +41,7 @@ export function ReviewSettings() {
     setSaving(true); setMessage(null)
     try {
       setValue(await saveReviewPreferences(value))
-      setMessage('复习设置已保存，将用于下一次生成 Today 计划。')
+      setMessage('复习设置已保存；保持率会立即用于实时预测。')
     } catch { setMessage('保存复习设置失败，请重试。') }
     finally { setSaving(false) }
   }
@@ -50,16 +50,12 @@ export function ReviewSettings() {
     <header>
       <p className="eyebrow">学习负担</p>
       <h2>Today 复习设置</h2>
-      <p className="subtitle">限制每天自动安排的负担。已经生成的今日计划保留原快照，不会被设置变更改写。</p>
+      <p className="subtitle">保持率控制到期时间，模块数控制单次练习规模；每日硬容量与复习预留请在“计划”中设置。</p>
     </header>
     <div className="settings-form">
       <label>
         <span>目标保持率（%）</span>
         <input disabled={loading || saving} max={95} min={75} onChange={(event) => setValue((current) => ({ ...current, targetRetention: parseBoundedNumber(event.target.value, 75, 95, current.targetRetention * 100) / 100 }))} type="number" value={Math.round(value.targetRetention * 100)} />
-      </label>
-      <label>
-        <span>每日最长学习时间（分钟）</span>
-        <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
       </label>
       <label>
         <span>每日最多复习模块</span>

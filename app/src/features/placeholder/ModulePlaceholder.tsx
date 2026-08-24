@@ -23,6 +23,12 @@ const modules: Record<
     description: '积累真实作答和复习记录后，这里会呈现薄弱知识点与错因趋势。',
     phase: '阶段 3',
   },
+  planner: {
+    eyebrow: '统一调度',
+    title: '计划',
+    description: '正式应用中会显示容量约束下的复习、订正、作业与备考计划。',
+    phase: '阶段 3',
+  },
   settings: {
     eyebrow: '应用偏好',
     title: '设置',

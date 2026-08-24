@@ -7,7 +7,7 @@ import {
   type InsightSkill,
   type ReviewInsightRecord,
 } from '../domain/reviewInsights'
-import { addLocalReviewDays, applyReviewRating, initialReviewSkillState, localReviewDate, startOfLocalReviewDay, type ReviewRating, type ReviewSkillState, type ReviewTag } from '../domain/review'
+import { addLocalReviewDays, initialReviewSkillState, localReviewDate, reviewRetrievability, startOfLocalReviewDay, type ReviewRating, type ReviewSkillState, type ReviewTag } from '../domain/review'
 
 const select = <T>(sql: string, params: unknown[] = []) => invoke<T>('db_select', { sql, params })
 const num = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -120,25 +120,23 @@ export async function getReviewInsights(rangeDays: InsightRangeDays, now = Date.
       tags: snapshot.tags ?? [], errorCategories: snapshot.errorCategories ?? [],
     }
   })
-  const skills: InsightSkill[] = skillRows.map((row) => ({
-    subject: row.subject, tagId: row.tag_id, name: row.canonical_name, type: row.tag_type,
-    state: {
+  const skills: InsightSkill[] = skillRows.map((row) => {
+    const state: ReviewSkillState = {
       ...initialReviewSkillState(), masteryEstimate: num(row.mastery_estimate, .45),
       stability: num(row.stability, 1), retrievability: num(row.retrievability, .65),
       evidenceCount: num(row.evidence_count), successCount: num(row.success_count), failureCount: num(row.failure_count),
       transferScore: num(row.transfer_score), maxStableDifficulty: row.max_stable_difficulty,
       lastPracticedAt: nullable(row.last_practiced_at), nextReviewAt: nullable(row.next_review_at),
       uncertainty: num(row.uncertainty, 1),
-    },
-  }))
-  const replayedBundles = new Map<string, ReviewSkillState>()
+    }
+    return { subject: row.subject, tagId: row.tag_id, name: row.canonical_name, type: row.tag_type,
+      state: { ...state, retrievability: reviewRetrievability(state, now) } }
+  })
   const changes: BundleMasteryChange[] = changeRows.flatMap((row) => {
     const storedPrevious = parse<Partial<ReviewSkillState>>(row.previous_state_json, {})
-    const previous = replayedBundles.get(`${row.subject}:${row.skill_bundle_id}`) ?? {
-      ...initialReviewSkillState(), ...storedPrevious,
-    }
-    const next = applyReviewRating(previous, row.effective_rating, row.difficulty, num(row.reviewed_at))
-    replayedBundles.set(`${row.subject}:${row.skill_bundle_id}`, next)
+    const storedNext = parse<Partial<ReviewSkillState>>(row.new_state_json, {})
+    const previous = { ...initialReviewSkillState(), ...storedPrevious }
+    const next = { ...previous, ...storedNext }
     return Number.isFinite(previous.masteryEstimate) && Number.isFinite(next.masteryEstimate) ? [{
       logId: row.log_id, subject: row.subject, reviewedAt: num(row.reviewed_at), previousMastery: num(previous.masteryEstimate), newMastery: num(next.masteryEstimate),
     }] : []

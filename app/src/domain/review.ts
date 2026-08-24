@@ -361,7 +361,9 @@ export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: Re
   const dueCandidates = candidates.filter((candidate) => candidateDueAt(candidate, options.now, targetRetention) <= endOfToday)
   const available = buildReviewUnitPool(dueCandidates, options.now)
   const selected: ReviewUnitDraft[] = []
-  const maxSeconds = Math.max(5, options.maxDailyMinutes ?? 25) * 60
+  const dailyMinutes = options.maxDailyMinutes ?? 25
+  if (dailyMinutes <= 0) return selected
+  const maxSeconds = Math.max(1, dailyMinutes) * 60
   const maxModules = Math.max(1, options.maxModules ?? 2)
   while (available.length) {
     available.sort((left, right) => {
@@ -413,8 +415,8 @@ export function candidateRetention(candidate: ReviewCandidate, at: number) {
 
 export function estimateReviewProblemSeconds(candidate: Pick<ReviewCandidate, 'difficulty' | 'tags' | 'diagramImagePaths'>) {
   const base = candidate.difficulty === 'advanced' ? 10 : candidate.difficulty === 'intermediate' ? 7 : 4
-  const complexity = Math.min(3, Math.max(0,
-    candidate.tags.filter((tag) => tag.type === 'method' || tag.type === 'model').length - 1))
+  const complexity = Math.min(3,
+    candidate.tags.filter((tag) => tag.type === 'method' || tag.type === 'model').length)
   const diagram = candidate.diagramImagePaths?.length ? 2 : 0
   return Math.max(3, Math.min(15, base + complexity + diagram)) * 60
 }

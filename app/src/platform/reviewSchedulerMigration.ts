@@ -8,12 +8,11 @@ import {
 import type { DifficultyLevel } from '../domain/models'
 import { getReviewPreferences } from './reviewPreferencesDatabase'
 import { withTransactionLock } from './transactionLock'
+import { notifyLearningStateChanged } from './learningStateEvents'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
 const select = <T>(sql: string, params: unknown[] = []) => invoke<T>('db_select', { sql, params })
-
-export const LEARNING_STATE_EVENT = 'axiom:learning-state-changed'
 
 interface StateRow {
   subject: string; entity_id: string; mastery_estimate: number; stability: number
@@ -34,12 +33,6 @@ const stateFromRow = (row: StateRow): ReviewSkillState => ({
   nextReviewAt: row.next_review_at == null ? null : num(row.next_review_at),
   uncertainty: num(row.uncertainty, 1),
 })
-
-export function notifyLearningStateChanged(reason: string) {
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(LEARNING_STATE_EVENT, { detail: { reason } }))
-  }
-}
 
 export async function migrateReviewSchedulerState(now = Date.now()) {
   const { targetRetention } = await getReviewPreferences()

@@ -4,6 +4,7 @@ import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
 import type { InsightEvidenceSplit } from '../../domain/reviewInsights'
 import { getReviewInsights } from '../../platform/insightsDatabase'
+import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
 import './Insights.css'
 
 const ratingLabels = { again: '忘记', hard: '困难', good: '掌握', easy: '轻松' }
@@ -140,6 +141,17 @@ export function InsightsWorkspace() {
     }
   }, [range, subject])
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const refresh = () => void load()
+    window.addEventListener(LEARNING_STATE_EVENT, refresh)
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 60_000)
+    return () => {
+      window.removeEventListener(LEARNING_STATE_EVENT, refresh)
+      window.removeEventListener('focus', refresh)
+      window.clearInterval(timer)
+    }
+  }, [load])
   const totalRatings = useMemo(() => insights ? Object.values(insights.ratings).reduce((sum, count) => sum + count, 0) : 0, [insights])
   const masteryCount = useMemo(() => insights ? Object.values(insights.mastery).reduce((sum, items) => sum + items.length, 0) : 0, [insights])
   const changeDays = useMemo(() => insights?.trend.filter((day) => day.masteryDelta !== null) ?? [], [insights])

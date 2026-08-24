@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   applyReviewRating,
   applyWeightedReviewRating,
+  addLocalReviewDays,
   buildTodayReviewUnits,
   candidateDueAt,
   candidateRetention,
   canTransitionReviewSession,
   defaultReviewSessionSettings,
   effectiveSkillRetention,
+  estimateReviewProblemSeconds,
   initialReviewSkillState,
   localReviewDate,
   reviewDueAt,
@@ -208,6 +210,19 @@ describe('Horizon review scheduler', () => {
     expect(localReviewDate(new Date('2026-08-11T00:00:01+08:00').getTime())).toBe('2026-08-11')
   })
 
+  it('advances local review dates across a daylight-saving boundary', () => {
+    const runtime = globalThis as typeof globalThis & { process: { env: Record<string, string | undefined> } }
+    const original = runtime.process.env.TZ
+    runtime.process.env.TZ = 'America/New_York'
+    try {
+      const before = new Date(2026, 2, 8, 0).getTime()
+      const after = addLocalReviewDays(before, 1)
+      expect(localReviewDate(after)).toBe('2026-03-09')
+      expect(new Date(after).getHours()).toBe(0)
+      expect(after - before).toBe(23 * 60 * 60 * 1000)
+    } finally { runtime.process.env.TZ = original }
+  })
+
   it('enforces the durable practice session lifecycle and recovery edges', () => {
     expect(canTransitionReviewSession('draft', 'generated')).toBe(true)
     expect(canTransitionReviewSession('generated', 'exported')).toBe(true)
@@ -233,6 +248,17 @@ describe('Horizon review scheduler', () => {
     })
   })
 
+  it('estimates review time from difficulty, method/model tags and geometry', () => {
+    expect(estimateReviewProblemSeconds({ difficulty: 'basic', tags: [], diagramImagePaths: [] })).toBe(4 * 60)
+    expect(estimateReviewProblemSeconds({
+      difficulty: 'intermediate', tags: [tag('method', '换元'), tag('model', '函数模型')], diagramImagePaths: [],
+    })).toBe(9 * 60)
+    expect(estimateReviewProblemSeconds({
+      difficulty: 'advanced', tags: [tag('method', 'a'), tag('method', 'b'), tag('model', 'c'), tag('model', 'd')],
+      diagramImagePaths: ['/diagram.svg'],
+    })).toBe(15 * 60)
+  })
+
   it('schedules every due theme without an artificial module cap', () => {
     const candidates = [
       candidate('budget-a', { tags: [tag('knowledge', '函数'), tag('method', '待定系数法')] }),
@@ -242,5 +268,12 @@ describe('Horizon review scheduler', () => {
     expect(buildTodayReviewUnits(candidates, {
       now, maxModules: 3, maxDailyMinutes: 30,
     })).toHaveLength(3)
+  })
+
+  it('shows only due content and honors a zero Planner review allocation', () => {
+    const state = applyReviewRating(null, 'easy', 'intermediate', now)
+    const future = candidate('future', { skillStates: { future: state } })
+    expect(buildTodayReviewUnits([future], { now, maxModules: 12, maxDailyMinutes: 90 })).toHaveLength(0)
+    expect(buildTodayReviewUnits([candidate('due')], { now, maxDailyMinutes: 0 })).toHaveLength(0)
   })
 })

@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=57 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=58 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_57_exactly() {
+    fn migration_list_covers_versions_1_through_58_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=57).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=57");
+        let expected: Vec<i64> = (1..=58).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=58");
     }
 
     #[test]
