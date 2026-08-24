@@ -115,8 +115,8 @@
     "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
     ui-sans-serif, sans-serif;
   --ax-font-reading:
-    "Sentient", "Source Han Serif SC", "Noto Serif SC", "Songti SC", Georgia,
-    "Times New Roman", serif;
+    "Sentient Variable", "Sentient", "Source Han Serif SC", "Noto Serif SC",
+    "Songti SC", Georgia, "Times New Roman", serif;
   --ax-font-mono:
     "SFMono-Regular", "Sarasa Mono SC", "JetBrains Mono", Menlo, Monaco,
     Consolas, ui-monospace, monospace;
