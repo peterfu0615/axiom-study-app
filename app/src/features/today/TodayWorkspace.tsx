@@ -42,6 +42,95 @@ const forecastRangeOptions: Array<{ value: string; label: string }> = [
   { value: '30', label: '未来 30 天' },
 ]
 
+function ForecastTimelineChart({ days }: { days: ReviewForecastDay[] }) {
+  const maxProblems = Math.max(1, ...days.map((d) => d.estimatedProblemCount))
+  const width = 1000
+  const height = 120
+  const padLeft = 24
+  const padRight = 24
+  const padTop = 16
+  const padBottom = 24
+  const chartW = width - padLeft - padRight
+  const chartH = height - padTop - padBottom
+
+  const stepX = days.length > 1 ? chartW / (days.length - 1) : chartW
+
+  const points = days.map((day, i) => {
+    const x = padLeft + i * stepX
+    const yRatio = day.estimatedProblemCount / maxProblems
+    const y = padTop + chartH - yRatio * chartH
+    return { x, y, day, index: i }
+  })
+
+  const pathD = points.reduce((acc, pt, i) => {
+    if (i === 0) return `M ${pt.x} ${pt.y}`
+    const prev = points[i - 1]
+    const cx = (prev.x + pt.x) / 2
+    return `${acc} C ${cx} ${prev.y}, ${cx} ${pt.y}, ${pt.x} ${pt.y}`
+  }, '')
+
+  const areaD = pathD
+    ? `${pathD} L ${points[points.length - 1].x} ${padTop + chartH} L ${points[0].x} ${padTop + chartH} Z`
+    : ''
+
+  return (
+    <div className="today-forecast__chart-wrapper">
+      <svg
+        className="today-forecast__chart"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="forecastAreaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--brand)" stopOpacity="0.32" />
+            <stop offset="100%" stopColor="var(--brand)" stopOpacity="0.0" />
+          </linearGradient>
+          <linearGradient id="forecastLineGrad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="var(--brand-pressed)" />
+            <stop offset="50%" stopColor="var(--brand)" />
+            <stop offset="100%" stopColor="var(--brand-hover)" />
+          </linearGradient>
+        </defs>
+        {/* 基线 */}
+        <line
+          x1={padLeft}
+          y1={padTop + chartH}
+          x2={width - padRight}
+          y2={padTop + chartH}
+          stroke="var(--ax-border-subtle)"
+          strokeWidth="1"
+        />
+        {/* 区域渐变 */}
+        {areaD && <path d={areaD} fill="url(#forecastAreaGrad)" />}
+        {/* 平滑曲线 */}
+        {pathD && (
+          <path
+            d={pathD}
+            fill="none"
+            stroke="url(#forecastLineGrad)"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+        )}
+        {/* 节点标记 */}
+        {points.map((pt) => (
+          <g key={pt.day.date} className="today-forecast__node">
+            <circle
+              cx={pt.x}
+              cy={pt.y}
+              r={pt.day.estimatedProblemCount > 0 ? (pt.index === 0 ? 4.5 : 3.5) : 2}
+              fill={pt.index === 0 ? 'var(--brand-pressed)' : 'var(--ax-color-surface)'}
+              stroke="var(--brand)"
+              strokeWidth={pt.index === 0 ? 2 : 1.5}
+            />
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
 function ForecastStrip({
   days,
   onRangeChange,
@@ -51,34 +140,59 @@ function ForecastStrip({
   onRangeChange: (range: ForecastRange) => void
   range: ForecastRange
 }) {
-  const maxUnits = Math.max(1, ...days.map((day) => day.estimatedUnitCount))
-  return <section className="today-forecast" aria-label="未来复习计划">
-    <div className="today-forecast__heading">
-      <h2>未来复习计划</h2>
-      <div className="today-forecast__controls">
-        <SegmentedControl
-          ariaLabel="预测时间范围"
-          onChange={(value) => onRangeChange(Number(value) as ForecastRange)}
-          options={forecastRangeOptions}
-          value={String(range)}
-        />
-        <IconButton appearance="plain" label="由复习调度（记忆衰减曲线）估算，实际安排会随练习结果自动调整。"><Icon name="info" size={14} /></IconButton>
+  return (
+    <section className="today-forecast" aria-label="未来复习计划与艾宾浩斯记忆负载">
+      <div className="today-forecast__heading">
+        <div>
+          <h2>未来复习计划</h2>
+          <small className="today-forecast__subheading">艾宾浩斯遗忘衰减负荷曲线预测</small>
+        </div>
+        <div className="today-forecast__controls">
+          <SegmentedControl
+            ariaLabel="预测时间范围"
+            onChange={(value) => onRangeChange(Number(value) as ForecastRange)}
+            options={forecastRangeOptions}
+            value={String(range)}
+          />
+          <IconButton appearance="plain" label="基于艾宾浩斯记忆遗忘曲线（Ebbinghaus Curve）动态推导未来到期错题，随作答反馈不断自适应调整。">
+            <Icon name="info" size={14} />
+          </IconButton>
+        </div>
       </div>
-    </div>
-    <div className={`today-forecast__days${range > 7 ? ' is-scrollable' : ''}`}>
-      {days.map((day, index) => {
-        const date = new Date(day.dayStart)
-        const weekday = index === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)
-        return <article className={`today-forecast__day today-forecast__day--${day.loadLevel}${index === 0 ? ' is-today' : ''}`} key={day.date}>
-          <div><strong>{weekday}</strong><span>{date.getMonth() + 1}/{date.getDate()}</span></div>
-          <div className="today-forecast__track" aria-hidden="true"><i style={{ height: `${Math.max(day.estimatedUnitCount ? 18 : 3, day.estimatedUnitCount / maxUnits * 100)}%` }} /></div>
-          <strong>{day.estimatedUnitCount} 个主题</strong>
-          <span>{day.estimatedProblemCount ? `约 ${day.estimatedProblemCount} 道题` : '暂无安排'}</span>
-          <small>{loadLabels[day.loadLevel]}</small>
-        </article>
-      })}
-    </div>
-  </section>
+
+      {/* 艾宾浩斯平滑折线负荷图 */}
+      <ForecastTimelineChart days={days} />
+
+      {/* 时间轴详情卡片列表 */}
+      <div className={`today-forecast__days${range > 7 ? ' is-scrollable' : ''}`}>
+        {days.map((day, index) => {
+          const date = new Date(day.dayStart)
+          const weekday = index === 0 ? '今天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)
+          return (
+            <article
+              className={`today-forecast__day today-forecast__day--${day.loadLevel}${
+                index === 0 ? ' is-today' : ''
+              }`}
+              key={day.date}
+            >
+              <div>
+                <strong>{weekday}</strong>
+                <span>{date.getMonth() + 1}/{date.getDate()}</span>
+              </div>
+              <div className="today-forecast__metric-pill">
+                <strong>{day.estimatedUnitCount}</strong>
+                <span>组主题</span>
+              </div>
+              <span className="today-forecast__problem-count">
+                {day.estimatedProblemCount ? `约 ${day.estimatedProblemCount} 题` : '无到期题'}
+              </span>
+              <small>{loadLabels[day.loadLevel]}</small>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
 }
 
 function supportTags(unit: TodayReviewUnit) {

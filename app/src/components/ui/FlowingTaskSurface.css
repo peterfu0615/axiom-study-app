@@ -37,7 +37,7 @@
     110deg,
     transparent 12%,
     color-mix(in srgb, var(--brand) 8%, transparent) 35%,
-    color-mix(in srgb, #fff0a0 20%, transparent) 50%,
+    color-mix(in srgb, var(--brand) 28%, white) 50%,
     transparent 72%
   );
   background-size: 220% 100%;
@@ -93,7 +93,7 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--brand-pressed), var(--brand), #fff0a0, var(--brand));
+  background: linear-gradient(90deg, var(--brand-pressed), var(--brand), color-mix(in srgb, var(--brand) 35%, white), var(--brand));
   background-size: 220% 100%;
   animation: flowing-task-surface-flow 2.8s linear infinite;
   transition: width 260ms ease;
@@ -103,7 +103,7 @@
   inset: 0 auto 0 -35%;
   width: 42%;
   border-radius: inherit;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, #fff0a0 80%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand) 50%, white), transparent);
   content: '';
   animation: flowing-task-surface-indeterminate 2.2s ease-in-out infinite;
 }

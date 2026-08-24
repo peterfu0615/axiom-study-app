@@ -285,20 +285,20 @@
   display: grid;
   place-items: center;
   margin-bottom: 22px;
-  border: 1px solid rgba(255, 213, 10, 0.34);
+  border: 1px solid color-mix(in srgb, var(--brand) 34%, transparent);
   border-radius: 50%;
   color: var(--brand-ink);
   background: color-mix(in srgb, var(--surface) 66%, transparent);
   box-shadow:
-    0 0 0 9px rgba(255, 255, 255, 0.34),
-    0 12px 34px rgba(74, 59, 0, 0.12);
+    0 0 0 9px color-mix(in srgb, var(--brand-soft) 40%, transparent),
+    0 12px 34px color-mix(in srgb, var(--brand-ink) 12%, transparent);
 }
 
 .camera-orbit::after {
   position: absolute;
   width: 92px;
   height: 92px;
-  border: 1px dashed rgba(255, 213, 10, 0.48);
+  border: 1px dashed color-mix(in srgb, var(--brand) 48%, transparent);
   border-radius: 50%;
   content: '';
 }
@@ -2111,10 +2111,11 @@
 .problem-ai-dot.pending,
 .problem-ai-dot.processing {
   background: var(--brand-pressed);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent);
 }
 
 .problem-ai-dot.completed {
-  background: var(--success);
+  background: var(--ax-success-fg, var(--success));
 }
 
 .problem-ai-dot.failed {
@@ -3863,7 +3864,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  max-width: 640px;
+  width: 100%;
 }
 
 .settings-appearance-pane > header {
@@ -3878,7 +3879,7 @@
 
 .appearance-options {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
 
@@ -4005,7 +4006,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  max-width: 680px;
+  width: 100%;
 }
 
 .settings-update-pane > header {

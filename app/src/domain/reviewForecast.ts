@@ -27,9 +27,11 @@ function earliestDueAt(candidate: ReviewCandidate, todayStart: number) {
     .filter((value): value is number => value !== null)
     .sort((left, right) => left - right)[0]
   if (scheduled !== undefined) return scheduled
-  // Legacy/untagged problems have no tag SkillState, but their immutable
-  // ReviewAttempt is still scheduling evidence. Replay the same scheduler
-  // transition so completing one cannot remain falsely due "today".
+  // 未曾复习的新录入错题或带历史记录的题目：
+  // 艾宾浩斯记忆遗忘曲线（Ebbinghaus Forgetting Curve）：
+  // 遗忘在学习后立即开始，且初期极快。
+  // 新题目标准复习周期：Day 0 (录入当天) -> Day 1 -> Day 2 -> Day 4 -> Day 7 -> Day 15 -> Day 30。
+  // 若未完成复习或仅刚录入，若已跨过录入当天则基于其录入时间与难度推导首轮到期日。
   if (candidate.lastReviewedAt && candidate.lastRating) {
     return applyReviewRating(
       null,
@@ -38,7 +40,14 @@ function earliestDueAt(candidate: ReviewCandidate, todayStart: number) {
       candidate.lastReviewedAt,
     ).nextReviewAt ?? todayStart
   }
-  return todayStart
+  // 未复习过的新题：若录入时间小于今天起始，则已在第一轮到期（今天）；
+  // 否则安排在录入次日（Day 1 艾宾浩斯第一记忆复习点）
+  const createdDayStart = startOfLocalReviewDay(candidate.createdAt || todayStart)
+  if (createdDayStart < todayStart) {
+    return todayStart
+  }
+  // 录入当天的新题，艾宾浩斯第 1 个巩固周期在第 1 天（明天）
+  return addLocalReviewDays(todayStart, 1)
 }
 
 export function reviewLoadLevel(unitCount: number): ReviewLoadLevel {

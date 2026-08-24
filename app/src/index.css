@@ -79,9 +79,10 @@
   --ax-space-8: 24px;
   --ax-space-9: 32px;
   --ax-space-10: 40px;
-  --ax-radius-sm: 6px;
-  --ax-radius-md: 9px;
-  --ax-radius-lg: 14px;
+  --ax-radius-sm: 8px;
+  --ax-radius-md: 12px;
+  --ax-radius-lg: 18px;
+  --ax-radius-xl: 22px;
   --ax-radius-pill: 999px;
   --ax-control-sm: 32px;
   --ax-control-md: 38px;

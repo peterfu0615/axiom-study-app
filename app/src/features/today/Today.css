@@ -19,24 +19,46 @@
 .today-unit--deferred { opacity: .62; }
 .today-more { display: flex; justify-content: center; padding: var(--ax-space-8) 0; }
 .today-forecast { padding: var(--ax-space-8) 0; border-top: 1px solid var(--ax-border-default); }
-.today-forecast__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-2); margin-bottom: var(--ax-space-6); }
+.today-forecast__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-2); margin-bottom: var(--ax-space-4); }
 .today-forecast__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
+.today-forecast__subheading { display: block; margin-top: 2px; color: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); }
 .today-forecast__controls { display: flex; align-items: center; gap: var(--ax-space-3); }
 .today-forecast__heading .ax-icon-button { width: var(--ax-control-sm); height: var(--ax-control-sm); color: var(--ax-text-tertiary); }
+
+/* 艾宾浩斯记忆负荷折线区域图 */
+.today-forecast__chart-wrapper {
+  width: 100%;
+  height: 120px;
+  margin: var(--ax-space-3) 0 var(--ax-space-5);
+  padding: var(--ax-space-2) var(--ax-space-3);
+  border: 1px solid var(--ax-border-subtle);
+  border-radius: var(--ax-radius-lg);
+  background: color-mix(in srgb, var(--ax-color-surface) 96%, transparent);
+}
+.today-forecast__chart {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.today-forecast__node {
+  transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.today-forecast__node:hover {
+  transform: scale(1.4);
+}
+
 .today-forecast__days { display: grid; grid-template-columns: repeat(7, minmax(84px, 1fr)); gap: var(--ax-space-3); overflow-x: auto; padding-bottom: var(--ax-space-2); }
 /* 14/30 天时间轴：固定卡片宽度，横向滚动浏览 */
 .today-forecast__days.is-scrollable { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
 .today-forecast__days.is-scrollable .today-forecast__day { min-width: 104px; }
-.today-forecast__day { min-width: 84px; display: grid; grid-template-rows: auto 64px auto auto auto; gap: var(--ax-space-2); padding: var(--ax-space-4); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); background: var(--ax-surface-subtle); }
+.today-forecast__day { min-width: 84px; display: flex; flex-direction: column; gap: var(--ax-space-2); padding: var(--ax-space-3) var(--ax-space-4); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); background: var(--ax-surface-subtle); }
 .today-forecast__day.is-today { border-color: var(--ax-accent-border); background: var(--ax-color-selected); }
 .today-forecast__day > div:first-child { display: flex; justify-content: space-between; gap: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
-.today-forecast__day > strong { color: var(--ax-text-primary); font-size: var(--ax-type-secondary-size); }
-.today-forecast__day > span, .today-forecast__day > small { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
-.today-forecast__track { height: 64px; display: flex; align-items: end; border-radius: var(--ax-radius-sm); background: var(--ax-surface-muted); overflow: hidden; }
-.today-forecast__track i { width: 100%; min-height: 3px; background: var(--ax-text-secondary); border-radius: var(--ax-radius-sm); opacity: .32; }
-.today-forecast__day.is-today .today-forecast__track i { background: var(--ax-accent); opacity: .62; }
-.today-forecast__day--empty .today-forecast__track i { background: var(--ax-border-default); }
-.today-forecast__day--heavy .today-forecast__track i { background: var(--ax-warning-fg); }
+.today-forecast__metric-pill { display: flex; align-items: baseline; gap: 3px; margin: 4px 0 2px; }
+.today-forecast__metric-pill > strong { color: var(--ax-text-primary); font-size: 18px; line-height: 1.1; }
+.today-forecast__metric-pill > span { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
+.today-forecast__problem-count { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
+.today-forecast__day > small { margin-top: auto; color: var(--ax-text-tertiary); font-size: 10px; }
 .today-horizon-mark { padding: var(--ax-space-8) 0 var(--ax-space-3); color: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); text-align: center; letter-spacing: .04em; }
 .today-runner { padding-top: var(--ax-space-9); }
 .today-runner__header { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-5); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); }

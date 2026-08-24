@@ -6,7 +6,7 @@
 .practice-header__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-2); }
 .practice-header__actions .ax-button > span { display: flex; align-items: center; gap: var(--ax-space-2); }
 .practice-header--result { margin-bottom: var(--ax-space-7); }
-.practice-section-nav { position: sticky; top: 0; z-index: 3; display: flex; margin: 0 0 var(--ax-space-5); padding: var(--ax-space-2) 0; background: color-mix(in srgb, var(--ax-color-bg) 92%, transparent); backdrop-filter: blur(18px); }
+.practice-section-nav { position: sticky; top: 0; z-index: 3; display: flex; margin: 0 0 var(--ax-space-5); padding: var(--ax-space-2) 0; border-bottom: 1px solid var(--ax-border-default); background: color-mix(in srgb, var(--ax-color-bg) 92%, transparent); backdrop-filter: blur(18px); }
 .practice-document-stage { min-height: min(76vh, 920px); display: grid; grid-template-rows: minmax(620px, 1fr) auto; overflow: hidden; border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); background: var(--ax-surface-muted); box-shadow: var(--ax-shadow-card); }
 .practice-document-page { height: min(76vh, 920px); min-height: 620px; overflow: auto; display: grid; justify-items: center; padding: var(--ax-space-6); background: var(--ax-color-inset); }
 .practice-document-page > img { display: block; width: min(100%, 760px); height: auto; border: 1px solid var(--ax-border-subtle); background: var(--ax-document-paper); box-shadow: var(--ax-shadow-card); }

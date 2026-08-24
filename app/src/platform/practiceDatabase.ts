@@ -13,7 +13,7 @@ import type { DifficultyLevel } from '../domain/models'
 import type { ReviewSkillState, ReviewTag } from '../domain/review'
 import { initialReviewSkillState } from '../domain/review'
 import { withTransactionLock } from './transactionLock'
-import { generateVerifiedPracticeVariant, type PracticeVariantPreparationOutcome } from './variantPracticeDatabase'
+import { generateVerifiedPracticeVariant } from './variantPracticeDatabase'
 import { createPracticeReviewSession, transitionPracticeReviewSession } from './practiceSessionDatabase'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
@@ -112,13 +112,14 @@ export async function createPracticeSet(input: PracticePlannerInput): Promise<Pr
     settings: input.sessionSettings,
   })
   try {
-    const prepared: Array<{ planned: typeof blueprint.items[number]; outcome: PracticeVariantPreparationOutcome }> = []
-    for (const planned of blueprint.items) {
-      prepared.push({
-        planned,
-        outcome: await generateVerifiedPracticeVariant({ source: planned.problem, targetDifficulty: planned.difficulty }),
-      })
-    }
+    // 并行准备每道题的变式，避免逐题串行调用 AI 生成与审校造成长时间阻塞
+    const preparedOutcomes = await Promise.all(
+      blueprint.items.map((planned) =>
+        generateVerifiedPracticeVariant({ source: planned.problem, targetDifficulty: planned.difficulty })
+          .then((outcome) => ({ planned, outcome })),
+      ),
+    )
+    const prepared = preparedOutcomes
     return await withTransactionLock(async () => {
       await execute('BEGIN IMMEDIATE')
       try {
