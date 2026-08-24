@@ -382,18 +382,21 @@
 .settings-appearance-pane h2,
 .settings-about-pane h2,
 .settings-update-pane h2 {
-  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-section-size);
   line-height: var(--ax-type-section-line);
   font-weight: var(--ax-type-section-weight);
 }
 
 .camera-empty h2,
-.problem-detail-heading h2,
-.curriculum-node-detail h2,
 .curriculum-import-processing h2,
 .curriculum-tag-content__header h2,
 .curriculum-review-center__header h2 {
+  font-size: var(--ax-type-section-size);
+  line-height: var(--ax-type-section-line);
+  font-weight: var(--ax-type-section-weight);
+}
+
+.problem-detail-heading h2 {
   font-family: var(--ax-font-reading);
   font-size: var(--ax-type-section-size);
   line-height: var(--ax-type-section-line);
@@ -403,7 +406,6 @@
 .problem-list-heading strong,
 .curriculum-evidence h3,
 .curriculum-relabel-task h3 {
-  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-card-size);
   line-height: var(--ax-type-card-line);
   font-weight: var(--ax-type-card-weight);

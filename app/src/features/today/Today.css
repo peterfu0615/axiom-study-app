@@ -10,7 +10,7 @@
 .today-unit__order { width: var(--ax-control-md); height: var(--ax-control-md); display: grid; place-items: center; border-radius: var(--ax-radius-pill); color: var(--ax-accent-ink); background: var(--ax-color-selected); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); }
 .today-unit__body { min-width: 0; display: grid; gap: var(--ax-space-4); }
 .today-unit__heading { min-width: 0; }
-.today-unit__heading h2 { margin: 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); overflow-wrap: anywhere; }
+.today-unit__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); overflow-wrap: anywhere; }
 .today-unit__meta { min-width: 0; display: flex; flex-wrap: wrap; gap: var(--ax-space-3) var(--ax-space-6); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .today-unit__aside { display: grid; justify-items: end; gap: var(--ax-space-4); }
 .today-unit__statuses, .today-unit__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-2); }
@@ -20,7 +20,7 @@
 .today-more { display: flex; justify-content: center; padding: var(--ax-space-8) 0; }
 .today-forecast { padding: var(--ax-space-8) 0; border-top: 1px solid var(--ax-border-default); }
 .today-forecast__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-2); margin-bottom: var(--ax-space-4); }
-.today-forecast__heading h2 { margin: 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); }
+.today-forecast__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
 .today-forecast__subheading { display: block; margin-top: 2px; color: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); }
 .today-forecast__controls { display: flex; align-items: center; gap: var(--ax-space-3); }
 .today-forecast__heading .ax-icon-button { width: var(--ax-control-sm); height: var(--ax-control-sm); color: var(--ax-text-tertiary); }
@@ -72,7 +72,8 @@
 .today-question__stem > :first-child, .today-solution__content > :first-child { margin-top: 0; }
 .today-answer-gate, .today-solution { max-width: 780px; width: 100%; margin: 0 auto; padding: var(--ax-space-9) 0; }
 .today-answer-gate { display: grid; justify-items: start; gap: var(--ax-space-4); }
-.today-answer-gate h2, .today-solution h2, .today-rating h3 { margin: 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); }
+.today-answer-gate h2, .today-solution h2 { margin: 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); }
+.today-rating h3 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); }
 .today-answer-gate p, .today-rating p, .today-solution__empty { margin: 0; color: var(--ax-text-secondary); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .today-answer-gate .ax-button { margin-top: var(--ax-space-4); }
 .today-solution { display: grid; gap: var(--ax-space-7); }
