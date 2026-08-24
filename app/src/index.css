@@ -62,6 +62,14 @@
   --ax-danger-bg: color-mix(in srgb, var(--danger) 10%, var(--surface));
   --ax-info-fg: color-mix(in srgb, #275fc2 78%, var(--ink));
   --ax-info-bg: color-mix(in srgb, #4f8ee8 12%, var(--surface));
+  /* AI activity surfaces must follow both the selected visual palette and
+     light/dark appearance. Keep all animated highlights on semantic tokens
+     so feature CSS never falls back to Axiom's default yellow. */
+  --ax-ai-flow-soft: color-mix(in srgb, var(--brand) 9%, transparent);
+  --ax-ai-flow-medium: color-mix(in srgb, var(--brand) 24%, transparent);
+  --ax-ai-flow-highlight: color-mix(in srgb, var(--brand) 48%, var(--surface));
+  --ax-ai-flow-strong: color-mix(in srgb, var(--brand) 78%, var(--ink));
+  --ax-ai-flow-shadow: color-mix(in srgb, var(--brand) 14%, transparent);
   --ax-review-again: var(--ax-danger-fg);
   --ax-review-hard: var(--ax-warning-fg);
   --ax-review-good: var(--ax-success-fg);

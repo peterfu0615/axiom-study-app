@@ -104,6 +104,17 @@ describe('global curriculum analysis status', () => {
     expect(reducedMotion).toContain('animation: none')
   })
 
+  it('derives every AI flowing highlight from the active visual theme', () => {
+    const tokens = readFileSync(new URL('../../index.css', import.meta.url), 'utf8')
+    const surface = readFileSync(new URL('../../components/ui/FlowingTaskSurface.css', import.meta.url), 'utf8')
+    const app = readFileSync(new URL('../../App.css', import.meta.url), 'utf8')
+    expect(tokens).toContain('--ax-ai-flow-highlight: color-mix(in srgb, var(--brand)')
+    expect(surface).toContain('var(--ax-ai-flow-highlight)')
+    expect(app).toContain('var(--ax-ai-flow-highlight)')
+    expect(app).not.toContain('rgba(255, 239, 154')
+    expect(app).not.toContain('rgba(129, 98, 0')
+  })
+
   it('uses persisted counts and does not fabricate percentage text', () => {
     const markup = renderToStaticMarkup(createElement(FlowingTaskSurface, {
       state: 'running', title: '标签创建中', progress: .6,

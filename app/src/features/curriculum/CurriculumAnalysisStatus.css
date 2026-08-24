@@ -9,11 +9,11 @@
   align-items: center;
   overflow: hidden;
   padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--brand-pressed) 24%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--ax-ai-flow-strong) 24%, var(--border));
   border-radius: 999px;
   color: var(--ink);
   background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 8%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ax-ai-flow-soft);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -32,9 +32,9 @@
   background: linear-gradient(
     105deg,
     transparent 8%,
-    color-mix(in srgb, var(--brand) 10%, transparent) 30%,
-    color-mix(in srgb, color-mix(in srgb, var(--brand) 70%, white) 42%, transparent) 49%,
-    color-mix(in srgb, var(--brand) 14%, transparent) 67%,
+    var(--ax-ai-flow-soft) 30%,
+    var(--ax-ai-flow-highlight) 49%,
+    var(--ax-ai-flow-medium) 67%,
     transparent 90%
   );
   background-size: 230% 100%;

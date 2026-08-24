@@ -1797,7 +1797,7 @@
       100deg,
       var(--brand-pressed) 0%,
       var(--brand-hover) 32%,
-      color-mix(in srgb, var(--brand) 45%, #ffffff) 50%,
+      var(--ax-ai-flow-highlight) 50%,
       var(--brand-hover) 68%,
       var(--brand-pressed) 100%
     );
@@ -2161,7 +2161,7 @@
   gap: 8px;
   border-radius: 10px;
   background:
-    linear-gradient(110deg, transparent 20%, rgba(255, 239, 154, 0.35) 48%, transparent 75%);
+    linear-gradient(110deg, transparent 20%, var(--ax-ai-flow-highlight) 48%, transparent 75%);
   background-size: 220% 100%;
   animation: ai-content-scan 1.8s ease-in-out infinite;
   font-size: 11px;
@@ -2178,7 +2178,7 @@
   border-radius: 50%;
   color: var(--brand-pressed);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: 0 8px 22px rgba(129, 98, 0, 0.12);
+  box-shadow: 0 8px 22px var(--ax-ai-flow-shadow);
 }
 
 @keyframes ai-content-scan {
@@ -2450,9 +2450,9 @@
   border-radius: 11px;
   background: linear-gradient(
     110deg,
-    var(--brand-wash),
+    var(--ax-ai-flow-soft),
     color-mix(in srgb, var(--surface) 96%, transparent),
-    var(--brand-soft)
+    var(--ax-ai-flow-highlight)
   );
   background-size: 220% 100%;
   animation: solution-scan 2.2s ease-in-out infinite;
@@ -2799,7 +2799,7 @@
   padding: 16px;
   border-radius: 10px;
   background:
-    linear-gradient(110deg, transparent 20%, color-mix(in srgb, var(--brand-soft) 50%, transparent) 48%, transparent 75%);
+    linear-gradient(110deg, transparent 20%, var(--ax-ai-flow-highlight) 48%, transparent 75%);
   background-size: 220% 100%;
   animation: ai-content-scan 1.8s ease-in-out infinite;
 }

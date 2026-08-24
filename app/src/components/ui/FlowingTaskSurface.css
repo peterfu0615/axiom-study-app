@@ -10,11 +10,11 @@
   gap: 16px;
   overflow: hidden;
   padding: clamp(20px, 4vw, 28px);
-  border: 1px solid color-mix(in srgb, var(--brand-pressed) 22%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--ax-ai-flow-strong) 22%, var(--border));
   border-radius: var(--panel-radius);
   color: var(--ink);
-  background: color-mix(in srgb, var(--surface) 94%, var(--brand-wash));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 7%, transparent);
+  background: color-mix(in srgb, var(--surface) 94%, var(--ax-ai-flow-soft));
+  box-shadow: inset 0 0 0 1px var(--ax-ai-flow-soft);
   isolation: isolate;
 }
 
@@ -36,8 +36,8 @@
   background: linear-gradient(
     110deg,
     transparent 12%,
-    color-mix(in srgb, var(--brand) 8%, transparent) 35%,
-    color-mix(in srgb, var(--brand) 28%, white) 50%,
+    var(--ax-ai-flow-soft) 35%,
+    var(--ax-ai-flow-highlight) 50%,
     transparent 72%
   );
   background-size: 220% 100%;
@@ -87,13 +87,13 @@
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-pressed) 20%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ax-ai-flow-strong) 20%, var(--border));
 }
 .flowing-task-surface__progress > span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--brand-pressed), var(--brand), color-mix(in srgb, var(--brand) 35%, white), var(--brand));
+  background: linear-gradient(90deg, var(--ax-ai-flow-strong), var(--brand), var(--ax-ai-flow-highlight), var(--brand));
   background-size: 220% 100%;
   animation: flowing-task-surface-flow 2.8s linear infinite;
   transition: width 260ms ease;
@@ -103,7 +103,7 @@
   inset: 0 auto 0 -35%;
   width: 42%;
   border-radius: inherit;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand) 50%, white), transparent);
+  background: linear-gradient(90deg, transparent, var(--ax-ai-flow-highlight), transparent);
   content: '';
   animation: flowing-task-surface-indeterminate 2.2s ease-in-out infinite;
 }
