@@ -1,8 +1,10 @@
 use std::{
+    collections::HashMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
+    sync::{Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +20,26 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_IMAGE_TOTAL_BYTES: u64 = 60 * 1024 * 1024;
 const MAX_IMAGE_COUNT: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseFormatMode {
+    JsonSchema,
+    JsonObject,
+    None,
+}
+
+impl ResponseFormatMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonSchema => "json_schema",
+            Self::JsonObject => "json_object",
+            Self::None => "none",
+        }
+    }
+}
+
+static RESPONSE_FORMAT_CACHE: OnceLock<Mutex<HashMap<String, ResponseFormatMode>>> =
+    OnceLock::new();
 
 /// 流式输出增量 chunk，通过 Tauri Channel 推送到前端。
 #[derive(Clone, Serialize)]
@@ -688,6 +710,121 @@ fn provider_error_message(body: &str) -> String {
     body.trim().chars().take(1200).collect()
 }
 
+fn safe_provider_message(message: &str, api_key: &str) -> String {
+    let mut safe = if api_key.is_empty() {
+        message.to_string()
+    } else {
+        message.replace(api_key, "[已隐藏]")
+    };
+    for marker in ["Bearer ", "bearer "] {
+        let mut cursor = 0;
+        while let Some(relative_start) = safe[cursor..].find(marker) {
+            let start = cursor + relative_start;
+            let token_start = start + marker.len();
+            let token_len = safe[token_start..]
+                .find(|character: char| {
+                    character.is_whitespace() || matches!(character, '"' | '\'' | ',' | '}')
+                })
+                .unwrap_or(safe.len() - token_start);
+            safe.replace_range(token_start..token_start + token_len, "[已隐藏]");
+            cursor = token_start + "[已隐藏]".len();
+        }
+    }
+    safe.trim().chars().take(500).collect()
+}
+
+fn response_format_rejected(status: u16, message: &str) -> bool {
+    if !matches!(status, 400 | 422) {
+        return false;
+    }
+    let lower = message.to_ascii_lowercase();
+    let mentions_format = lower.contains("response_format")
+        || lower.contains("response format")
+        || lower.contains("json_schema")
+        || lower.contains("json schema");
+    let unavailable = lower.contains("unavailable")
+        || lower.contains("unsupported")
+        || lower.contains("not supported")
+        || lower.contains("does not support")
+        || lower.contains("unknown type");
+    mentions_format && unavailable
+}
+
+fn next_response_format_mode(
+    current: ResponseFormatMode,
+    has_schema: bool,
+) -> Option<ResponseFormatMode> {
+    match current {
+        ResponseFormatMode::JsonSchema if has_schema => Some(ResponseFormatMode::JsonObject),
+        ResponseFormatMode::JsonSchema | ResponseFormatMode::JsonObject => {
+            Some(ResponseFormatMode::None)
+        }
+        ResponseFormatMode::None => None,
+    }
+}
+
+fn response_format_cache_key(provider_id: &str, endpoint: &Url, model: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        provider_id.trim(),
+        endpoint.as_str(),
+        model.trim()
+    )
+}
+
+fn cached_response_format(key: &str) -> Option<ResponseFormatMode> {
+    RESPONSE_FORMAT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).copied())
+}
+
+fn remember_response_format(key: String, mode: ResponseFormatMode) {
+    if let Ok(mut cache) = RESPONSE_FORMAT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        cache.insert(key, mode);
+    }
+}
+
+fn build_chat_completion_body(
+    model: &str,
+    prompt: &str,
+    user_content: &[Value],
+    schema: Option<&Value>,
+    mode: ResponseFormatMode,
+    stream: bool,
+) -> Value {
+    let mut body = json!({
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            { "role": "system", "content": prompt },
+            { "role": "user", "content": user_content }
+        ]
+    });
+    match mode {
+        ResponseFormatMode::JsonSchema => {
+            if let Some(schema) = schema {
+                body["response_format"] = json!({
+                    "type": "json_schema",
+                    "json_schema": { "name": "axiom_output", "schema": schema }
+                });
+            }
+        }
+        ResponseFormatMode::JsonObject => {
+            body["response_format"] = json!({ "type": "json_object" });
+        }
+        ResponseFormatMode::None => {}
+    }
+    if stream {
+        body["stream"] = json!(true);
+    }
+    body
+}
+
 fn normalized_ai_usage(value: &Value) -> Option<Value> {
     let usage = value.get("usage")?;
     let token = |primary: &str, fallback: &str| {
@@ -762,7 +899,18 @@ fn native_ai_error(
     })
 }
 
-fn http_ai_error(status: u16, vision_unsupported: bool, endpoint_host: &str) -> Value {
+fn http_ai_error(
+    status: u16,
+    vision_unsupported: bool,
+    endpoint_host: &str,
+    provider_message: &str,
+    attempted_formats: &[String],
+) -> Value {
+    let detail = format!(
+        "stage=provider_http; host={endpoint_host}; status={status}; formats={}; provider={}",
+        attempted_formats.join(","),
+        provider_message
+    );
     if vision_unsupported {
         return native_ai_error(
             "MODEL_CAPABILITY_ERROR",
@@ -771,10 +919,10 @@ fn http_ai_error(status: u16, vision_unsupported: bool, endpoint_host: &str) -> 
             false,
             true,
             Some(status),
-            format!("stage=provider_http; host={endpoint_host}; status={status}"),
+            detail,
         );
     }
-    let (code, title, message, retryable, fallback) = match status {
+    let (code, title, default_message, retryable, fallback) = match status {
         401 | 403 => (
             "AUTHENTICATION_ERROR",
             "AI 服务认证失败",
@@ -811,14 +959,19 @@ fn http_ai_error(status: u16, vision_unsupported: bool, endpoint_host: &str) -> 
             true,
         ),
     };
+    let message = if matches!(status, 400..=499) && !provider_message.is_empty() {
+        format!("Provider 拒绝了请求：{provider_message}")
+    } else {
+        default_message.to_string()
+    };
     native_ai_error(
         code,
         title,
-        message,
+        &message,
         retryable,
         fallback,
         Some(status),
-        format!("stage=provider_http; host={endpoint_host}; status={status}"),
+        detail,
     )
 }
 
@@ -877,36 +1030,12 @@ pub async fn analyze_problem_with_openai_compatible(
         }));
     }
 
-    // response_format：优先使用 json_schema（若 Provider 支持），否则 json_object
-    let response_format = match request.json_schema.as_deref() {
-        Some(schema_str) if !schema_str.trim().is_empty() => {
-            // 校验 schema 是合法 JSON
-            match serde_json::from_str::<Value>(schema_str) {
-                Ok(schema_value) => json!({
-                    "type": "json_schema",
-                    "json_schema": { "name": "axiom_output", "schema": schema_value }
-                }),
-                Err(_) => json!({ "type": "json_object" }),
-            }
-        }
-        _ => json!({ "type": "json_object" }),
-    };
-
-    // 当 stream 参数为 true 时启用流式输出
+    let schema = request
+        .json_schema
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| serde_json::from_str::<Value>(value).ok());
     let stream_enabled = stream.unwrap_or(false);
-    let mut body = json!({
-        "model": model,
-        "temperature": 0.1,
-        "response_format": response_format,
-        "messages": [
-            { "role": "system", "content": prompt },
-            { "role": "user", "content": user_content }
-        ]
-    });
-    if stream_enabled {
-        body["stream"] = json!(true);
-    }
-
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         // 流式模式下不设全局 timeout（由 SSE 流自身控制）
@@ -918,48 +1047,84 @@ pub async fn analyze_problem_with_openai_compatible(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("无法初始化 API 客户端：{error}"))?;
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("AI API 请求失败：{error}"))?;
-    let status = response.status();
+    let cache_key = response_format_cache_key(&request.provider_id, &endpoint, model);
+    let default_mode = if schema.is_some() {
+        ResponseFormatMode::JsonSchema
+    } else {
+        ResponseFormatMode::JsonObject
+    };
+    let mut format_mode = cached_response_format(&cache_key).unwrap_or(default_mode);
+    if format_mode == ResponseFormatMode::JsonSchema && schema.is_none() {
+        format_mode = ResponseFormatMode::JsonObject;
+    }
+    let mut attempted_formats = Vec::new();
+    let response = loop {
+        attempted_formats.push(format_mode.as_str().to_string());
+        let body = build_chat_completion_body(
+            model,
+            prompt,
+            &user_content,
+            schema.as_ref(),
+            format_mode,
+            stream_enabled,
+        );
+        let response = client
+            .post(endpoint.clone())
+            .bearer_auth(&api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| format!("AI API 请求失败：{error}"))?;
+        let status = response.status();
+        if status.is_success() {
+            remember_response_format(cache_key.clone(), format_mode);
+            break response;
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| format!("无法读取 AI API 错误响应：{error}"))?;
+        if bytes.len() > MAX_RESPONSE_BYTES {
+            return Err("AI API 错误响应超过 2 MB".to_string());
+        }
+        let response_text = String::from_utf8_lossy(&bytes).to_string();
+        let provider_message = provider_error_message(&response_text);
+        if response_format_rejected(status.as_u16(), &provider_message) {
+            if let Some(next_mode) = next_response_format_mode(format_mode, schema.is_some()) {
+                format_mode = next_mode;
+                continue;
+            }
+        }
+        let safe_message = safe_provider_message(&provider_message, &api_key);
+        let vision_unsupported = is_vision_unsupported(&safe_message);
+        let error_message = if vision_unsupported {
+            format!(
+                "当前模型不支持图片输入，请选择视觉模型。HTTP {}：{}",
+                status.as_u16(),
+                safe_message
+            )
+        } else {
+            format!(
+                "AI API 请求失败（HTTP {}）：{}",
+                status.as_u16(),
+                if safe_message.is_empty() {
+                    "Provider 未返回错误详情"
+                } else {
+                    &safe_message
+                }
+            )
+        };
+        return Ok(json!({
+            "rawOutput": response_text,
+            "errorMessage": error_message,
+            "error": http_ai_error(status.as_u16(), vision_unsupported, &endpoint_host, &safe_message, &attempted_formats),
+            "responseFormatMode": format_mode.as_str(),
+            "attemptedResponseFormats": attempted_formats,
+        }));
+    };
 
     // ── 流式分支：SSE 逐 chunk 读取，通过 Channel 推送增量 ──
     if stream_enabled {
-        if !status.is_success() {
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|error| format!("无法读取 AI API 错误响应：{error}"))?;
-            let response_text = String::from_utf8_lossy(&bytes);
-            let provider_message = provider_error_message(&response_text);
-            let error_message = if is_vision_unsupported(&provider_message) {
-                format!(
-                    "当前模型不支持图片输入，请选择视觉模型。HTTP {}：{}",
-                    status.as_u16(),
-                    provider_message
-                )
-            } else {
-                format!(
-                    "AI API 请求失败（HTTP {}）：{}",
-                    status.as_u16(),
-                    if provider_message.is_empty() {
-                        "Provider 未返回错误详情"
-                    } else {
-                        &provider_message
-                    }
-                )
-            };
-            return Ok(json!({
-                "rawOutput": response_text,
-                "errorMessage": error_message,
-                "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
-            }));
-        }
-
         let channel = on_chunk;
         let mut accumulated = String::new();
         let mut buffer = String::new();
@@ -1014,13 +1179,17 @@ pub async fn analyze_problem_with_openai_compatible(
             return Ok(json!({
                 "rawOutput": accumulated,
                 "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
-                "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=stream_content".to_string())
+                "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=stream_content".to_string()),
+                "responseFormatMode": format_mode.as_str(),
+                "attemptedResponseFormats": attempted_formats,
             }));
         }
         return Ok(json!({
             "rawOutput": accumulated,
             "errorMessage": null,
-            "usage": usage
+            "usage": usage,
+            "responseFormatMode": format_mode.as_str(),
+            "attemptedResponseFormats": attempted_formats,
         }));
     }
 
@@ -1033,38 +1202,15 @@ pub async fn analyze_problem_with_openai_compatible(
         return Err("AI API 响应超过 2 MB".to_string());
     }
     let response_text = String::from_utf8_lossy(&bytes);
-    if !status.is_success() {
-        let provider_message = provider_error_message(&response_text);
-        let error_message = if is_vision_unsupported(&provider_message) {
-            format!(
-                "当前模型不支持图片输入，请选择视觉模型。HTTP {}：{}",
-                status.as_u16(),
-                provider_message
-            )
-        } else {
-            format!(
-                "AI API 请求失败（HTTP {}）：{}",
-                status.as_u16(),
-                if provider_message.is_empty() {
-                    "Provider 未返回错误详情"
-                } else {
-                    &provider_message
-                }
-            )
-        };
-        return Ok(json!({
-            "rawOutput": response_text,
-            "errorMessage": error_message,
-            "error": http_ai_error(status.as_u16(), is_vision_unsupported(&provider_message), &endpoint_host)
-        }));
-    }
     let response_json: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(error) => {
             return Ok(json!({
                 "rawOutput": response_text,
                 "errorMessage": format!("AI API 响应不是 JSON：{error}"),
-                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型服务没有返回可读取的结构化响应。", true, true, None, format!("stage=provider_envelope_json; kind={:?}", error.classify()))
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型服务没有返回可读取的结构化响应。", true, true, None, format!("stage=provider_envelope_json; kind={:?}", error.classify())),
+                "responseFormatMode": format_mode.as_str(),
+                "attemptedResponseFormats": attempted_formats,
             }));
         }
     };
@@ -1074,7 +1220,9 @@ pub async fn analyze_problem_with_openai_compatible(
             return Ok(json!({
                 "rawOutput": response_text,
                 "errorMessage": error,
-                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型响应中没有可读取的结果。", true, true, None, "stage=response_content".to_string())
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "模型响应中没有可读取的结果。", true, true, None, "stage=response_content".to_string()),
+                "responseFormatMode": format_mode.as_str(),
+                "attemptedResponseFormats": attempted_formats,
             }));
         }
     };
@@ -1083,13 +1231,17 @@ pub async fn analyze_problem_with_openai_compatible(
         return Ok(json!({
             "rawOutput": content,
             "errorMessage": "当前模型不支持图片输入，请选择视觉模型。",
-            "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=response_content".to_string())
+            "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=response_content".to_string()),
+            "responseFormatMode": format_mode.as_str(),
+            "attemptedResponseFormats": attempted_formats,
         }));
     }
     Ok(json!({
         "rawOutput": content,
         "errorMessage": null,
-        "usage": usage
+        "usage": usage,
+        "responseFormatMode": format_mode.as_str(),
+        "attemptedResponseFormats": attempted_formats,
     }))
 }
 
@@ -1263,11 +1415,13 @@ fn analyze_problem_with_antigravity_cli_blocking(
 #[cfg(test)]
 mod tests {
     use super::{
-        antigravity_command, antigravity_response, clear_ai_provider_api_key, endpoint_url,
-        http_ai_error, is_vision_unsupported, load_provider_api_key_from_connection,
-        normalized_ai_usage, persist_ai_provider_profiles_in_connection, provider_error_message,
-        read_ai_provider_save_statuses, run_command_with_file_capture, upsert_ai_provider_profile,
-        validate_provider_save_statuses, PersistedAIProviderProfile,
+        antigravity_command, antigravity_response, build_chat_completion_body,
+        clear_ai_provider_api_key, endpoint_url, http_ai_error, is_vision_unsupported,
+        load_provider_api_key_from_connection, next_response_format_mode, normalized_ai_usage,
+        persist_ai_provider_profiles_in_connection, provider_error_message,
+        read_ai_provider_save_statuses, response_format_rejected, run_command_with_file_capture,
+        safe_provider_message, upsert_ai_provider_profile, validate_provider_save_statuses,
+        PersistedAIProviderProfile, ResponseFormatMode,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::{
@@ -1318,6 +1472,70 @@ mod tests {
     }
 
     #[test]
+    fn builds_each_safe_response_format_body() {
+        let schema = serde_json::json!({"type":"object"});
+        let content = vec![serde_json::json!({"type":"text","text":"return json"})];
+        let strict = build_chat_completion_body(
+            "model",
+            "prompt",
+            &content,
+            Some(&schema),
+            ResponseFormatMode::JsonSchema,
+            false,
+        );
+        assert_eq!(strict["response_format"]["type"], "json_schema");
+        let object = build_chat_completion_body(
+            "model",
+            "prompt",
+            &content,
+            Some(&schema),
+            ResponseFormatMode::JsonObject,
+            true,
+        );
+        assert_eq!(object["response_format"]["type"], "json_object");
+        assert_eq!(object["stream"], true);
+        let plain = build_chat_completion_body(
+            "model",
+            "prompt",
+            &content,
+            Some(&schema),
+            ResponseFormatMode::None,
+            false,
+        );
+        assert!(plain.get("response_format").is_none());
+    }
+
+    #[test]
+    fn downgrades_only_explicit_response_format_rejections() {
+        let deepseek = "This response_format type is unavailable now";
+        assert!(response_format_rejected(400, deepseek));
+        assert_eq!(
+            next_response_format_mode(ResponseFormatMode::JsonSchema, true),
+            Some(ResponseFormatMode::JsonObject)
+        );
+        assert_eq!(
+            next_response_format_mode(ResponseFormatMode::JsonObject, true),
+            Some(ResponseFormatMode::None)
+        );
+        assert!(!response_format_rejected(401, deepseek));
+        assert!(!response_format_rejected(400, "model does not exist"));
+        assert!(!response_format_rejected(
+            429,
+            "response_format unavailable"
+        ));
+    }
+
+    #[test]
+    fn redacts_provider_credentials_before_diagnostics() {
+        let safe = safe_provider_message(
+            "Bearer sk-secret failed and sk-secret was echoed",
+            "sk-secret",
+        );
+        assert!(!safe.contains("sk-secret"));
+        assert!(safe.contains("[已隐藏]"));
+    }
+
+    #[test]
     fn maps_http_failures_to_stable_safe_error_codes() {
         for (status, expected, retryable, fallback) in [
             (401, "AUTHENTICATION_ERROR", false, false),
@@ -1326,7 +1544,13 @@ mod tests {
             (503, "PROVIDER_ERROR", true, true),
             (400, "REQUEST_INVALID", false, false),
         ] {
-            let error = http_ai_error(status, false, "api.example.test");
+            let error = http_ai_error(
+                status,
+                false,
+                "api.example.test",
+                "provider detail",
+                &["json_object".to_string()],
+            );
             assert_eq!(error["code"], expected);
             assert_eq!(error["retryable"], retryable);
             assert_eq!(error["fallbackAllowed"], fallback);
@@ -1337,7 +1561,13 @@ mod tests {
                 .contains("api.example.test"));
         }
         assert_eq!(
-            http_ai_error(400, true, "api.example.test")["code"],
+            http_ai_error(
+                400,
+                true,
+                "api.example.test",
+                "image unsupported",
+                &["json_object".to_string()],
+            )["code"],
             "MODEL_CAPABILITY_ERROR"
         );
     }

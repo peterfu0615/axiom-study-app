@@ -25,6 +25,8 @@ export interface NativeAIResponse {
   errorMessage: string | null
   error?: AIErrorEnvelope | null
   usage?: AIUsageMetrics | null
+  responseFormatMode?: 'json_schema' | 'json_object' | 'none'
+  attemptedResponseFormats?: Array<'json_schema' | 'json_object' | 'none'>
 }
 
 export interface AIProviderSaveStatus {
