@@ -1,3 +1,69 @@
+/* Bundled type system. These files are shipped with the frontend so the
+   product does not depend on fonts installed on the host Mac. */
+@font-face {
+  font-family: "Axiom Inter";
+  src: url("./assets/fonts/inter/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Sarasa Gothic SC";
+  src: url("./assets/fonts/sarasa-gothic-sc/SarasaGothicSC-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Sarasa Gothic SC";
+  src: url("./assets/fonts/sarasa-gothic-sc/SarasaGothicSC-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Sarasa Gothic SC";
+  src: url("./assets/fonts/sarasa-gothic-sc/SarasaGothicSC-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Sentient";
+  src: url("./assets/fonts/sentient/Sentient-Variable.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Sentient";
+  src: url("./assets/fonts/sentient/Sentient-VariableItalic.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Source Han Serif SC";
+  src: url("./assets/fonts/source-han-serif-sc/SourceHanSerifSC-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Axiom Source Han Serif SC";
+  src: url("./assets/fonts/source-han-serif-sc/SourceHanSerifSC-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* 强制使用浅色外观，避免 macOS 深色模式下 webview 出现黑色背景 */
   color-scheme: light;
@@ -111,11 +177,13 @@
   /* Semantic font roles: interface chrome stays neutral and efficient, while
      problem statements and AI explanations use a more editorial reading face. */
   --ax-font-ui:
-    "Inter", "Sarasa Gothic SC", -apple-system, BlinkMacSystemFont,
+    "Axiom Inter", "Axiom Sarasa Gothic SC", "Inter", "Sarasa Gothic SC",
+    -apple-system, BlinkMacSystemFont,
     "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
     ui-sans-serif, sans-serif;
   --ax-font-reading:
-    "Sentient Variable", "Sentient", "Source Han Serif SC", "Noto Serif SC",
+    "Axiom Sentient", "Sentient Variable", "Sentient",
+    "Axiom Source Han Serif SC", "Source Han Serif SC", "Noto Serif SC",
     "Songti SC", Georgia, "Times New Roman", serif;
   --ax-font-mono:
     "SFMono-Regular", "Sarasa Mono SC", "JetBrains Mono", Menlo, Monaco,

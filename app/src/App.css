@@ -795,6 +795,7 @@
 .module-placeholder h2 {
   margin: 16px 0 8px;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 20px;
 }
 
@@ -841,6 +842,7 @@
 .editor-header h1 {
   margin: 2px 0 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 21px;
   font-weight: 690;
   letter-spacing: -0.03em;
@@ -1752,6 +1754,7 @@
 
 .reasoning-approach-title {
   margin: 0;
+  font-family: var(--ax-font-reading);
 }
 
 .reasoning-approach-title p {
@@ -2052,6 +2055,7 @@
 .problem-learning-next h3 {
   margin: 4px 0 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 17px;
   line-height: 22px;
   font-weight: 700;
@@ -2423,6 +2427,7 @@
 .problem-solution-header h3 {
   margin: 4px 0 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 17px;
   line-height: 22px;
   font-weight: 700;
@@ -2760,6 +2765,7 @@
 .comparison-pane h3 {
   margin: 2px 0 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 14px;
 }
 
@@ -2965,6 +2971,7 @@
 .comparison-modal-header h2 {
   margin: 4px 0 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 19px;
 }
 
@@ -4118,6 +4125,7 @@
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   border: 1px solid var(--border);
+  font-family: var(--ax-font-reading);
   font-size: 11px;
   line-height: 1.6;
   color: var(--ink);
@@ -4126,6 +4134,7 @@
 .update-changelog h1,
 .update-changelog h2,
 .update-changelog h3 {
+  font-family: var(--ax-font-reading);
   font-size: 13px;
   margin: 12px 0 6px;
 }

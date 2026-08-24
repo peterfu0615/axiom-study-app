@@ -7,7 +7,7 @@
 .insights-overview strong { color: var(--ax-text-primary); font-size: var(--ax-type-page-size); }
 .insights-section { padding: var(--ax-space-8) 0; border-bottom: 1px solid var(--ax-border-default); min-width: 0; }
 .insights-section > header { display: flex; align-items: end; justify-content: space-between; gap: var(--ax-space-5); margin-bottom: var(--ax-space-6); }
-.insights-section h2 { margin: var(--ax-space-1) 0 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
+.insights-section h2 { margin: var(--ax-space-1) 0 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); }
 .insights-trend { min-width: 0; height: 150px; display: grid; grid-template-columns: repeat(7, minmax(22px, 1fr)); align-items: end; gap: var(--ax-space-3); }
 .insights-trend--30 { grid-template-columns: repeat(30, minmax(12px, 1fr)); gap: 3px; overflow-x: auto; }
 .insights-trend__day { height: 100%; display: grid; grid-template-rows: 1fr 18px 18px; justify-items: center; gap: var(--ax-space-1); min-width: 0; }
@@ -49,7 +49,7 @@
 .insights-skill-table__row .has-variant-evidence { color: var(--ax-accent-strong); font-weight: 650; }
 .insights-diagnostics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ax-space-5); }
 .insights-diagnostics article { min-width: 0; padding: var(--ax-space-5); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); }
-.insights-diagnostics h3 { margin: 0 0 var(--ax-space-3); color: var(--ax-text-primary); font-size: var(--ax-type-secondary-size); }
+.insights-diagnostics h3 { margin: 0 0 var(--ax-space-3); color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-secondary-size); }
 .insights-diagnostics ul { display: grid; gap: var(--ax-space-2); margin: 0; padding: 0; list-style: none; }
 .insights-diagnostics li { display: flex; justify-content: space-between; gap: var(--ax-space-3); padding-top: var(--ax-space-2); border-top: 1px solid var(--ax-border-subtle); }
 .insights-diagnostics li span, .insights-diagnostics li strong, .insights-diagnostics p { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }

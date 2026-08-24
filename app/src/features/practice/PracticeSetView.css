@@ -1,7 +1,7 @@
 .practice-workspace { width: 100%; max-width: 1440px; min-width: 0; overflow: auto; padding-bottom: var(--ax-space-9); }
 .practice-header { align-items: flex-end; margin-bottom: var(--ax-space-6); }
 .practice-header .ax-icon-button { transform: rotate(180deg); }
-.practice-header h1 { margin: 0; overflow: hidden; color: var(--ax-text-primary); font-size: var(--ax-type-page-size); line-height: var(--ax-type-page-line); text-overflow: ellipsis; white-space: nowrap; }
+.practice-header h1 { margin: 0; overflow: hidden; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-page-size); line-height: var(--ax-type-page-line); text-overflow: ellipsis; white-space: nowrap; }
 .practice-header p { color: var(--ax-text-secondary); margin: 0; }
 .practice-header__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-2); }
 .practice-header__actions .ax-button > span { display: flex; align-items: center; gap: var(--ax-space-2); }
@@ -32,7 +32,7 @@
 .practice-content-summary article > strong { color: var(--ax-accent-ink); }
 .practice-submit { max-width: 760px; display: grid; justify-items: stretch; gap: var(--ax-space-7); margin: var(--ax-space-9) auto; }
 .practice-submit__copy { display: grid; justify-items: center; gap: var(--ax-space-2); text-align: center; }
-.practice-submit__copy h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-page-size); }
+.practice-submit__copy h2 { margin: 0; color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-page-size); }
 .practice-submit__copy p:last-child { max-width: 600px; margin: 0; color: var(--ax-text-secondary); line-height: var(--ax-type-body-line); }
 .practice-submit__methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ax-space-4); }
 .practice-submit__dropzone { min-height: 220px; display: grid; place-content: center; justify-items: center; gap: var(--ax-space-3); border: 1.5px dashed var(--ax-accent-border); border-radius: var(--ax-radius-lg); color: var(--ax-accent-ink); background: var(--ax-color-selected); cursor: pointer; transition: border-color 120ms ease, transform 120ms ease, background 120ms ease; }
@@ -76,7 +76,7 @@
 .practice-results { display: grid; gap: var(--ax-space-4); }
 .practice-result-item { padding: var(--ax-space-5); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); background: var(--ax-color-surface); }
 .practice-result-item > header { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-4); margin-bottom: var(--ax-space-4); }
-.practice-result-item > header > strong { color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
+.practice-result-item > header > strong { color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); }
 .practice-result-item__question { color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-body-size); line-height: 1.65; }
 .practice-result-item dl { display: grid; grid-template-columns: 1fr 1fr; gap: var(--ax-space-4); margin: var(--ax-space-5) 0; }
 .practice-result-item dl > div { padding: var(--ax-space-4); border-radius: var(--ax-radius-md); background: var(--ax-color-inset); }
@@ -100,7 +100,7 @@
 .practice-result__correction-body textarea { min-height: 110px; padding: var(--ax-space-3); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-sm); color: var(--ax-text-primary); background: var(--ax-color-surface); resize: vertical; }
 .practice-result__correction-body > div { grid-column: 2; display: flex; flex-wrap: wrap; gap: var(--ax-space-2); }
 .practice-result-next { position: sticky; bottom: var(--ax-space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-6); margin-top: var(--ax-space-6); padding: var(--ax-space-5); border: 1px solid var(--ax-accent-border); border-radius: var(--ax-radius-lg); background: color-mix(in srgb, var(--ax-color-surface) 94%, transparent); box-shadow: var(--ax-shadow-card); backdrop-filter: blur(18px); }
-.practice-result-next h2 { margin: 0 0 var(--ax-space-1); color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
+.practice-result-next h2 { margin: 0 0 var(--ax-space-1); color: var(--ax-text-primary); font-family: var(--ax-font-reading); font-size: var(--ax-type-section-size); }
 .practice-result-next p { margin: 0; color: var(--ax-text-secondary); }
 
 @media (max-width: 820px) {

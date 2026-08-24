@@ -103,6 +103,7 @@
 .workspace-header h1 {
   margin: 0 0 var(--ax-space-2);
   color: var(--ax-text-primary);
+  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-page-size);
   line-height: var(--ax-type-page-line);
   font-weight: var(--ax-type-page-weight);
@@ -381,6 +382,7 @@
 .settings-appearance-pane h2,
 .settings-about-pane h2,
 .settings-update-pane h2 {
+  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-section-size);
   line-height: var(--ax-type-section-line);
   font-weight: var(--ax-type-section-weight);
@@ -392,6 +394,7 @@
 .curriculum-import-processing h2,
 .curriculum-tag-content__header h2,
 .curriculum-review-center__header h2 {
+  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-section-size);
   line-height: var(--ax-type-section-line);
   font-weight: var(--ax-type-section-weight);
@@ -400,6 +403,7 @@
 .problem-list-heading strong,
 .curriculum-evidence h3,
 .curriculum-relabel-task h3 {
+  font-family: var(--ax-font-reading);
   font-size: var(--ax-type-card-size);
   line-height: var(--ax-type-card-line);
   font-weight: var(--ax-type-card-weight);
