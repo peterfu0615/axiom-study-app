@@ -2210,6 +2210,7 @@
 .problem-formal-stem {
   margin: 0;
   color: var(--ink);
+  font-family: var(--ax-font-reading);
   font-size: 15px;
   line-height: 25px;
   font-weight: 450;
@@ -2222,6 +2223,10 @@
 .problem-formal-stem p:last-child,
 .problem-choice-content p {
   margin: 0;
+}
+
+.problem-choice-content {
+  font-family: var(--ax-font-reading);
 }
 
 .problem-formal-stem .katex-display,
