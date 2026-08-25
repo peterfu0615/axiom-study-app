@@ -67,20 +67,6 @@ export function ReviewSettings() {
         value={reviewPaceFromTarget(value.targetRetention)}
       />
       <label>
-        <span>自定义衰减阈值 · {Math.round(value.targetRetention * 100)}%</span>
-        <input
-          aria-label="自定义衰减阈值"
-          disabled={loading || saving}
-          max={90}
-          min={40}
-          onChange={(event) => setValue((current) => ({ ...current, targetRetention: Number(event.target.value) / 100 }))}
-          step={1}
-          type="range"
-          value={Math.round(value.targetRetention * 100)}
-        />
-        <small>记忆保持率低于该值时进入今日候选；范围 40%–90%。</small>
-      </label>
-      <label>
         <span>今日复习上限（分钟）</span>
         <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
       </label>

@@ -4,7 +4,6 @@ import { useTheme } from '../../platform/useTheme'
 import type { Appearance } from '../../platform/theme'
 import { VISUAL_THEME_LABELS, VISUAL_THEME_SWATCHES, VISUAL_THEMES } from '../../platform/themeModel'
 import { analyzeProblemWithOpenAICompatible, getAppVersion } from '../../platform/native'
-import { resolveOpenAIEndpoint } from '../../ai/openAIEndpoint'
 import type {
   AIProviderKind,
   AIProviderProfile,
@@ -64,7 +63,7 @@ function newProvider(index: number): AIProviderProfile {
 function providerSubtitle(profile: AIProviderProfile): string {
   if (profile.provider === 'mock') return '模拟服务'
   if (profile.provider === 'antigravity_cli') return 'Gemini · Antigravity CLI'
-  return profile.baseUrl || 'OpenAI Compatible'
+  return 'OpenAI Compatible'
 }
 
 const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description: string }> = [
@@ -255,15 +254,6 @@ export function AISettings() {
     () => profiles.find((profile) => profile.id === selectedProviderId) ?? null,
     [profiles, selectedProviderId],
   )
-  const resolvedEndpoint = useMemo(() => {
-    if (!selectedProfile || selectedProfile.provider !== 'openai_compatible' || !selectedProfile.baseUrl.trim()) return null
-    try {
-      return resolveOpenAIEndpoint(selectedProfile.baseUrl, selectedProfile.endpointMode ?? 'auto')
-    } catch (error) {
-      return readableError(error)
-    }
-  }, [selectedProfile])
-
   const testProvider = async (profile: AIProviderProfile) => {
     setTestingProviderId(profile.id)
     setMessage(null)
@@ -285,8 +275,8 @@ export function AISettings() {
       })
       if (response.error || response.errorMessage) throw new Error(response.errorMessage || response.error?.userMessage)
       const parsed = JSON.parse(response.rawOutput) as { ok?: unknown }
-      if (parsed.ok !== true) throw new Error('模型响应未通过结构化输出校验')
-      setMessage({ text: `“${profile.name}”连接与结构化输出正常`, tone: 'success' })
+      if (parsed.ok !== true) throw new Error('模型返回格式不兼容')
+      setMessage({ text: `“${profile.name}”可正常使用`, tone: 'success' })
       scheduleMessageClear()
     } catch (error) {
       setMessage({ text: `连接测试失败：${readableError(error)}`, tone: 'error' })
@@ -419,9 +409,18 @@ export function AISettings() {
                         </p>
                       </div>
                       <div className="provider-detail-actions">
+                        {selectedProfile.provider === 'openai_compatible' && <button
+                          className="secondary-action"
+                          disabled={testingProviderId === selectedProfile.id || !selectedProfile.hasApiKey || isDirty}
+                          onClick={() => void testProvider(selectedProfile)}
+                          title="测试 AI 服务"
+                          type="button"
+                        >
+                          {testingProviderId === selectedProfile.id ? '测试中…' : '测试'}
+                        </button>}
                         <button
                           className="secondary-action"
-                                                    onClick={() => setProviderRemoveConfirming(true)}
+                          onClick={() => setProviderRemoveConfirming(true)}
                           type="button"
                         >
                           移除
@@ -434,7 +433,7 @@ export function AISettings() {
                         <label>
                           <span>名称</span>
                           <input
-                                                        onChange={(event) =>
+                            onChange={(event) =>
                               update(selectedProfile.id, {
                                 name: event.target.value,
                               })
@@ -455,10 +454,10 @@ export function AISettings() {
                         />
                         {selectedProfile.provider === 'openai_compatible' && (
                           <>
-                            <label>
-                              <span>Base URL</span>
+                            <label className="provider-endpoint-field">
+                              <span>API 地址</span>
                               <input
-                                                            onChange={(event) =>
+                                onChange={(event) =>
                                 update(selectedProfile.id, {
                                   baseUrl: event.target.value,
                                 })
@@ -467,44 +466,26 @@ export function AISettings() {
                               value={selectedProfile.baseUrl}
                               />
                             </label>
-                            <ListboxSelect
-                              label="端点模式"
-                              onValueChange={(value) => update(selectedProfile.id, { endpointMode: value as AIProviderProfile['endpointMode'] })}
-                              options={[
-                                { value: 'auto', label: '自动识别' },
-                                { value: 'api_root', label: 'API 根地址' },
-                                { value: 'v1_base', label: '/v1 Base URL' },
-                                { value: 'full_endpoint', label: '完整 Endpoint' },
-                              ]}
-                              value={selectedProfile.endpointMode ?? 'auto'}
-                            />
-                            <ListboxSelect
-                              label="结构化输出"
-                              onValueChange={(value) => update(selectedProfile.id, { structuredOutputMode: value as AIProviderProfile['structuredOutputMode'] })}
-                              options={[
-                                { value: 'auto', label: '自动降级' },
-                                { value: 'json_schema', label: '严格 JSON Schema' },
-                                { value: 'json_object', label: 'JSON Object' },
-                                { value: 'prompt_only', label: '仅 Prompt 约束' },
-                              ]}
-                              value={selectedProfile.structuredOutputMode ?? 'auto'}
-                            />
-                            <p className="settings-field-hint">最终请求 URL：{resolvedEndpoint || '请填写地址'}</p>
-                            <button
-                              className="secondary-action"
-                              disabled={testingProviderId === selectedProfile.id || !selectedProfile.hasApiKey || isDirty}
-                              onClick={() => void testProvider(selectedProfile)}
-                              type="button"
-                            >
-                              {testingProviderId === selectedProfile.id ? '测试中…' : '测试连接与结构化输出'}
-                            </button>
+                            <label className="provider-full-url-option">
+                              <input
+                                checked={selectedProfile.endpointMode === 'full_endpoint'}
+                                onChange={(event) => update(selectedProfile.id, {
+                                  endpointMode: event.target.checked ? 'full_endpoint' : 'auto',
+                                })}
+                                type="checkbox"
+                              />
+                              <span>
+                                <strong>完整 URL</strong>
+                                <small>已包含 /chat/completions</small>
+                              </span>
+                            </label>
                           </>
                         )}
                         {selectedProfile.provider === 'antigravity_cli' && (
                           <label>
                             <span>Antigravity CLI 路径</span>
                             <input
-                                                            onChange={(event) =>
+                              onChange={(event) =>
                                 update(selectedProfile.id, {
                                   commandPath: event.target.value,
                                 })
@@ -514,7 +495,7 @@ export function AISettings() {
                             />
                           </label>
                         )}
-                        <label>
+                        <label className="provider-model-field">
                           <span>模型</span>
                           <input
                             disabled={selectedProfile.provider === 'mock'}
@@ -534,9 +515,9 @@ export function AISettings() {
                         {selectedProfile.provider === 'openai_compatible' && (
                           <div className="provider-pricing-fields">
                             <label>
-                              <span>输入单价 <small>USD / 100 万 tokens</small></span>
+                              <span>输入价格 <small>USD / 百万 tokens</small></span>
                               <input
-                                                                inputMode="decimal"
+                                inputMode="decimal"
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   inputCostPerMillionUsd: event.target.value === ''
@@ -550,9 +531,9 @@ export function AISettings() {
                               />
                             </label>
                             <label>
-                              <span>输出单价 <small>USD / 100 万 tokens</small></span>
+                              <span>输出价格 <small>USD / 百万 tokens</small></span>
                               <input
-                                                                inputMode="decimal"
+                                inputMode="decimal"
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   outputCostPerMillionUsd: event.target.value === ''
@@ -574,13 +555,13 @@ export function AISettings() {
                                 API Key
                                 <small>
                                   {selectedProfile.hasApiKey
-                                    ? `已保存 · sk-••••••••${selectedProfile.apiKeySuffix}`
+                                    ? `已保存 · ••••${selectedProfile.apiKeySuffix}`
                                     : '未保存'}
                                 </small>
                               </span>
                               <input
                                 autoComplete="off"
-                                                                onChange={(event) =>
+                                onChange={(event) =>
                                   update(selectedProfile.id, {
                                     apiKey: event.target.value,
                                   })
@@ -597,7 +578,7 @@ export function AISettings() {
                             {selectedProfile.hasApiKey && (
                               <button
                                 className="secondary-action"
-                                                                onClick={() => setApiKeyDeleteTarget(selectedProfile)}
+                                onClick={() => setApiKeyDeleteTarget(selectedProfile)}
                                 type="button"
                               >
                                 删除 API Key

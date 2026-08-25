@@ -4024,15 +4024,23 @@
 }
 
 .provider-detail-subtitle {
+  max-width: 100%;
   margin: 3px 0 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-detail-actions {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.provider-detail-actions .secondary-action {
+  white-space: nowrap;
 }
 
 .provider-detail-body {
@@ -4411,6 +4419,57 @@
   grid-column: 1 / -1;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.provider-pricing-fields label > span {
+  white-space: nowrap;
+}
+
+.provider-model-field {
+  grid-column: 1 / -1;
+}
+
+.settings-form .provider-full-url-option {
+  min-height: var(--control-height);
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-muted) 64%, var(--surface));
+  cursor: pointer;
+}
+
+.settings-form .provider-full-url-option > input {
+  width: 15px;
+  min-height: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  padding: 0;
+  accent-color: var(--brand);
+}
+
+.provider-full-url-option > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.provider-full-url-option strong,
+.provider-full-url-option small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-full-url-option small {
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 500;
 }
 
 .provider-profile-list {
