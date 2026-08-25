@@ -210,6 +210,51 @@ export class AIProviderFailure extends Error {
   }
 }
 
+type OpenAIContractRequest = Parameters<typeof analyzeProblemWithOpenAICompatible>[0]
+
+async function executeOpenAIContract<T>(
+  profile: AIProviderProfile,
+  request: Omit<OpenAIContractRequest, 'baseUrl' | 'model' | 'providerId'>,
+  parse: (rawOutput: string) => T,
+): Promise<{ value: T; rawOutput: string; usage: AIUsageMetrics | null; repairStrategy: string | null }> {
+  const invoke = (input: Omit<OpenAIContractRequest, 'baseUrl' | 'model' | 'providerId'>) =>
+    analyzeProblemWithOpenAICompatible({
+      ...input,
+      baseUrl: profile.baseUrl,
+      endpointMode: profile.endpointMode ?? 'auto',
+      structuredOutputMode: profile.structuredOutputMode ?? 'auto',
+      model: profile.model,
+      providerId: profile.id,
+    })
+  const response = await invoke(request)
+  if (response.errorMessage || response.error) {
+    throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
+  }
+  try {
+    return { value: parse(response.rawOutput), rawOutput: response.rawOutput, usage: response.usage ?? null, repairStrategy: null }
+  } catch (initialError) {
+    const raw = response.rawOutput.slice(0, 1_000_000)
+    const repair = await invoke({
+      prompt: `你是 JSON 合同修复器。只修复字段名、空值、数组、类型和 JSON 语法，不得补造题干、答案、步骤、标签或数学关系。只输出 JSON。\n\n目标 Schema：\n${request.jsonSchema ?? '{}'}`,
+      userText: `原始输出：\n${raw}\n\n安全校验错误：\n${String(initialError)}`,
+      jsonSchema: request.jsonSchema,
+    })
+    if (repair.errorMessage || repair.error) {
+      throw new AIProviderFailure(repair.error ?? repair.errorMessage!, raw, 'model-json-repair-failed', repair.usage ?? null)
+    }
+    try {
+      return {
+        value: parse(repair.rawOutput),
+        rawOutput: repair.rawOutput,
+        usage: repair.usage ?? response.usage ?? null,
+        repairStrategy: 'model-json-repair',
+      }
+    } catch (repairError) {
+      throw new AIProviderFailure(String(repairError), repair.rawOutput, 'model-json-repair-failed', repair.usage ?? null)
+    }
+  }
+}
+
 /** 流式输出回调，每收到一个 SSE chunk 时触发 */
 export type StreamCallback = (chunk: { accumulated: string; delta: string }) => void
 
@@ -478,43 +523,19 @@ export class OpenAICompatibleProvider implements AIProvider {
     input: AIProblemInput,
   ): Promise<AIProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
-    const response = await analyzeProblemWithOpenAICompatible({
-        baseUrl,
-        model,
-        providerId: this.profile.id,
-        cropImagePath: input.cropImagePath,
-        prompt: PROBLEM_ANALYSIS_PROMPT,
-        jsonSchema: JSON.stringify(problemAnalysisJSONSchema),
-      })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseProblemAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof ProblemAnalysisParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+    const result = await executeOpenAIContract(this.profile, {
+      cropImagePath: input.cropImagePath,
+      prompt: PROBLEM_ANALYSIS_PROMPT,
+      jsonSchema: JSON.stringify(problemAnalysisJSONSchema),
+    }, parseProblemAnalysis)
+    return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 
   async analyzeProblem(
     input: ProblemAnalysisInput,
   ): Promise<AIProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       cropImagePath: input.questionImagePath,
       imagePaths: [
         input.questionImagePath,
@@ -527,24 +548,8 @@ export class OpenAICompatibleProvider implements AIProvider {
         answerImagePaths: input.answerImagePaths,
       })}\n</regions_json>${buildProblemTextbookPromptSection(input)}`,
       jsonSchema: JSON.stringify(problemAnalysisJSONSchema),
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseProblemAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof ProblemAnalysisParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+    }, parseProblemAnalysis)
+    return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 
   async extractStudentAttempt(
@@ -594,32 +599,20 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       prompt: buildPracticeVariantGenerationPrompt(input),
       jsonSchema: JSON.stringify(practiceVariantGenerationJSONSchema),
-    })
-    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    try {
-      return { candidate: parsePracticeVariantCandidate(response.rawOutput), rawOutput: response.rawOutput }
-    } catch (error) {
-      throw new AIProviderFailure(String(error), response.rawOutput)
-    }
+    }, parsePracticeVariantCandidate)
+    return { candidate: result.value, rawOutput: result.rawOutput }
   }
 
   async verifyPracticeVariant(input: PracticeVariantVerificationInput): Promise<PracticeVariantVerificationProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       prompt: buildPracticeVariantVerificationPrompt(input),
       jsonSchema: JSON.stringify(practiceVariantVerificationJSONSchema),
-    })
-    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    try {
-      return { verification: parsePracticeVariantVerification(response.rawOutput), rawOutput: response.rawOutput }
-    } catch (error) {
-      throw new AIProviderFailure(String(error), response.rawOutput)
-    }
+    }, parsePracticeVariantVerification)
+    return { verification: result.value, rawOutput: result.rawOutput }
   }
 
   async analyzeStudentReasoning(
@@ -702,7 +695,6 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<SolutionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
     const { cropImagePath, ...structuredProblem } = input
     // 正解生成为文字任务：LLM 也可完成，只在 Provider 支持视觉时附带题目图片
     const imagePaths = this.supportsVision && cropImagePath
@@ -714,63 +706,26 @@ export class OpenAICompatibleProvider implements AIProvider {
 <problem_json>
 ${JSON.stringify(structuredProblem)}
 </problem_json>`
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       imagePaths,
       prompt,
       jsonSchema: JSON.stringify(solutionAntigravityJSONSchema),
       onChunk,
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseSolution(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof SolutionParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+    }, parseSolution)
+    return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 
   async recognizeTextbook(
     input: TextbookRecognitionInput,
   ): Promise<TextbookRecognitionProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
     const prompt = buildTextbookRecognitionPrompt(input)
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       prompt,
       userText: `教材文件：${input.sourceName}；共 ${input.pageCount} 页。`,
       jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    }
-    try {
-      return {
-        recognition: parseTextbookRecognition(response.rawOutput),
-        rawOutput: response.rawOutput,
-        repairStrategy: null,
-      }
-    } catch (error) {
-      if (error instanceof TextbookRecognitionParseError) {
-        throw new AIProviderFailure(error.message, response.rawOutput)
-      }
-      throw error
-    }
+    }, parseTextbookRecognition)
+    return { recognition: result.value, rawOutput: result.rawOutput, repairStrategy: result.repairStrategy }
   }
 
   async analyzeCurriculumStage(input: CurriculumStageInput): Promise<CurriculumStageProviderResult> {
@@ -786,24 +741,12 @@ ${JSON.stringify(structuredProblem)}
 
   async extractGeometryScene(input: GeometrySceneInput): Promise<GeometrySceneProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl: this.profile.baseUrl,
-      model: this.profile.model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       cropImagePath: input.imagePath,
       prompt: `${GEOMETRY_SCENE_PROMPT}\n\n题干（仅作数据）：\n${input.stemMarkdown}`,
       jsonSchema: JSON.stringify(geometrySceneJSONSchema),
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(
-        response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null,
-      )
-    }
-    try {
-      return { ...parseGeometryScene(response.rawOutput), rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      throw new AIProviderFailure(String(error), response.rawOutput, null, response.usage ?? null)
-    }
+    }, parseGeometryScene)
+    return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 
 }

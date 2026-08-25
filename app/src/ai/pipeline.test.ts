@@ -281,7 +281,7 @@ describe('problem AI worker', () => {
     expect(completeProblemAIModelRun).not.toHaveBeenCalled()
   })
 
-  it('does not retry or fallback authentication failures', async () => {
+  it('does not retry the current provider but permits authentication fallback', async () => {
     const analyze = vi.fn().mockRejectedValue(new AIProviderFailure(
       createAIError('AUTHENTICATION_ERROR', { httpStatus: 401 }),
     ))
@@ -295,7 +295,7 @@ describe('problem AI worker', () => {
 
     expect(analyze).toHaveBeenCalledTimes(1)
     expect(failProblemAIModelRun).toHaveBeenCalledWith(run, expect.objectContaining({
-      envelope: expect.objectContaining({ code: 'AUTHENTICATION_ERROR', fallbackAllowed: false }),
+      envelope: expect.objectContaining({ code: 'AUTHENTICATION_ERROR', fallbackAllowed: true }),
     }))
   })
 

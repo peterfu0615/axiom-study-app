@@ -108,14 +108,16 @@ describe('MockAIProvider', () => {
       cropRect: { x: 0, y: 0, width: 1, height: 1 },
     })
 
-    expect(analyzeProblemWithOpenAICompatible).toHaveBeenCalledWith({
+    expect(analyzeProblemWithOpenAICompatible).toHaveBeenCalledWith(expect.objectContaining({
       baseUrl: 'https://example.com/v1',
       model: 'vision-model',
       providerId: 'provider-1',
       cropImagePath: '/tmp/problem.jpg',
       prompt: expect.stringContaining('只返回一个符合 JSON Schema'),
       jsonSchema: expect.any(String),
-    })
+      endpointMode: 'auto',
+      structuredOutputMode: 'auto',
+    }))
     expect(result.analysis.title).toBe('数学-几何证明-辅助线法')
   })
 

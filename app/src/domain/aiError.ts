@@ -37,7 +37,7 @@ const definitions: Record<AIErrorCode, Pick<AIErrorEnvelope,
   'title' | 'userMessage' | 'retryable' | 'fallbackAllowed'>> = {
   AUTHENTICATION_ERROR: {
     title: 'AI 服务认证失败', userMessage: 'API Key 无效或没有访问当前模型的权限，请检查 AI 服务设置。',
-    retryable: false, fallbackAllowed: false,
+    retryable: false, fallbackAllowed: true,
   },
   NETWORK_ERROR: {
     title: '无法连接模型服务', userMessage: '网络连接失败，请检查网络后重新尝试。',

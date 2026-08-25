@@ -596,6 +596,8 @@ export interface AIProviderProfile {
   name: string
   provider: AIProviderKind
   baseUrl: string
+  endpointMode?: 'auto' | 'api_root' | 'v1_base' | 'full_endpoint'
+  structuredOutputMode?: 'auto' | 'json_schema' | 'json_object' | 'prompt_only'
   /** API Key 输入值。仅承载本次编辑的新值，读取数据库时始终为空，
    * 防止完整密钥进入 React state、日志或截图。 */
   apiKey: string

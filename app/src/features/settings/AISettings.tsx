@@ -3,7 +3,8 @@ import { configureAIProviders } from '../../ai/provider'
 import { useTheme } from '../../platform/useTheme'
 import type { Appearance } from '../../platform/theme'
 import { VISUAL_THEME_LABELS, VISUAL_THEME_SWATCHES, VISUAL_THEMES } from '../../platform/themeModel'
-import { getAppVersion } from '../../platform/native'
+import { analyzeProblemWithOpenAICompatible, getAppVersion } from '../../platform/native'
+import { resolveOpenAIEndpoint } from '../../ai/openAIEndpoint'
 import type {
   AIProviderKind,
   AIProviderProfile,
@@ -40,6 +41,8 @@ function newProvider(index: number): AIProviderProfile {
     name: `OpenAI Compatible ${index}`,
     provider: 'openai_compatible',
     baseUrl: '',
+    endpointMode: 'auto',
+    structuredOutputMode: 'auto',
     apiKey: '',
     hasApiKey: false,
     apiKeySuffix: '',
@@ -75,6 +78,7 @@ export function AISettings() {
   const [profiles, setProfiles] = useState<AIProviderProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [message, setMessage] = useState<SettingsMessage | null>(null)
   const [tab, setTab] = useState<SettingsTab>('providers')
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
@@ -251,6 +255,45 @@ export function AISettings() {
     () => profiles.find((profile) => profile.id === selectedProviderId) ?? null,
     [profiles, selectedProviderId],
   )
+  const resolvedEndpoint = useMemo(() => {
+    if (!selectedProfile || selectedProfile.provider !== 'openai_compatible' || !selectedProfile.baseUrl.trim()) return null
+    try {
+      return resolveOpenAIEndpoint(selectedProfile.baseUrl, selectedProfile.endpointMode ?? 'auto')
+    } catch (error) {
+      return readableError(error)
+    }
+  }, [selectedProfile])
+
+  const testProvider = async (profile: AIProviderProfile) => {
+    setTestingProviderId(profile.id)
+    setMessage(null)
+    try {
+      await persistProfiles()
+      const response = await analyzeProblemWithOpenAICompatible({
+        baseUrl: profile.baseUrl,
+        endpointMode: profile.endpointMode ?? 'auto',
+        structuredOutputMode: profile.structuredOutputMode ?? 'auto',
+        model: profile.model,
+        providerId: profile.id,
+        prompt: '只返回符合合同的连接测试结果，不要添加解释。',
+        userText: '返回 ok=true 和 message="connected"。',
+        jsonSchema: JSON.stringify({
+          type: 'object', additionalProperties: false,
+          properties: { ok: { type: 'boolean' }, message: { type: 'string' } },
+          required: ['ok', 'message'],
+        }),
+      })
+      if (response.error || response.errorMessage) throw new Error(response.errorMessage || response.error?.userMessage)
+      const parsed = JSON.parse(response.rawOutput) as { ok?: unknown }
+      if (parsed.ok !== true) throw new Error('模型响应未通过结构化输出校验')
+      setMessage({ text: `“${profile.name}”连接与结构化输出正常`, tone: 'success' })
+      scheduleMessageClear()
+    } catch (error) {
+      setMessage({ text: `连接测试失败：${readableError(error)}`, tone: 'error' })
+    } finally {
+      setTestingProviderId(null)
+    }
+  }
 
   return (
     <main className="workspace settings-workspace">
@@ -411,9 +454,10 @@ export function AISettings() {
                           value={selectedProfile.provider}
                         />
                         {selectedProfile.provider === 'openai_compatible' && (
-                          <label>
-                            <span>Base URL</span>
-                            <input
+                          <>
+                            <label>
+                              <span>Base URL</span>
+                              <input
                                                             onChange={(event) =>
                                 update(selectedProfile.id, {
                                   baseUrl: event.target.value,
@@ -421,8 +465,40 @@ export function AISettings() {
                               }
                               placeholder="https://api.example.com/v1"
                               value={selectedProfile.baseUrl}
+                              />
+                            </label>
+                            <ListboxSelect
+                              label="端点模式"
+                              onValueChange={(value) => update(selectedProfile.id, { endpointMode: value as AIProviderProfile['endpointMode'] })}
+                              options={[
+                                { value: 'auto', label: '自动识别' },
+                                { value: 'api_root', label: 'API 根地址' },
+                                { value: 'v1_base', label: '/v1 Base URL' },
+                                { value: 'full_endpoint', label: '完整 Endpoint' },
+                              ]}
+                              value={selectedProfile.endpointMode ?? 'auto'}
                             />
-                          </label>
+                            <ListboxSelect
+                              label="结构化输出"
+                              onValueChange={(value) => update(selectedProfile.id, { structuredOutputMode: value as AIProviderProfile['structuredOutputMode'] })}
+                              options={[
+                                { value: 'auto', label: '自动降级' },
+                                { value: 'json_schema', label: '严格 JSON Schema' },
+                                { value: 'json_object', label: 'JSON Object' },
+                                { value: 'prompt_only', label: '仅 Prompt 约束' },
+                              ]}
+                              value={selectedProfile.structuredOutputMode ?? 'auto'}
+                            />
+                            <p className="settings-field-hint">最终请求 URL：{resolvedEndpoint || '请填写地址'}</p>
+                            <button
+                              className="secondary-action"
+                              disabled={testingProviderId === selectedProfile.id || !selectedProfile.hasApiKey || isDirty}
+                              onClick={() => void testProvider(selectedProfile)}
+                              type="button"
+                            >
+                              {testingProviderId === selectedProfile.id ? '测试中…' : '测试连接与结构化输出'}
+                            </button>
+                          </>
                         )}
                         {selectedProfile.provider === 'antigravity_cli' && (
                           <label>

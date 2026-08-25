@@ -3692,6 +3692,8 @@ const defaultAIProviderProfiles: AIProviderProfile[] = [{
   name: 'Mock Provider',
   provider: 'mock',
   baseUrl: '',
+  endpointMode: 'auto',
+  structuredOutputMode: 'auto',
   apiKey: '',
   hasApiKey: false,
   apiKeySuffix: '',
@@ -3722,6 +3724,12 @@ function rowToAIProviderProfile(
           ? 'antigravity_cli'
         : 'mock',
     baseUrl: String(row.base_url || ''),
+    endpointMode: ['auto', 'api_root', 'v1_base', 'full_endpoint'].includes(String(row.endpoint_mode))
+      ? row.endpoint_mode as AIProviderProfile['endpointMode']
+      : 'auto',
+    structuredOutputMode: ['auto', 'json_schema', 'json_object', 'prompt_only'].includes(String(row.structured_output_mode))
+      ? row.structured_output_mode as AIProviderProfile['structuredOutputMode']
+      : 'auto',
     // The full database key is intentionally not selected into React.  Only a
     // boolean and its final four characters are safe to render.
     apiKey: '',
@@ -3753,7 +3761,8 @@ function rowToAIProviderProfile(
 export async function listAIProviderProfiles(): Promise<AIProviderProfile[]> {
   if (!isDesktopRuntime()) return defaultAIProviderProfiles
   const rows = await (await database()).select<Record<string, unknown>[]>(
-    `SELECT id, name, provider, base_url, credential_ref, command_path, model,
+    `SELECT id, name, provider, base_url, endpoint_mode, structured_output_mode,
+       credential_ref, command_path, model,
        input_cost_per_million_usd, output_cost_per_million_usd,
        supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at,
        CAST(CASE WHEN trim(api_key) != '' THEN 1 ELSE 0 END AS INTEGER) AS has_api_key,

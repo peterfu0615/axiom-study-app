@@ -242,28 +242,15 @@ export function parseTextbookRecognition(rawOutput: string): TextbookRecognition
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new TextbookRecognitionParseError('教材识别结果必须是对象')
   }
-  // Some compatible providers omit a nullable chapter bound instead of
-  // emitting the requested explicit null. Preserve strict validation for the
-  // chapter structure and all non-nullable fields, but canonicalize this one
-  // semantically equivalent representation before applying the schema.
-  const parsedObject = parsed as Record<string, unknown>
-  if (Array.isArray(parsedObject.chapters)) {
-    for (const chapter of parsedObject.chapters) {
-      if (!chapter || typeof chapter !== 'object' || Array.isArray(chapter)) continue
-      const chapterObject = chapter as Record<string, unknown>
-      if (!Object.hasOwn(chapterObject, 'page_start')) chapterObject.page_start = null
-      if (!Object.hasOwn(chapterObject, 'page_end')) chapterObject.page_end = null
-    }
-  }
   // Enforce the same schema the provider was asked to follow. Invalid output
   // must surface as an explicit parse failure (entering the retry path)
   // instead of being silently degraded into dirty checkpoint data.
-  if (!validateTextbookRecognition(parsedObject)) {
+  if (!validateTextbookRecognition(parsed)) {
     throw new TextbookRecognitionParseError(
       `教材识别 JSON 不符合 Schema：${schemaErrorMessage(validateTextbookRecognition.errors)}`,
     )
   }
-  const value = parsedObject
+  const value = parsed as Record<string, unknown>
   return {
     title: field(value.title),
     subject: field(value.subject),

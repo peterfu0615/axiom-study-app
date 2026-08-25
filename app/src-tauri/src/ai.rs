@@ -28,6 +28,26 @@ enum ResponseFormatMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum EndpointMode {
+    #[default]
+    Auto,
+    ApiRoot,
+    V1Base,
+    FullEndpoint,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum StructuredOutputMode {
+    #[default]
+    Auto,
+    JsonSchema,
+    JsonObject,
+    PromptOnly,
+}
+
 impl ResponseFormatMode {
     fn as_str(self) -> &'static str {
         match self {
@@ -55,6 +75,10 @@ pub struct StreamChunk {
 #[serde(rename_all = "camelCase")]
 pub struct OpenAICompatibleAnalysisRequest {
     base_url: String,
+    #[serde(default)]
+    endpoint_mode: EndpointMode,
+    #[serde(default)]
+    structured_output_mode: StructuredOutputMode,
     model: String,
     /// Provider identity. Rust loads its API Key directly from local SQLite.
     provider_id: String,
@@ -93,6 +117,10 @@ pub struct PersistedAIProviderProfile {
     name: String,
     provider: String,
     base_url: String,
+    #[serde(default)]
+    endpoint_mode: EndpointMode,
+    #[serde(default)]
+    structured_output_mode: StructuredOutputMode,
     /// Only a newly-entered value is supplied here.  A blank value means
     /// preserve SQLite's existing key, never overwrite it with an empty string.
     api_key: String,
@@ -159,6 +187,11 @@ fn provider_profile_error(profile: &PersistedAIProviderProfile) -> Result<(), St
     {
         return Err(format!("“{}”启用前请填写 Base URL 和 Model", profile.name));
     }
+    if profile.provider == "openai_compatible"
+        && (profile.enabled || !profile.base_url.trim().is_empty())
+    {
+        endpoint_url(&profile.base_url, profile.endpoint_mode)?;
+    }
     if profile.enabled
         && profile.provider == "antigravity_cli"
         && (profile.command_path.trim().is_empty() || profile.model.trim().is_empty())
@@ -196,14 +229,17 @@ async fn upsert_ai_provider_profile(
         .map_err(|error| format!("序列化 Provider 任务路由失败：{error}"))?;
     sqlx::query(
         "INSERT INTO ai_provider_profiles (
-           id, name, provider, base_url, api_key, credential_ref, command_path, model,
+           id, name, provider, base_url, endpoint_mode, structured_output_mode,
+           api_key, credential_ref, command_path, model,
            input_cost_per_million_usd, output_cost_per_million_usd,
            supports_vision, supports_text, task_types_json, enabled, sort_order, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            provider = excluded.provider,
            base_url = excluded.base_url,
+           endpoint_mode = excluded.endpoint_mode,
+           structured_output_mode = excluded.structured_output_mode,
            api_key = CASE
              WHEN trim(excluded.api_key) != '' THEN excluded.api_key
              ELSE ai_provider_profiles.api_key
@@ -228,6 +264,18 @@ async fn upsert_ai_provider_profile(
     .bind(profile.name.trim())
     .bind(profile.provider.trim())
     .bind(profile.base_url.trim())
+    .bind(match profile.endpoint_mode {
+        EndpointMode::Auto => "auto",
+        EndpointMode::ApiRoot => "api_root",
+        EndpointMode::V1Base => "v1_base",
+        EndpointMode::FullEndpoint => "full_endpoint",
+    })
+    .bind(match profile.structured_output_mode {
+        StructuredOutputMode::Auto => "auto",
+        StructuredOutputMode::JsonSchema => "json_schema",
+        StructuredOutputMode::JsonObject => "json_object",
+        StructuredOutputMode::PromptOnly => "prompt_only",
+    })
     .bind(profile.api_key.trim())
     .bind(profile.credential_ref.trim())
     .bind(profile.command_path.trim())
@@ -428,17 +476,12 @@ pub async fn delete_ai_provider_api_key(
     }
 }
 
-fn endpoint_url(base_url: &str) -> Result<Url, String> {
-    let trimmed = base_url.trim().trim_end_matches('/');
+fn endpoint_url(base_url: &str, mode: EndpointMode) -> Result<Url, String> {
+    let trimmed = base_url.trim();
     if trimmed.is_empty() {
         return Err("Base URL 不能为空".to_string());
     }
-    let endpoint = if trimmed.ends_with("/chat/completions") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/chat/completions")
-    };
-    let url = Url::parse(&endpoint).map_err(|error| format!("Base URL 无效：{error}"))?;
+    let mut url = Url::parse(trimmed).map_err(|error| format!("Base URL 无效：{error}"))?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return Err("Base URL 不能包含账号、密码或 fragment".to_string());
     }
@@ -448,9 +491,26 @@ fn endpoint_url(base_url: &str) -> Result<Url, String> {
             return Err("真实 API 必须使用 HTTPS；仅本机地址允许 HTTP".to_string());
         }
     }
+    let path = url.path().trim_end_matches('/');
+    let final_path = match mode {
+        EndpointMode::FullEndpoint => {
+            if !path.ends_with("/chat/completions") {
+                return Err("完整 Endpoint 必须以 /chat/completions 结尾".to_string());
+            }
+            path.to_string()
+        }
+        EndpointMode::ApiRoot => format!("{}/v1/chat/completions", path),
+        EndpointMode::V1Base => format!("{}/chat/completions", path),
+        EndpointMode::Auto if path.ends_with("/chat/completions") => path.to_string(),
+        EndpointMode::Auto if path.ends_with("/v1") => format!("{path}/chat/completions"),
+        EndpointMode::Auto if path.is_empty() => "/v1/chat/completions".to_string(),
+        EndpointMode::Auto => format!("{path}/chat/completions"),
+    };
+    url.set_path(&final_path.replace("//", "/"));
     Ok(url)
 }
 
+#[cfg(test)]
 async fn load_provider_api_key_from_connection(
     conn: &mut sqlx::SqliteConnection,
     provider_id: &str,
@@ -475,13 +535,55 @@ async fn load_provider_api_key_from_connection(
     Ok(api_key)
 }
 
-async fn load_provider_api_key(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+async fn load_provider_request_config(
+    app: &AppHandle,
+    provider_id: &str,
+) -> Result<(String, EndpointMode, StructuredOutputMode), String> {
     let db_state = app
         .try_state::<crate::db::DbState>()
         .ok_or_else(|| "数据库状态未初始化".to_string())?;
     let mut guard = db_state.connection.lock().await;
     let conn = guard.as_mut().ok_or("数据库连接尚未初始化")?;
-    load_provider_api_key_from_connection(conn, provider_id).await
+    let row = sqlx::query(
+        "SELECT api_key, endpoint_mode, structured_output_mode
+         FROM ai_provider_profiles WHERE id = $1",
+    )
+    .bind(provider_id.trim())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|error| format!("读取 Provider 请求配置失败：{error}"))?
+    .ok_or_else(|| "找不到指定的 AI Provider".to_string())?;
+    let api_key: String = row
+        .try_get("api_key")
+        .map_err(|error| format!("读取 Provider API Key 失败：{error}"))?;
+    if api_key.trim().is_empty() {
+        return Err("该 Provider 尚未保存 API Key，请在设置中填写后重试".to_string());
+    }
+    let endpoint_mode = match row
+        .try_get::<String, _>("endpoint_mode")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "api_root" => EndpointMode::ApiRoot,
+        "v1_base" => EndpointMode::V1Base,
+        "full_endpoint" => EndpointMode::FullEndpoint,
+        _ => EndpointMode::Auto,
+    };
+    let structured_output_mode = match row
+        .try_get::<String, _>("structured_output_mode")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "json_schema" => StructuredOutputMode::JsonSchema,
+        "json_object" => StructuredOutputMode::JsonObject,
+        "prompt_only" => StructuredOutputMode::PromptOnly,
+        _ => StructuredOutputMode::Auto,
+    };
+    Ok((
+        api_key.trim().to_string(),
+        endpoint_mode,
+        structured_output_mode,
+    ))
 }
 
 fn managed_image_path(app: &AppHandle, image_path: &str) -> Result<PathBuf, String> {
@@ -789,10 +891,50 @@ fn remember_response_format(key: String, mode: ResponseFormatMode) {
     }
 }
 
+async fn persist_response_format_capability(
+    app: &AppHandle,
+    provider_id: &str,
+    endpoint: &Url,
+    model: &str,
+    mode: ResponseFormatMode,
+) {
+    let Some(db_state) = app.try_state::<crate::db::DbState>() else {
+        return;
+    };
+    let mut guard = db_state.connection.lock().await;
+    let Some(conn) = guard.as_mut() else { return };
+    let mode = match mode {
+        ResponseFormatMode::JsonSchema => "json_schema",
+        ResponseFormatMode::JsonObject => "json_object",
+        ResponseFormatMode::None => "prompt_only",
+    };
+    let tested_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0);
+    let _ = sqlx::query(
+        "INSERT INTO ai_provider_capabilities (
+           provider_id, endpoint_url, model, best_structured_output_mode, tested_at, last_error_code
+         ) VALUES ($1, $2, $3, $4, $5, NULL)
+         ON CONFLICT(provider_id, endpoint_url, model) DO UPDATE SET
+           best_structured_output_mode=excluded.best_structured_output_mode,
+           tested_at=excluded.tested_at,
+           last_error_code=NULL",
+    )
+    .bind(provider_id)
+    .bind(endpoint.as_str())
+    .bind(model)
+    .bind(mode)
+    .bind(tested_at)
+    .execute(&mut *conn)
+    .await;
+}
+
 fn build_chat_completion_body(
     model: &str,
     prompt: &str,
-    user_content: &[Value],
+    user_content: &Value,
     schema: Option<&Value>,
     mode: ResponseFormatMode,
     stream: bool,
@@ -810,7 +952,7 @@ fn build_chat_completion_body(
             if let Some(schema) = schema {
                 body["response_format"] = json!({
                     "type": "json_schema",
-                    "json_schema": { "name": "axiom_output", "schema": schema }
+                    "json_schema": { "name": "axiom_output", "strict": true, "schema": schema }
                 });
             }
         }
@@ -823,6 +965,67 @@ fn build_chat_completion_body(
         body["stream"] = json!(true);
     }
     body
+}
+
+fn normalize_strict_schema_contract(schema: &mut Value, path: &str) -> Result<(), String> {
+    if let Some(object) = schema.as_object_mut() {
+        if object.get("type").and_then(Value::as_str) == Some("object") {
+            if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+                return Err(format!(
+                    "STRUCTURED_OUTPUT_CONTRACT_ERROR：{path} 必须声明 additionalProperties=false"
+                ));
+            }
+            let property_names = object
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let existing_required = object
+                .get("required")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    format!("STRUCTURED_OUTPUT_CONTRACT_ERROR：{path}.required 必须是数组")
+                })?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<std::collections::HashSet<_>>();
+            let mut missing_nullable = Vec::new();
+            for name in property_names {
+                if existing_required.contains(&name) {
+                    continue;
+                }
+                let nullable = object
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(&name))
+                    .and_then(|property| property.get("type"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some("null")));
+                if !nullable {
+                    return Err(format!(
+                        "STRUCTURED_OUTPUT_CONTRACT_ERROR：{path}.{name} 未列入 required 且不允许 null"
+                    ));
+                }
+                missing_nullable.push(Value::String(name));
+            }
+            let required = object
+                .get_mut("required")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    format!("STRUCTURED_OUTPUT_CONTRACT_ERROR：{path}.required 必须是数组")
+                })?;
+            required.extend(missing_nullable);
+        }
+        for (key, child) in object.iter_mut() {
+            normalize_strict_schema_contract(child, &format!("{path}.{key}"))?;
+        }
+    } else if let Some(items) = schema.as_array_mut() {
+        for (index, child) in items.iter_mut().enumerate() {
+            normalize_strict_schema_contract(child, &format!("{path}[{index}]"))?;
+        }
+    }
+    Ok(())
 }
 
 fn normalized_ai_usage(value: &Value) -> Option<Value> {
@@ -928,7 +1131,7 @@ fn http_ai_error(
             "AI 服务认证失败",
             "API Key 无效或没有访问当前模型的权限，请检查 Provider 设置。",
             false,
-            false,
+            true,
         ),
         408 => (
             "TIMEOUT_ERROR",
@@ -949,7 +1152,7 @@ fn http_ai_error(
             "AI 请求无法发送",
             "Provider 拒绝了请求，请检查模型能力与请求配置。",
             false,
-            false,
+            true,
         ),
         _ => (
             "PROVIDER_ERROR",
@@ -982,7 +1185,19 @@ pub async fn analyze_problem_with_openai_compatible(
     on_chunk: Channel<StreamChunk>,
     stream: Option<bool>,
 ) -> Result<Value, String> {
-    let endpoint = endpoint_url(&request.base_url)?;
+    let (api_key, saved_endpoint_mode, saved_structured_output_mode) =
+        load_provider_request_config(&app, &request.provider_id).await?;
+    let endpoint_mode = if request.endpoint_mode == EndpointMode::Auto {
+        saved_endpoint_mode
+    } else {
+        request.endpoint_mode
+    };
+    let structured_output_mode = if request.structured_output_mode == StructuredOutputMode::Auto {
+        saved_structured_output_mode
+    } else {
+        request.structured_output_mode
+    };
+    let endpoint = endpoint_url(&request.base_url, endpoint_mode)?;
     let endpoint_host = endpoint.host_str().unwrap_or("unknown").to_string();
     let model = request.model.trim();
     if model.is_empty() {
@@ -990,7 +1205,6 @@ pub async fn analyze_problem_with_openai_compatible(
     }
     // The credential never crosses IPC and is never copied into ModelRun or
     // request diagnostics.  SQLite is the persistent source across app swaps.
-    let api_key = load_provider_api_key(&app, &request.provider_id).await?;
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
         return Err("分析 Prompt 不能为空".to_string());
@@ -1021,20 +1235,43 @@ pub async fn analyze_problem_with_openai_compatible(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .unwrap_or("请根据输入内容生成符合 Schema 的 JSON。");
-    let mut user_content: Vec<Value> = vec![json!({ "type": "text", "text": user_text })];
+    let mut user_parts: Vec<Value> = vec![json!({ "type": "text", "text": user_text })];
     for path in &requested_paths {
         let data_url = image_data_url(&app, path)?;
-        user_content.push(json!({
+        user_parts.push(json!({
             "type": "image_url",
             "image_url": { "url": data_url, "detail": "high" }
         }));
     }
 
-    let schema = request
+    let mut schema = request
         .json_schema
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .and_then(|value| serde_json::from_str::<Value>(value).ok());
+        .map(|value| {
+            serde_json::from_str::<Value>(value).map_err(|error| {
+                format!("STRUCTURED_OUTPUT_CONTRACT_ERROR：JSON Schema 无法解析：{error}")
+            })
+        })
+        .transpose()?;
+    if let Some(schema) = schema.as_mut() {
+        normalize_strict_schema_contract(schema, "$schema")?;
+    }
+    let schema_instruction = schema.as_ref().map(|schema| format!(
+        "\n\n你必须只返回一个 JSON 对象，不要使用 Markdown 围栏。精确 JSON Schema：\n{}\n未知或缺失的可空字段使用 null，数组字段使用 []；不得猜测或补造事实。",
+        serde_json::to_string(schema).unwrap_or_default()
+    )).unwrap_or_default();
+    let user_content = if requested_paths.is_empty() {
+        Value::String(format!("{user_text}{schema_instruction}"))
+    } else {
+        if let Some(first) = user_parts.first_mut().and_then(Value::as_object_mut) {
+            first.insert(
+                "text".to_string(),
+                json!(format!("{user_text}{schema_instruction}")),
+            );
+        }
+        Value::Array(user_parts)
+    };
     let stream_enabled = stream.unwrap_or(false);
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -1048,10 +1285,16 @@ pub async fn analyze_problem_with_openai_compatible(
         .build()
         .map_err(|error| format!("无法初始化 API 客户端：{error}"))?;
     let cache_key = response_format_cache_key(&request.provider_id, &endpoint, model);
-    let default_mode = if schema.is_some() {
-        ResponseFormatMode::JsonSchema
-    } else {
-        ResponseFormatMode::JsonObject
+    let default_mode = match structured_output_mode {
+        StructuredOutputMode::Auto | StructuredOutputMode::JsonSchema if schema.is_some() => {
+            ResponseFormatMode::JsonSchema
+        }
+        StructuredOutputMode::Auto | StructuredOutputMode::JsonObject => {
+            ResponseFormatMode::JsonObject
+        }
+        StructuredOutputMode::PromptOnly | StructuredOutputMode::JsonSchema => {
+            ResponseFormatMode::None
+        }
     };
     let mut format_mode = cached_response_format(&cache_key).unwrap_or(default_mode);
     if format_mode == ResponseFormatMode::JsonSchema && schema.is_none() {
@@ -1078,6 +1321,14 @@ pub async fn analyze_problem_with_openai_compatible(
         let status = response.status();
         if status.is_success() {
             remember_response_format(cache_key.clone(), format_mode);
+            persist_response_format_capability(
+                &app,
+                &request.provider_id,
+                &endpoint,
+                model,
+                format_mode,
+            )
+            .await;
             break response;
         }
         let bytes = response
@@ -1417,11 +1668,12 @@ mod tests {
     use super::{
         antigravity_command, antigravity_response, build_chat_completion_body,
         clear_ai_provider_api_key, endpoint_url, http_ai_error, is_vision_unsupported,
-        load_provider_api_key_from_connection, next_response_format_mode, normalized_ai_usage,
+        load_provider_api_key_from_connection, next_response_format_mode,
+        normalize_strict_schema_contract, normalized_ai_usage,
         persist_ai_provider_profiles_in_connection, provider_error_message,
         read_ai_provider_save_statuses, response_format_rejected, run_command_with_file_capture,
         safe_provider_message, upsert_ai_provider_profile, validate_provider_save_statuses,
-        PersistedAIProviderProfile, ResponseFormatMode,
+        EndpointMode, PersistedAIProviderProfile, ResponseFormatMode, StructuredOutputMode,
     };
     use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Executor};
     use std::{
@@ -1454,11 +1706,28 @@ mod tests {
     #[test]
     fn builds_compatible_chat_completion_endpoint() {
         assert_eq!(
-            endpoint_url("https://example.com/v1").unwrap().as_str(),
+            endpoint_url("https://example.com/v1", EndpointMode::Auto)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/chat/completions"
         );
-        assert!(endpoint_url("http://example.com/v1").is_err());
-        assert!(endpoint_url("http://127.0.0.1:1234/v1").is_ok());
+        assert_eq!(
+            endpoint_url("https://api.openai.com", EndpointMode::Auto)
+                .unwrap()
+                .as_str(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint_url(
+                "https://azure.example/openai/deployments/x/chat/completions?api-version=1",
+                EndpointMode::FullEndpoint
+            )
+            .unwrap()
+            .as_str(),
+            "https://azure.example/openai/deployments/x/chat/completions?api-version=1"
+        );
+        assert!(endpoint_url("http://example.com/v1", EndpointMode::Auto).is_err());
+        assert!(endpoint_url("http://127.0.0.1:1234/v1", EndpointMode::Auto).is_ok());
     }
 
     #[test]
@@ -1474,7 +1743,7 @@ mod tests {
     #[test]
     fn builds_each_safe_response_format_body() {
         let schema = serde_json::json!({"type":"object"});
-        let content = vec![serde_json::json!({"type":"text","text":"return json"})];
+        let content = serde_json::json!([{"type":"text","text":"return json"}]);
         let strict = build_chat_completion_body(
             "model",
             "prompt",
@@ -1484,6 +1753,7 @@ mod tests {
             false,
         );
         assert_eq!(strict["response_format"]["type"], "json_schema");
+        assert_eq!(strict["response_format"]["json_schema"]["strict"], true);
         let object = build_chat_completion_body(
             "model",
             "prompt",
@@ -1503,6 +1773,36 @@ mod tests {
             false,
         );
         assert!(plain.get("response_format").is_none());
+    }
+
+    #[test]
+    fn normalizes_nullable_optional_fields_and_rejects_unsafe_schema_contracts() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["answer"],
+            "properties": {
+                "answer": { "type": "string" },
+                "note": { "type": ["string", "null"] }
+            }
+        });
+        normalize_strict_schema_contract(&mut schema, "$schema").unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("note")));
+
+        let mut unsafe_schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": { "invented": { "type": "string" } }
+        });
+        assert!(
+            normalize_strict_schema_contract(&mut unsafe_schema, "$schema")
+                .unwrap_err()
+                .contains("STRUCTURED_OUTPUT_CONTRACT_ERROR")
+        );
     }
 
     #[test]
@@ -1538,11 +1838,11 @@ mod tests {
     #[test]
     fn maps_http_failures_to_stable_safe_error_codes() {
         for (status, expected, retryable, fallback) in [
-            (401, "AUTHENTICATION_ERROR", false, false),
-            (403, "AUTHENTICATION_ERROR", false, false),
+            (401, "AUTHENTICATION_ERROR", false, true),
+            (403, "AUTHENTICATION_ERROR", false, true),
             (429, "RATE_LIMIT_ERROR", true, true),
             (503, "PROVIDER_ERROR", true, true),
-            (400, "REQUEST_INVALID", false, false),
+            (400, "REQUEST_INVALID", false, true),
         ] {
             let error = http_ai_error(
                 status,
@@ -1712,6 +2012,8 @@ mod tests {
                    name TEXT NOT NULL,
                    provider TEXT NOT NULL,
                    base_url TEXT NOT NULL,
+                   endpoint_mode TEXT NOT NULL DEFAULT 'auto',
+                   structured_output_mode TEXT NOT NULL DEFAULT 'auto',
                    api_key TEXT NOT NULL DEFAULT '',
                    credential_ref TEXT NOT NULL DEFAULT '',
                    command_path TEXT NOT NULL DEFAULT '',
@@ -1763,6 +2065,8 @@ mod tests {
                    name TEXT NOT NULL,
                    provider TEXT NOT NULL,
                    base_url TEXT NOT NULL,
+                   endpoint_mode TEXT NOT NULL DEFAULT 'auto',
+                   structured_output_mode TEXT NOT NULL DEFAULT 'auto',
                    api_key TEXT NOT NULL DEFAULT '',
                    credential_ref TEXT NOT NULL DEFAULT '',
                    command_path TEXT NOT NULL DEFAULT '',
@@ -1785,6 +2089,8 @@ mod tests {
                 name: "Provider A".to_string(),
                 provider: "openai_compatible".to_string(),
                 base_url: "https://example.com/v1".to_string(),
+                endpoint_mode: EndpointMode::Auto,
+                structured_output_mode: StructuredOutputMode::Auto,
                 api_key: "sk-original-key".to_string(),
                 credential_ref: "legacy-a".to_string(),
                 command_path: "".to_string(),

@@ -20,8 +20,9 @@ describe('AI error contract', () => {
     expect(classifyAIError(new Error(message)).code).toBe(code)
   })
 
-  it('does not allow auth, persistence, or cancellation fallback', () => {
-    for (const code of ['AUTHENTICATION_ERROR', 'PERSISTENCE_ERROR', 'CANCELLED'] as const) {
+  it('allows another provider after auth failure but stops persistence and cancellation', () => {
+    expect(createAIError('AUTHENTICATION_ERROR').fallbackAllowed).toBe(true)
+    for (const code of ['PERSISTENCE_ERROR', 'CANCELLED'] as const) {
       expect(createAIError(code).fallbackAllowed).toBe(false)
     }
     expect(createAIError('SCHEMA_VALIDATION_ERROR').fallbackAllowed).toBe(true)

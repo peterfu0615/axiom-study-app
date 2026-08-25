@@ -416,6 +416,8 @@ export async function recoverLegacyProviderApiKeys() {
 
 export async function analyzeProblemWithOpenAICompatible(request: {
   baseUrl: string
+  endpointMode?: AIProviderProfile['endpointMode']
+  structuredOutputMode?: AIProviderProfile['structuredOutputMode']
   model: string
   /** Provider ID. Rust reads its API Key from local SQLite internally. */
   providerId: string
