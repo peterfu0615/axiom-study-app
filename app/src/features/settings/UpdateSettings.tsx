@@ -1,17 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
   getAppVersion,
-  onDownloadProgress,
   type DownloadProgress,
+  type UpdateOperationError,
   type UpdateInfo,
 } from '../../platform/native'
 import { Button } from '../../components/ui'
 import {
   formatSize,
-  type UpdateErrorPhase,
   updateErrorTitle,
 } from './updatePresentation'
 
@@ -40,14 +39,13 @@ export function UpdateSettings() {
   const [checking, setChecking] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [progress, setProgress] = useState<DownloadProgress>({
+    stage: 'checking',
     downloaded: 0,
     total: null,
     percent: null,
   })
-  const [error, setError] = useState<string | null>(null)
-  const [errorPhase, setErrorPhase] = useState<UpdateErrorPhase | null>(null)
+  const [error, setError] = useState<UpdateOperationError | null>(null)
   const [hasChecked, setHasChecked] = useState(false)
-  const unlistenRef = useRef<(() => void) | null>(null)
 
   // 获取当前版本
   useEffect(() => {
@@ -56,17 +54,9 @@ export function UpdateSettings() {
       .catch(() => setCurrentVersion('未知'))
   }, [])
 
-  // 组件卸载时取消进度监听
-  useEffect(() => {
-    return () => {
-      unlistenRef.current?.()
-    }
-  }, [])
-
   const handleCheck = async () => {
     setChecking(true)
     setError(null)
-    setErrorPhase(null)
     setUpdateInfo(null)
     setHasChecked(false)
     try {
@@ -75,8 +65,9 @@ export function UpdateSettings() {
       setHasChecked(true)
     } catch (e) {
       console.error('检查更新失败', e)
-      setError('暂时无法连接更新服务，请稍后重试。')
-      setErrorPhase('check')
+      setError(e && typeof e === 'object' && 'stage' in e
+        ? e as UpdateOperationError
+        : { stage: 'checking', code: 'check_failed', message: '暂时无法连接更新服务，请稍后重试。', retryable: true, manualDownloadUrl: 'https://github.com/peterfu0615/axiom-study-app/releases/latest' })
       setHasChecked(true)
     } finally {
       setChecking(false)
@@ -87,32 +78,16 @@ export function UpdateSettings() {
     if (!updateInfo) return
     setDownloading(true)
     setError(null)
-    setErrorPhase(null)
-    setProgress({ downloaded: 0, total: null, percent: null })
+    setProgress({ stage: 'checking', downloaded: 0, total: null, percent: null })
 
     try {
-      // 设置进度监听。监听失败也必须进入同一安装错误路径，并清理旧监听。
-      unlistenRef.current?.()
-      unlistenRef.current = await onDownloadProgress((p) => {
-        setProgress(p)
-      })
-      await downloadAndInstallUpdate(
-        updateInfo.downloadUrl,
-        updateInfo.sha256Url,
-        updateInfo.version,
-      )
-      // 成功后进程会退出，这里不会执行到
+      await downloadAndInstallUpdate(setProgress)
     } catch (e) {
       console.error('安装更新失败', e)
-      // 后端返回的已是面向用户的中文错误（含阶段与原因），直接透出，
-      // 避免「下载完成后只看到一句请稍后重试」而无法定位问题。
-      const detail = typeof e === 'string' ? e : e instanceof Error ? e.message : ''
-      setError(detail ? `更新未能完成：${detail}` : '更新未能完成，请稍后重试。')
-      setErrorPhase('install')
+      setError(e && typeof e === 'object' && 'stage' in e
+        ? e as UpdateOperationError
+        : { stage: progress.stage, code: 'install_failed', message: '更新未能完成，请稍后重试。', retryable: true, manualDownloadUrl: updateInfo.manualDownloadUrl })
       setDownloading(false)
-    } finally {
-      unlistenRef.current?.()
-      unlistenRef.current = null
     }
   }
 
@@ -154,11 +129,12 @@ export function UpdateSettings() {
 
       {error && (
         <div className="update-error">
-          <strong>{updateErrorTitle(errorPhase ?? 'check')}</strong>
-          <p>{error}</p>
+          <strong>{updateErrorTitle(error.stage)}</strong>
+          <p>{error.message}</p>
           <p className="update-hint">
-            请稍后重试；更新服务不可用时不会影响本地数据。
+            错误码：{error.code}。{error.retryable ? '可以重试；' : ''}当前版本与本地数据未被替换。
           </p>
+          <a href={error.manualDownloadUrl} rel="noreferrer" target="_blank">手动下载桥接版本</a>
         </div>
       )}
 
@@ -180,9 +156,13 @@ export function UpdateSettings() {
       {downloading && (
         <div className="update-progress-section">
           <p className="update-progress-label">
-            {progress.percent == null
-              ? `正在下载更新… 已下载 ${formatDownloadedSize(progress.downloaded)}`
-              : `正在下载更新… ${progress.percent.toFixed(0)}%`}
+            {progress.stage === 'checking' ? '正在重新检查签名更新清单…'
+              : progress.stage === 'verifying_signature' ? '下载完成，正在验证更新签名…'
+                : progress.stage === 'installing' ? '签名有效，正在安装更新…'
+                  : progress.stage === 'relaunching' ? '安装完成，正在重新启动…'
+                    : progress.percent == null
+                      ? `正在下载更新… 已下载 ${formatDownloadedSize(progress.downloaded)}`
+                      : `正在下载更新… ${progress.percent.toFixed(0)}%`}
           </p>
           <div className="update-progress-bar">
             <div
@@ -195,7 +175,7 @@ export function UpdateSettings() {
             />
           </div>
           <p className="update-hint">
-            下载完成后应用将自动退出并安装，请勿关闭窗口。
+            下载达到 100% 后仍会执行签名验证与安装；完成前请勿关闭窗口。
           </p>
         </div>
       )}

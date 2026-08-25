@@ -36,6 +36,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/axiom-vision",
       "binaries/axiom-typst"
@@ -49,11 +50,20 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
+      "signingIdentity": "-",
       "entitlements": "./Entitlements.plist",
       "infoPlist": "./Info.plist"
     },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaW5uIHB1YmxpYyBrZXk6IEI3MTk3NjE0NkY3M0JFQTcKUldTbnZuTnZGSFladDBwWnBNcGp5dUVpaTk2ZUxBRnZ4ZUswUDNuUzM0eXJaRmNJdWhKenZDbjQK",
+      "endpoints": [
+        "https://github.com/peterfu0615/axiom-study-app/releases/latest/download/latest.json"
+      ]
     }
   }
 }

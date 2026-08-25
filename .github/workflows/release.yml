@@ -19,6 +19,9 @@ jobs:
     runs-on: macos-latest
     env:
       AXIOM_HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      UPDATER_MINISIGN_PUBLIC_KEY: RWSnvnNvFHYZt0pZpMpjyuEii96eLAFvxeK0P3nS34yrZFcIuhJzvCn4
     defaults:
       run:
         working-directory: app
@@ -42,8 +45,18 @@ jobs:
           cargo install typst-cli --version 0.14.2 --locked
           typst --version | grep '^typst 0\.14\.2'
 
+      - name: Install updater signature verifier
+        run: brew install minisign
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Require updater signing key
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is required for signed updater artifacts."
+            exit 1
+          fi
 
       # ── 约束 #4：不假设 runner 架构，必须检测 arm64 ──
       - name: Detect runner architecture
@@ -61,6 +74,18 @@ jobs:
           esac
           echo "arch=$arch" >> "$GITHUB_OUTPUT"
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
+
+      - name: Verify vision binary for detected architecture
+        run: |
+          triple="${{ steps.arch.outputs.triple }}"
+          bin="src-tauri/binaries/axiom-vision-$triple"
+          if [ ! -f "$bin" ]; then
+            echo "::error::Missing vision binary: $bin"
+            echo "arm64 runner 需要 binaries/axiom-vision-aarch64-apple-darwin"
+            echo "x86_64 runner 需要 binaries/axiom-vision-x86_64-apple-darwin"
+            exit 1
+          fi
+          echo "Found: $bin"
 
       - name: Determine version
         id: version
@@ -110,8 +135,8 @@ jobs:
       - name: Build release bundle (unsigned Beta)
         if: ${{ steps.signing.outputs.signing != 'enabled' }}
         run: |
-          echo "::warning::No signing secrets configured. Producing UNSIGNED Beta build."
-          echo "::warning::Unsigned DMG cannot be notarized and will trigger Gatekeeper warnings."
+          echo "::warning::No Developer ID configured. Producing an ad-hoc signed Beta build."
+          echo "::warning::Ad-hoc signatures do not remove Gatekeeper approval requirements."
           # 在 Tauri 打包阶段完成 ad-hoc 签名，使 .app.zip 与 DMG 内的 app
           # 都具备完整的 CodeResources；不能等 DMG 生成后再补签名。
           APPLE_SIGNING_IDENTITY=- npm run tauri -- build --target ${{ steps.arch.outputs.triple }}
@@ -135,21 +160,24 @@ jobs:
             codesign --force --deep --sign - "$app"
             codesign --verify --deep --strict "$app"
           fi
+          bash scripts/verify-macos-update-bundle.sh \
+            "$PWD/$app" \
+            "${{ steps.version.outputs.version }}" \
+            "${{ steps.arch.outputs.arch }}"
 
-      - name: Verify bundled vision sidecar
+      - name: Repackage and sign final updater bundle
+        id: updater
         run: |
-          app="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/macos/Axiom.app"
-          helper="$app/Contents/MacOS/axiom-vision"
-          test -f "$helper" || { echo "::error::Missing bundled vision sidecar: $helper"; exit 1; }
-          test -x "$helper" || { echo "::error::Bundled vision sidecar is not executable: $helper"; exit 1; }
-          file "$helper"
-          case "${{ steps.arch.outputs.arch }}" in
-            arm64) file "$helper" | grep -q 'arm64' ;;
-            x86_64) file "$helper" | grep -q 'x86_64' ;;
-          esac
-          codesign --verify --strict "$helper"
-          codesign -dvv "$helper" 2>&1 | grep -q 'Identifier=com.axiom.study.vision'
-          codesign -d --entitlements - "$helper" 2>&1 | grep -q 'com.apple.security.inherit'
+          base="src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/macos"
+          archive_name="Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.app.tar.gz"
+          archive="$GITHUB_WORKSPACE/app/$archive_name"
+          rm -f "$archive" "$archive.sig"
+          COPYFILE_DISABLE=1 /usr/bin/tar -czf "$archive" -C "$base" Axiom.app
+          npm run tauri -- signer sign "$archive"
+          test -s "$archive.sig"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "signature=$archive.sig" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
 
       - name: Notarize (if signed)
         if: ${{ steps.signing.outputs.signing == 'enabled' }}
@@ -185,19 +213,74 @@ jobs:
           shasum -a 256 "$zip_name" | awk '{print $1}' > "$zip_name.sha256"
           echo "SHA256: $(cat "$zip_name.sha256")"
 
+      - name: Verify bridge and signed updater archives
+        run: |
+          verify_root="$(mktemp -d "$RUNNER_TEMP/axiom-update-verify.XXXXXX")"
+          trap 'rm -rf "$verify_root"' EXIT
+          zip_name="Axiom_${{ steps.version.outputs.version }}_${{ steps.arch.outputs.arch }}.app.zip"
+          expected_sha="$(cat "$GITHUB_WORKSPACE/app/$zip_name.sha256")"
+          actual_sha="$(shasum -a 256 "$GITHUB_WORKSPACE/app/$zip_name" | awk '{print $1}')"
+          test "$expected_sha" = "$actual_sha"
+          # Tauri 的 .sig/manifest signature 是 base64 包装的 minisign 文本；
+          # minisign CLI 需要先还原成标准四行签名文件。
+          base64 --decode -i "${{ steps.updater.outputs.signature }}" \
+            -o "$verify_root/updater.minisig"
+          minisign -Vm "${{ steps.updater.outputs.archive }}" \
+            -x "$verify_root/updater.minisig" \
+            -P "$UPDATER_MINISIGN_PUBLIC_KEY"
+          cp "${{ steps.updater.outputs.archive }}" "$verify_root/tampered.app.tar.gz"
+          printf 'tampered' >> "$verify_root/tampered.app.tar.gz"
+          if minisign -Vm "$verify_root/tampered.app.tar.gz" \
+            -x "$verify_root/updater.minisig" \
+            -P "$UPDATER_MINISIGN_PUBLIC_KEY"; then
+            echo "::error::Tampered updater archive unexpectedly passed signature verification."
+            exit 1
+          fi
+          awk 'NR == 2 { first=substr($0, 1, 1); $0=(first == "A" ? "B" : "A") substr($0, 2) } { print }' \
+            "$verify_root/updater.minisig" > "$verify_root/tampered.sig"
+          if minisign -Vm "${{ steps.updater.outputs.archive }}" \
+            -x "$verify_root/tampered.sig" \
+            -P "$UPDATER_MINISIGN_PUBLIC_KEY"; then
+            echo "::error::Tampered updater signature unexpectedly passed verification."
+            exit 1
+          fi
+          mkdir "$verify_root/zip" "$verify_root/tar"
+          ditto -x -k "$GITHUB_WORKSPACE/app/$zip_name" "$verify_root/zip"
+          /usr/bin/tar -xzf "${{ steps.updater.outputs.archive }}" -C "$verify_root/tar"
+          for extracted in "$verify_root/zip/Axiom.app" "$verify_root/tar/Axiom.app"; do
+            bash scripts/verify-macos-update-bundle.sh \
+              "$extracted" \
+              "${{ steps.version.outputs.version }}" \
+              "${{ steps.arch.outputs.arch }}"
+          done
+
+      - name: Generate signed updater manifest
+        run: |
+          node scripts/generate-updater-manifest.mjs \
+            "${{ steps.version.outputs.version }}" \
+            "${{ steps.arch.outputs.arch }}" \
+            "v${{ steps.version.outputs.version }}" \
+            "${{ steps.updater.outputs.archive }}" \
+            "${{ steps.updater.outputs.signature }}" \
+            "$GITHUB_WORKSPACE/app/latest.json"
+          node -e 'const m=require("./latest.json"); const p=m.platforms["darwin-${{ steps.arch.outputs.arch }}"]; if(m.version!=="${{ steps.version.outputs.version }}"||!p?.url||!p?.signature) process.exit(1)'
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-dmg
           path: app/src-tauri/target/${{ steps.arch.outputs.triple }}/release/bundle/dmg/*.dmg
 
-      - name: Upload .app.zip + .sha256 artifacts
+      - name: Upload bridge and signed updater artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Axiom-${{ steps.version.outputs.version }}-${{ steps.arch.outputs.arch }}-app
           path: |
             app/Axiom_*.app.zip
             app/Axiom_*.app.zip.sha256
+            app/Axiom_*.app.tar.gz
+            app/Axiom_*.app.tar.gz.sig
+            app/latest.json
 
   release:
     name: Publish GitHub Release
@@ -227,6 +310,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.meta.outputs.version }}
           name: Axiom ${{ steps.meta.outputs.version }}
           body: |
             ## Axiom ${{ steps.meta.outputs.version }}
@@ -237,7 +321,7 @@ jobs:
             2. 打开 DMG，拖动 Axiom 到「应用程序」文件夹
             3. **首次打开**：右键点击 Axiom →「打开」→ 确认（Gatekeeper 拦截时需此操作）
 
-            > ⚠️ **Beta Release**：此版本为未签名构建，macOS 会显示「无法验证开发者」提示。
+            > ⚠️ **Beta Release**：无 Developer ID 时使用 ad-hoc 应用签名，macOS 仍会显示「无法验证开发者」提示。
             > 如需消除提示，可在终端执行：`xattr -dr com.apple.quarantine /Applications/Axiom.app`
             >
             > 正式版将使用 Apple Developer ID 签名 + 公证，届时双击即可打开。
@@ -251,5 +335,8 @@ jobs:
             artifacts/*/*.dmg
             artifacts/*/*.app.zip
             artifacts/*/*.sha256
+            artifacts/*/*.app.tar.gz
+            artifacts/*/*.app.tar.gz.sig
+            artifacts/*/latest.json
           prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true

@@ -1,4 +1,6 @@
-export type UpdateErrorPhase = 'check' | 'install'
+import type { UpdateStage } from '../../platform/native'
+
+export type UpdateErrorPhase = UpdateStage
 
 /** 格式化远端更新资产大小；null/0 表示服务端未提供可靠长度。 */
 export function formatSize(bytes: number | null): string {
@@ -9,5 +11,9 @@ export function formatSize(bytes: number | null): string {
 }
 
 export function updateErrorTitle(phase: UpdateErrorPhase): string {
-  return phase === 'install' ? '安装更新失败' : '检查更新失败'
+  if (phase === 'checking') return '检查更新失败'
+  if (phase === 'downloading') return '下载更新失败'
+  if (phase === 'verifying_signature') return '更新签名验证失败'
+  if (phase === 'relaunching') return '重启应用失败'
+  return '安装更新失败'
 }

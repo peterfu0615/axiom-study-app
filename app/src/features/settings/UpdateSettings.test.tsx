@@ -14,15 +14,17 @@ describe('UpdateSettings display contracts', () => {
   })
 
   it('keeps check and install errors distinguishable', () => {
-    expect(updateErrorTitle('check')).toBe('检查更新失败')
-    expect(updateErrorTitle('install')).toBe('安装更新失败')
+    expect(updateErrorTitle('checking')).toBe('检查更新失败')
+    expect(updateErrorTitle('verifying_signature')).toBe('更新签名验证失败')
+    expect(updateErrorTitle('installing')).toBe('安装更新失败')
   })
 
-  it('routes listener and download failures through the retryable install path', () => {
+  it('shows signed updater stages and never sends an artifact URL to installation', () => {
     const source = readFileSync(new URL('./UpdateSettings.tsx', import.meta.url), 'utf8')
-    expect(source).toContain("setErrorPhase('install')")
-    expect(source).toMatch(/try \{[\s\S]*onDownloadProgress[\s\S]*downloadAndInstallUpdate/u)
-    expect(source).toContain('finally')
-    expect(source).toContain('unlistenRef.current = null')
+    expect(source).toContain("progress.stage === 'verifying_signature'")
+    expect(source).toContain("progress.stage === 'installing'")
+    expect(source).toContain('await downloadAndInstallUpdate(setProgress)')
+    expect(source).not.toContain('updateInfo.downloadUrl')
+    expect(source).toContain('手动下载桥接版本')
   })
 })

@@ -1,5 +1,7 @@
 import { Channel, convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { relaunch } from '@tauri-apps/plugin-process'
+import { check, type Update } from '@tauri-apps/plugin-updater'
 import type {
   CameraOrientationUpdate,
   DocumentProcessingProgress,
@@ -580,19 +582,46 @@ export interface UpdateInfo {
   releaseNotes: string
   /** 发布时间（ISO 8601） */
   publishedAt: string
-  /** `.app.zip` 下载 URL */
-  downloadUrl: string
   /** 下载文件大小（字节）；无法从远端元数据确定时为 null */
   downloadSize: number | null
-  /** `.sha256` 校验文件 URL（可能为空） */
-  sha256Url: string | null
+  /** 官方 Release 页面；自动安装不接受这个 URL 作为输入。 */
+  manualDownloadUrl: string
 }
 
-/** 下载进度事件 payload。 */
+export type UpdateStage = 'checking' | 'downloading' | 'verifying_signature' | 'installing' | 'relaunching'
+
+/** 官方更新器阶段与下载进度。下载 100% 后仍需验签和安装。 */
 export interface DownloadProgress {
+  stage: UpdateStage
   downloaded: number
   total: number | null
   percent: number | null
+}
+
+export interface UpdateOperationError {
+  stage: UpdateStage
+  code: string
+  message: string
+  retryable: boolean
+  manualDownloadUrl: string
+}
+
+const manualUpdateUrl = 'https://github.com/peterfu0615/axiom-study-app/releases/latest'
+let availableUpdate: Update | null = null
+
+function updateFailure(stage: UpdateStage, reason: unknown): UpdateOperationError {
+  const detail = String(reason instanceof Error ? reason.message : reason).toLowerCase()
+  const signature = detail.includes('signature') || detail.includes('minisign')
+  const manifest = detail.includes('manifest') || detail.includes('json')
+  return {
+    stage,
+    code: signature ? 'signature_invalid' : manifest ? 'manifest_invalid' : 'updater_plugin_failed',
+    message: signature || manifest
+      ? '更新包未通过安全校验，当前版本未被替换。'
+      : '签名更新未能完成，请重试或使用手动下载。',
+    retryable: !signature && !manifest,
+    manualDownloadUrl: manualUpdateUrl,
+  }
 }
 
 /** 获取当前应用版本号。 */
@@ -606,39 +635,66 @@ export async function getAppVersion(): Promise<string> {
  * 网络错误时抛出异常，调用方应静默处理（启动检查场景）或提示（手动检查场景）。
  */
 export async function checkForUpdates(): Promise<UpdateInfo | null> {
-  return invoke<UpdateInfo | null>('check_for_updates')
+  if (!isTauri()) return null
+  try {
+    await availableUpdate?.close()
+    availableUpdate = await check({ timeout: 30_000 })
+    if (!availableUpdate) return null
+    return {
+      version: availableUpdate.version,
+      currentVersion: availableUpdate.currentVersion,
+      releaseNotes: availableUpdate.body ?? '',
+      publishedAt: availableUpdate.date ?? '',
+      downloadSize: null,
+      manualDownloadUrl: manualUpdateUrl,
+    }
+  } catch (reason) {
+    throw updateFailure('checking', reason)
+  }
 }
 
 /**
- * 下载并安装更新。下载进度通过 `update://progress` 事件报告。
- * 成功后当前进程退出，由 Rust 端 detached 脚本完成替换和重启。
+ * 下载并安装更新。阶段进度通过回调报告；验签和替换由官方 updater 处理。
  */
 export async function downloadAndInstallUpdate(
-  downloadUrl: string,
-  sha256Url: string | null,
-  expectedVersion: string,
-): Promise<void> {
-  return invoke<void>('download_and_install_update', {
-    downloadUrl,
-    sha256Url,
-    expectedVersion,
-  })
-}
-
-/**
- * 监听下载进度事件。返回取消监听的函数。
- *
- * 用法：
- *   const unlisten = await onDownloadProgress((p) => setPercent(p.percent))
- *   // ... 下载完成后
- *   unlisten()
- */
-export async function onDownloadProgress(
   callback: (progress: DownloadProgress) => void,
-): Promise<UnlistenFn> {
-  return listen<DownloadProgress>('update://progress', (event) =>
-    callback(event.payload),
-  )
+): Promise<void> {
+  let update = availableUpdate
+  if (!update) {
+    callback({ stage: 'checking', downloaded: 0, total: null, percent: null })
+    try { update = await check({ timeout: 30_000 }) }
+    catch (reason) { throw updateFailure('checking', reason) }
+  }
+  if (!update) throw updateFailure('checking', 'no update available')
+  let downloaded = 0
+  let total: number | null = null
+  let activeStage: UpdateStage = 'downloading'
+  try {
+    await update.download((event) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength ?? null
+        callback({ stage: 'downloading', downloaded, total, percent: total ? 0 : null })
+      } else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength
+        callback({
+          stage: 'downloading', downloaded, total,
+          percent: total ? Math.min(100, downloaded / total * 100) : null,
+        })
+      } else {
+        activeStage = 'verifying_signature'
+        callback({ stage: 'verifying_signature', downloaded, total, percent: 100 })
+      }
+    })
+  } catch (reason) {
+    throw updateFailure(activeStage, reason)
+  }
+  callback({ stage: 'installing', downloaded, total, percent: 100 })
+  try { await update.install() }
+  catch (reason) { throw updateFailure('installing', reason) }
+  callback({ stage: 'relaunching', downloaded, total, percent: 100 })
+  availableUpdate = null
+  try { await relaunch() }
+  catch (reason) { throw updateFailure('relaunching', reason) }
 }
 export type CurriculumAIStage =
   | 'ai_analyzing_structure'

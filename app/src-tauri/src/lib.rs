@@ -429,6 +429,8 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log_level)
@@ -510,8 +512,6 @@ pub fn run() {
             horizon::complete_curriculum_import_attempt,
             horizon::fail_curriculum_import_attempt,
             updater::get_app_version,
-            updater::check_for_updates,
-            updater::download_and_install_update,
         ])
         .setup(move |app| {
             // tauri-plugin-log 在 Builder::run 阶段完成初始化，setup 是其后第一个
@@ -538,28 +538,16 @@ pub fn run() {
                                 "{e} 当前应用版本：{}。学习数据没有被修改；尝试自动恢复到最新版本。",
                                 env!("CARGO_PKG_VERSION")
                             );
-                            match updater::check_for_updates().await {
-                                Ok(Some(update)) => match updater::download_and_install_update(
-                                    handle.clone(),
-                                    update.download_url,
-                                    update.sha256_url,
-                                    update.version,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        log::info!("已安排数据库版本恢复所需的应用更新。");
-                                        return true;
-                                    }
-                                    Err(update_error) => {
-                                        log::error!("自动恢复更新失败：{update_error}");
-                                    }
-                                },
-                                Ok(None) => {
+                            match updater::install_latest_signed_update(handle.clone()).await {
+                                Ok(true) => {
+                                    log::info!("已安装数据库版本恢复所需的签名更新。");
+                                    return true;
+                                }
+                                Ok(false) => {
                                     log::error!("更新源没有比当前应用更新的版本，无法自动恢复。");
                                 }
                                 Err(update_error) => {
-                                    log::error!("检查恢复更新失败：{update_error}");
+                                    log::error!("签名恢复更新失败：{update_error}");
                                 }
                             }
                             // 自动恢复失败时才引导用户到下载页，保留手动恢复通道。
