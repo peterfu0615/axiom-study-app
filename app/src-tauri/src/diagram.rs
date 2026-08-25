@@ -671,8 +671,7 @@ fn failed_result(
     }
 }
 
-#[tauri::command]
-pub fn render_tikz(
+fn render_tikz_blocking(
     app: AppHandle,
     source: String,
     contract: Option<DiagramValidationContract>,
@@ -709,6 +708,25 @@ pub fn render_tikz(
         },
         Err(error) => failed_result(&source, &contract, error),
     }
+}
+
+#[tauri::command]
+pub async fn render_tikz(
+    app: AppHandle,
+    source: String,
+    contract: Option<DiagramValidationContract>,
+) -> TikzRenderResult {
+    let error_source = source.clone();
+    let error_contract = contract.clone().unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || render_tikz_blocking(app, source, contract))
+        .await
+        .unwrap_or_else(|error| {
+            failed_result(
+                &error_source,
+                &error_contract,
+                RenderError::Io(format!("TikZ 后台任务异常：{error}")),
+            )
+        })
 }
 
 #[cfg(test)]

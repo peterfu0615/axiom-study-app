@@ -21,7 +21,7 @@ const TYPST_VERSION: &str = "0.14.2";
 const RENDERER_VERSION: &str = "axiom-typst-v2";
 const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletePracticeDocument {
     id: String,
@@ -34,7 +34,7 @@ pub struct CompletePracticeDocument {
     sections: Vec<PracticeSection>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentMetadata {
     subject: String,
@@ -45,7 +45,7 @@ struct DocumentMetadata {
     max_duration_seconds: i64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentLayout {
     version: String,
@@ -54,7 +54,7 @@ struct DocumentLayout {
     margin_points: f32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct PracticeSection {
     kind: SectionKind,
     title: String,
@@ -1123,8 +1123,7 @@ fn render_to_path(
     result
 }
 
-#[tauri::command]
-pub fn render_complete_practice_pdf(
+fn render_complete_practice_pdf_blocking(
     app: AppHandle,
     document: CompletePracticeDocument,
 ) -> Result<CompletePdfRenderResult, Box<PracticePdfRenderError>> {
@@ -1169,6 +1168,25 @@ pub fn render_complete_practice_pdf(
             Err(Box::new(error))
         }
     }
+}
+
+#[tauri::command]
+pub async fn render_complete_practice_pdf(
+    app: AppHandle,
+    document: CompletePracticeDocument,
+) -> Result<CompletePdfRenderResult, Box<PracticePdfRenderError>> {
+    let error_document = document.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        render_complete_practice_pdf_blocking(app, document)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(Box::new(safe_render_error(
+            &error_document,
+            &format!("Typst 后台任务异常：{error}"),
+            None,
+        )))
+    })
 }
 
 fn safe_render_error(

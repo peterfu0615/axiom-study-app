@@ -521,8 +521,7 @@ fn render(document: &PracticeDocument, destination: &Path) -> Result<(), String>
     fs::rename(&temporary, destination).map_err(|error| format!("提交 PDF 文件失败：{error}"))
 }
 
-#[tauri::command]
-pub fn render_practice_pdf(
+fn render_practice_pdf_blocking(
     app: AppHandle,
     document: PracticeDocument,
 ) -> Result<PdfRenderResult, String> {
@@ -543,6 +542,16 @@ pub fn render_practice_pdf(
         byte_length: metadata.len(),
         cache_hit,
     })
+}
+
+#[tauri::command]
+pub async fn render_practice_pdf(
+    app: AppHandle,
+    document: PracticeDocument,
+) -> Result<PdfRenderResult, String> {
+    tauri::async_runtime::spawn_blocking(move || render_practice_pdf_blocking(app, document))
+        .await
+        .map_err(|error| format!("PDF 后台任务异常：{error}"))?
 }
 
 #[tauri::command]
@@ -583,8 +592,11 @@ fn managed_practice_pdf(app: &AppHandle, path: &str) -> Result<PathBuf, String> 
     Ok(canonical_path)
 }
 
-#[tauri::command]
-pub fn save_practice_pdf(app: AppHandle, path: String, destination: String) -> Result<(), String> {
+fn save_practice_pdf_blocking(
+    app: AppHandle,
+    path: String,
+    destination: String,
+) -> Result<(), String> {
     let source = managed_practice_pdf(&app, &path)?;
     let destination = PathBuf::from(destination);
     if destination.extension().and_then(|value| value.to_str()) != Some("pdf") {
@@ -598,6 +610,17 @@ pub fn save_practice_pdf(app: AppHandle, path: String, destination: String) -> R
     }
     fs::copy(source, destination).map_err(|error| format!("保存练习 PDF 失败：{error}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn save_practice_pdf(
+    app: AppHandle,
+    path: String,
+    destination: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_practice_pdf_blocking(app, path, destination))
+        .await
+        .map_err(|error| format!("PDF 保存后台任务异常：{error}"))?
 }
 
 #[tauri::command]

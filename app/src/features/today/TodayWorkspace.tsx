@@ -1,27 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { AsyncState, Button, EmptyState, IconButton, Menu, MenuItem, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
+import { AsyncState, Button, EmptyState, IconButton, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
-import type { ReviewSessionMode } from '../../domain/review'
 import {
   addTodayReviewUnit,
-  deferTodayReviewUnit,
   getOrCreateTodayPlan,
   getReviewForecast,
   listTodayCorrectionTasks,
   refreshTodayPlan,
   type TodayCorrectionTask,
-  replaceTodayReviewUnit,
   type TodayReviewPlan,
   type TodayReviewUnit,
 } from '../../platform/reviewDatabase'
 import {
   findPracticeSetForSource,
   getPracticeSet,
-  getOrCreatePracticeSetFromReviewUnit,
   getOrCreatePracticeSetFromTodayPlan,
 } from '../../platform/practiceDatabase'
 import { PracticeSetView } from '../practice/PracticeSetView'
@@ -168,37 +164,51 @@ function supportTags(unit: TodayReviewUnit) {
     .slice(0, 3)
 }
 
-function LearningTopicRow({ unit, busy, onPractice, onReplace, onDefer, preferredMode = 'standard' }: {
+function LearningTopicRow({ unit }: {
   unit: TodayReviewUnit
-  busy: boolean
-  onPractice: (mode?: ReviewSessionMode) => void
-  onReplace: () => void
-  onDefer: () => void
-  preferredMode?: ReviewSessionMode
 }) {
+  const [expanded, setExpanded] = useState(false)
   const supporting = supportTags(unit).map((tag) => tag.name)
+  const primaryKnowledge = unit.tags.find((tag) => tag.type === 'knowledge' && tag.role === 'primary')?.name
+    ?? unit.title.split(' · ')[0]
   return <article className={`today-unit today-unit--${unit.status}`}>
     <div className="today-unit__order" aria-hidden="true">{unit.status === 'completed' ? <Icon name="check" size={16} /> : String(unit.orderIndex + 1).padStart(2, '0')}</div>
-    <div className="today-unit__body">
-      <div className="today-unit__heading"><h2>{unit.title}</h2></div>
+    <button className="today-unit__body today-unit__expand" onClick={() => setExpanded((value) => !value)} type="button" aria-expanded={expanded}>
+      <div className="today-unit__heading"><h2>{primaryKnowledge}</h2></div>
       <div className="today-unit__meta">
-        <span>{unit.subject} · {difficultyLabels[unit.difficulty]}</span>
-        <span>{supporting.length ? `${supporting.join(' · ')} · ` : ''}{unit.associationCount} 道相关题</span>
+        <span>{unit.associationCount} 道关联题目</span>
+        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={14} />
       </div>
-    </div>
+      {expanded && <div className="today-unit__details">
+        <strong>{unit.question.title}</strong>
+        <span>{unit.subject} · {difficultyLabels[unit.difficulty]}</span>
+        <p>{unit.question.stemMarkdown}</p>
+        {supporting.length > 0 && <small>{supporting.join(' · ')}</small>}
+      </div>}
+    </button>
     <div className="today-unit__aside">
       {unit.status !== 'pending' && <StatusTag kind={unit.status}>{unitStatusLabels[unit.status]}</StatusTag>}
-      {unit.status === 'pending' && <div className="today-unit__actions">
-        <Button disabled={busy} onClick={() => onPractice(preferredMode)} variant="secondary">生成练习</Button>
-        <Menu label={`${unit.title}的更多操作`}>
-          <MenuItem disabled={busy} onClick={() => onPractice('quick')}>快速复习</MenuItem>
-          <MenuItem disabled={busy} onClick={() => onPractice('mock_test')}>模拟测试</MenuItem>
-          <MenuItem disabled={busy} onClick={onReplace}>换一个主题</MenuItem>
-          <MenuItem disabled={busy} onClick={onDefer}>稍后处理</MenuItem>
-        </Menu>
-      </div>}
     </div>
   </article>
+}
+
+type PreparationPhase = 'selecting' | 'generating' | 'verifying' | 'rendering'
+
+function PracticePreparationView({ phase, total }: { phase: PreparationPhase; total: number }) {
+  const labels: Record<PreparationPhase, string> = {
+    selecting: '正在选择题目', generating: '正在生成所需变式', verifying: '正在独立审校', rendering: '正在准备图形与练习页',
+  }
+  const order: PreparationPhase[] = ['selecting', 'generating', 'verifying', 'rendering']
+  const active = order.indexOf(phase)
+  return <main className="workspace today-workspace practice-preparation" aria-live="polite">
+    <PageHeader eyebrow="今日练习" title="正在准备练习" summary={`${total} 个学习主题 · 窗口可继续移动和操作`} />
+    <section className="practice-preparation__card">
+      <div className="practice-preparation__spinner" aria-hidden="true" />
+      <h2>{labels[phase]}</h2>
+      <p>AI、TikZ 与文件排版都在后台执行，完成安全兜底后会自动进入练习。</p>
+      <ol>{order.map((item, index) => <li className={index <= active ? 'is-active' : ''} key={item}>{labels[item]}</li>)}</ol>
+    </section>
+  </main>
 }
 
 export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
@@ -215,6 +225,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [preparation, setPreparation] = useState<{ phase: PreparationPhase; total: number } | null>(null)
 
   const refreshForecast = useCallback(async (range: ForecastRange) => {
     try { setForecast(await getReviewForecast(range)) }
@@ -273,20 +284,25 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     } catch (reason) { setError(practiceErrorMessage(reason)) }
     finally { setBusy(false) }
   }
-  const openTodayPractice = async (sessionMode: ReviewSessionMode = 'standard') => {
+  const openTodayPractice = () => {
     if (!plan) return
-    setBusy(true); setError(null)
-    try {
-      const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
-      const budget = sessionMode === 'quick' ? Math.max(1, moduleIds.length)
-        : sessionMode === 'mock_test' ? Math.max(4, moduleIds.length * 3) : Math.max(3, moduleIds.length * 2)
-      const next = todayPracticeSet?.sessionMode === sessionMode
-        ? todayPracticeSet
-        : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
-      const attempt = await getLatestPracticeAttempt(next.id)
-      setTodayPracticeSet(next); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(next)
-    } catch (reason) { setError(practiceErrorMessage(reason)) }
-    finally { setBusy(false) }
+    const sessionMode = plan.preferences.preferredMode
+    const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
+    const budget = Math.max(3, moduleIds.length * 2)
+    setError(null)
+    setPreparation({ phase: 'selecting', total: moduleIds.length })
+    window.requestAnimationFrame(() => void (async () => {
+      try {
+        setPreparation({ phase: 'generating', total: moduleIds.length })
+        const next = todayPracticeSet?.sessionMode === sessionMode
+          ? todayPracticeSet
+          : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
+        setPreparation({ phase: 'rendering', total: moduleIds.length })
+        const attempt = await getLatestPracticeAttempt(next.id)
+        setTodayPracticeSet(next); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(next)
+      } catch (reason) { setError(practiceErrorMessage(reason)) }
+      finally { setPreparation(null) }
+    })())
   }
 
   const openCorrection = async (task: TodayCorrectionTask) => {
@@ -312,6 +328,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     ) ? 'results' : undefined}
     practiceSet={activePracticeSet}
   />
+  if (preparation) return <PracticePreparationView phase={preparation.phase} total={preparation.total} />
 
   const actionableUnits = plan?.units.filter((unit) => unit.status !== 'deferred') ?? []
   const completed = actionableUnits.filter((unit) => unit.status === 'completed').length
@@ -330,11 +347,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   return <main className="workspace today-workspace">
     <PageHeader
       actions={plan && plan.units.length > 0 ? <div className="today-header__actions">
-        <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} loading={busy} onClick={() => void openTodayPractice(plan.preferences.preferredMode)} variant="primary">{practiceCta}</Button>
-        <Menu label="选择练习模式">
-          <MenuItem disabled={busy} onClick={() => void openTodayPractice('quick')}>快速复习</MenuItem>
-          <MenuItem disabled={busy} onClick={() => void openTodayPractice('mock_test')}>模拟测试</MenuItem>
-        </Menu>
+        <Button className="today-header__cta" disabled={busy || (!todayPracticeSet && pendingUnits.length === 0)} onClick={openTodayPractice} variant="primary">{practiceCta}</Button>
       </div> : undefined}
       className="today-header"
       eyebrow={todayDate}
@@ -360,23 +373,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         title="今天暂时没有学习安排"
       /> : plan && <>
         <section className="today-units" aria-label="今日学习主题">
-          {plan.units.map((unit) => <LearningTopicRow
-            busy={busy}
-            key={unit.id}
-            onDefer={() => void mutate(async () => { await deferTodayReviewUnit(unit.id) })}
-            onReplace={() => void mutate(() => replaceTodayReviewUnit(unit.id))}
-            onPractice={(sessionMode = 'standard') => void (async () => {
-              setBusy(true); setError(null)
-              try {
-                const budget = sessionMode === 'quick' ? 1 : sessionMode === 'mock_test' ? 5 : 3
-                setActivePracticeSet(await getOrCreatePracticeSetFromReviewUnit(unit.id, budget, sessionMode))
-              }
-              catch (reason) { setError(practiceErrorMessage(reason)) }
-              finally { setBusy(false) }
-            })()}
-            preferredMode={plan.preferences.preferredMode}
-            unit={unit}
-          />)}
+          {plan.units.map((unit) => <LearningTopicRow key={unit.id} unit={unit} />)}
         </section>
       </>}
       {plan && forecast.length > 0 && <ForecastStrip days={forecast} onRangeChange={changeForecastRange} range={forecastRange} />}

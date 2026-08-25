@@ -9,9 +9,21 @@
 .today-unit { min-width: 0; display: grid; grid-template-columns: var(--ax-control-md) minmax(0, 1fr) auto; align-items: start; gap: var(--ax-space-5); padding: var(--ax-space-7) 0; border-bottom: 1px solid var(--ax-border-subtle); }
 .today-unit__order { width: var(--ax-control-md); height: var(--ax-control-md); display: grid; place-items: center; border-radius: var(--ax-radius-pill); color: var(--ax-accent-ink); background: var(--ax-color-selected); font-size: var(--ax-type-label-size); font-weight: var(--ax-type-label-weight); }
 .today-unit__body { min-width: 0; display: grid; gap: var(--ax-space-4); }
+.today-unit__expand { width: 100%; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.today-unit__expand:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); border-radius: var(--ax-radius-sm); }
 .today-unit__heading { min-width: 0; }
 .today-unit__heading h2 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); overflow-wrap: anywhere; }
 .today-unit__meta { min-width: 0; display: flex; flex-wrap: wrap; gap: var(--ax-space-3) var(--ax-space-6); color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
+.today-unit__details { display: grid; gap: var(--ax-space-2); padding: var(--ax-space-4); border-radius: var(--ax-radius-md); background: var(--ax-surface-subtle); }
+.today-unit__details p { margin: 0; color: var(--ax-text-secondary); line-height: 1.65; }
+.today-unit__details small { color: var(--ax-text-tertiary); }
+.practice-preparation__card { max-width: 680px; margin: var(--ax-space-9) auto; padding: var(--ax-space-9); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-xl); background: var(--surface); box-shadow: var(--shadow); }
+.practice-preparation__card h2 { margin: var(--ax-space-5) 0 var(--ax-space-2); }
+.practice-preparation__card p { color: var(--ax-text-secondary); line-height: 1.6; }
+.practice-preparation__card ol { display: grid; gap: var(--ax-space-3); margin: var(--ax-space-7) 0 0; padding-left: 1.4rem; color: var(--ax-text-tertiary); }
+.practice-preparation__card li.is-active { color: var(--ax-accent-ink); font-weight: 600; }
+.practice-preparation__spinner { width: 36px; height: 36px; border: 3px solid var(--ax-border-default); border-top-color: var(--ax-accent-ink); border-radius: 50%; animation: practice-preparation-spin .8s linear infinite; }
+@keyframes practice-preparation-spin { to { transform: rotate(360deg); } }
 .today-unit__aside { display: grid; justify-items: end; gap: var(--ax-space-4); }
 .today-unit__statuses, .today-unit__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-2); }
 .today-unit__actions .ax-button { min-height: var(--ax-control-sm); }
