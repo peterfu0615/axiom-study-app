@@ -3372,6 +3372,87 @@
   margin-top: 0;
 }
 
+.problem-dimension-summary,
+.problem-variant-create-card,
+.problem-variant-candidate {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.problem-dimension-summary {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.problem-dimension-summary h3,
+.problem-variant-create-card h3,
+.problem-variant-candidate h3,
+.problem-variant-candidate h4 {
+  margin: 4px 0 0;
+}
+
+.problem-variants-page,
+.problem-variant-library,
+.problem-variant-candidate {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.problem-variant-create-card {
+  display: grid;
+  gap: 14px;
+}
+
+.problem-variant-create-card > label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.problem-variant-candidate > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.problem-variant-candidate > section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.problem-variant-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.problem-variant-metadata div {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--surface-muted);
+}
+
+.problem-variant-metadata dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.problem-variant-metadata dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .problem-delete-section {
   margin-top: 22px;
   padding: 16px;

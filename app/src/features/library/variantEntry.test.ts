@@ -7,18 +7,20 @@ const today = readFileSync(new URL('../today/TodayWorkspace.tsx', import.meta.ur
 const practice = readFileSync(new URL('../practice/PracticeSetView.tsx', import.meta.url), 'utf8')
 
 describe('visible variant entry contract', () => {
-  it('keeps generation in the normal detail actions instead of edit mode', () => {
-    const actions = library.indexOf('className="problem-detail-actions"')
-    const editing = library.indexOf(") : editing ? (", actions)
-    const normal = library.indexOf(") : (", editing + 1)
-    const generate = library.indexOf('onClick={() => void openVariantDialog()}', normal)
-    expect(actions).toBeGreaterThan(-1)
-    expect(editing).toBeGreaterThan(actions)
-    expect(normal).toBeGreaterThan(editing)
-    expect(generate).toBeGreaterThan(normal)
-    expect(library.slice(editing, normal)).not.toContain('generateSingleVariant')
+  it('keeps multiple variants in a coequal detail page and candidate tabs', () => {
+    expect(library).toContain("type DetailTab = 'content' | 'knowledge' | 'method' | 'classification' | 'variants'")
+    expect(library).toContain("{ value: 'variants', label: '变式' }")
+    expect(library).toContain('ariaLabel="已保存变式"')
+    expect(library).toContain('listProblemVariantCandidates')
     expect(library).not.toContain('生成变式前还需：')
     expect(library).toContain('最后一项完成后会自动开始生成')
+  })
+
+  it('saves manual variants without starting a one-question practice route', () => {
+    expect(library).toContain('手动生成只会加入候选池，不会立刻开始练习')
+    expect(library).not.toContain('createPracticeSetFromVariantPreview')
+    expect(library).not.toContain('加入今日练习并开始')
+    expect(library).toContain('返回候选池')
   })
 
   it('explains automatic variants and visible fallback reasons', () => {

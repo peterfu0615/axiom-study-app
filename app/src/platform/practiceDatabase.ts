@@ -22,6 +22,7 @@ import { getPreferredDiagram } from './diagramDatabase'
 import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
 import { renderTikz } from './native'
 import type { DiagramValidationContract, TikzRenderResult } from '../domain/diagram'
+import type { VariantLevel } from '../domain/variantPractice'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -522,7 +523,11 @@ async function ensureSingleProblemBundle(source: PracticeProblemCandidate) {
   return saved.skill_bundle_id
 }
 
-export async function prepareSingleProblemVariant(problemId: string): Promise<SingleVariantPreview> {
+export async function prepareSingleProblemVariant(
+  problemId: string,
+  targetDifficulty?: DifficultyLevel,
+  variationLevel: VariantLevel = 'numeric',
+): Promise<SingleVariantPreview> {
   const [problem, solution, problemTags, diagram] = await Promise.all([
     getSavedProblem(problemId), getProblemSolution(problemId), listProblemTags(problemId),
     getPreferredDiagram('problem', problemId),
@@ -548,25 +553,11 @@ export async function prepareSingleProblemVariant(problemId: string): Promise<Si
     originalDifficulty: problem.libraryMetadata.difficulty, relevance: 100,
   }
   source.targetSkillBundleId = await ensureSingleProblemBundle(source)
-  const outcome = await generateVerifiedPracticeVariant({ source, targetDifficulty: source.originalDifficulty })
+  const outcome = await generateVerifiedPracticeVariant({
+    source, targetDifficulty: targetDifficulty ?? source.originalDifficulty, variationLevel,
+  })
   if (!outcome.variant) throw new Error(`变式未通过安全审校：${outcome.fallbackCode ?? 'unknown'}`)
   return { source, outcome }
-}
-
-export async function createPracticeSetFromVariantPreview(preview: SingleVariantPreview) {
-  const bundleId = preview.source.targetSkillBundleId
-  if (!bundleId) throw new Error('变式题缺少能力组合')
-  const targets: PracticeTargetSkill[] = [
-    { id: `bundle:${bundleId}`, name: '单题变式', type: 'model', state: null },
-    ...preview.source.targetTags.filter((tag) => tag.id).map((tag) => ({
-      id: tag.id!, name: tag.name, type: tag.type as PracticeTargetSkill['type'], state: null,
-    })),
-  ]
-  return createPracticeSet({
-    sourceType: 'skill', sourceRef: `variant:${preview.outcome.planId}`, subject: preview.source.subject,
-    targetSkills: targets, relatedProblems: [preview.source], recentFailureCount: 0,
-    desiredBudget: 1, sessionMode: 'standard',
-  }, { preparedVariants: new Map([[preview.source.problemId, preview.outcome]]), forceVariant: true })
 }
 
 export async function getOrCreatePracticeSetFromReviewUnit(

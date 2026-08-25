@@ -7,6 +7,7 @@ import { normalizeGeometryScene } from './geometryScene'
 
 export const VARIANT_PROMPT_VERSION = 'variant-practice-v2'
 export const VARIANT_SCHEMA_VERSION = 'variant-practice-v2'
+export type VariantLevel = 'numeric' | 'condition' | 'rebuild'
 
 export type VariantChangeKind =
   | 'numeric_values'
@@ -26,6 +27,7 @@ export interface VariantPlanInvariant {
   targetMethodTagIds: string[]
   targetModelTagIds: string[]
   targetDifficulty: DifficultyLevel
+  variationLevel: VariantLevel
   requiredSteps: string[]
   diagramPolicy: 'none' | 'preserve_or_regenerate'
 }
@@ -37,6 +39,7 @@ export interface PracticeVariantPlan {
   skillBundleId: string | null
   targetTags: ReviewTag[]
   targetDifficulty: DifficultyLevel
+  variationLevel: VariantLevel
   invariants: VariantPlanInvariant
   allowedChanges: VariantChangeKind[]
   forbiddenChanges: string[]
@@ -91,10 +94,11 @@ export interface PracticeVariantVerificationInput {
   candidate: PracticeVariantCandidate
 }
 
-const allowedChanges: VariantChangeKind[] = [
-  'numeric_values', 'symbols_or_names', 'narrative_order', 'real_world_context',
-  'diagram_orientation', 'nonessential_distractor', 'known_condition',
-]
+const allowedChangesByLevel: Record<VariantLevel, VariantChangeKind[]> = {
+  numeric: ['numeric_values', 'symbols_or_names', 'nonessential_distractor'],
+  condition: ['numeric_values', 'symbols_or_names', 'known_condition', 'narrative_order'],
+  rebuild: ['numeric_values', 'symbols_or_names', 'narrative_order', 'real_world_context', 'diagram_orientation', 'nonessential_distractor', 'known_condition'],
+}
 
 const forbiddenChanges = [
   'swap_condition_and_conclusion', 'inverse_proposition', 'remove_required_method',
@@ -127,6 +131,7 @@ export function createPracticeVariantPlan(input: {
   id: string
   source: PracticeProblemCandidate
   targetDifficulty: DifficultyLevel
+  variationLevel?: VariantLevel
   createdAt?: number
 }): PracticeVariantPlan {
   const targetTags = input.source.targetTags.filter((tag) => tag.type !== 'error' && Boolean(tag.id))
@@ -138,9 +143,11 @@ export function createPracticeVariantPlan(input: {
     targetMethodTagIds: tagIds('method'),
     targetModelTagIds: tagIds('model'),
     targetDifficulty: input.targetDifficulty,
+    variationLevel: input.variationLevel ?? 'numeric',
     requiredSteps: solutionSteps(input.source.solutionJson),
     diagramPolicy: input.source.diagramImagePaths.length || input.source.diagramIds.length ? 'preserve_or_regenerate' : 'none',
   }
+  const variationLevel = input.variationLevel ?? 'numeric'
   return {
     id: input.id,
     subject: input.source.subject,
@@ -148,13 +155,15 @@ export function createPracticeVariantPlan(input: {
     skillBundleId: input.source.targetSkillBundleId ?? null,
     targetTags,
     targetDifficulty: input.targetDifficulty,
+    variationLevel,
     invariants,
-    allowedChanges,
+    allowedChanges: allowedChangesByLevel[variationLevel],
     forbiddenChanges,
     sourceInputHash: stableInputHash(JSON.stringify({
       statement: input.source.statementMarkdown,
       answer: input.source.canonicalAnswer,
       solution: input.source.solutionJson,
+      variationLevel,
       invariants,
     })),
     promptVersion: VARIANT_PROMPT_VERSION,

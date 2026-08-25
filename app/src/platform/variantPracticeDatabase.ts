@@ -13,12 +13,73 @@ import {
   type PracticeVariantCandidate,
   type PracticeVariantPlan,
   type PracticeVariantVerification,
+  type VariantLevel,
 } from '../domain/variantPractice'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
 const select = <T>(sql: string, params: unknown[] = []) => invoke<T>('db_select', { sql, params })
 const uuid = () => crypto.randomUUID()
+
+export function stableVariantFingerprint(candidate: Pick<PracticeVariantCandidate, 'subject' | 'statementMarkdown' | 'options' | 'canonicalAnswer'>) {
+  const normalized = JSON.stringify({
+    subject: candidate.subject.trim().toLowerCase(),
+    statement: candidate.statementMarkdown.toLowerCase().replace(/\s+/gu, ''),
+    options: candidate.options?.map((value) => value.toLowerCase().replace(/\s+/gu, '')) ?? null,
+    answer: candidate.canonicalAnswer.toLowerCase().replace(/\s+/gu, ''),
+  })
+  let hash = 2166136261
+  for (const character of normalized) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return `variant-fnv1a:${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
+export interface StoredVariantCandidate {
+  id: string | null
+  planId: string
+  planStatus: 'planned' | 'generating' | 'verified' | 'rejected' | 'failed' | 'superseded'
+  candidateStatus: 'generated' | 'verified' | 'rejected' | null
+  targetDifficulty: DifficultyLevel
+  variationLevel: VariantLevel
+  candidate: PracticeVariantCandidate | null
+  verification: PracticeVariantVerification | null
+  validationErrors: string[]
+  instanceFingerprint: string
+  failureCode: string | null
+  createdAt: number
+}
+
+export async function listProblemVariantCandidates(problemId: string): Promise<StoredVariantCandidate[]> {
+  const rows = await select<Array<{
+    id: string | null; plan_id: string; plan_status: StoredVariantCandidate['planStatus']
+    candidate_status: StoredVariantCandidate['candidateStatus']; target_difficulty: DifficultyLevel
+    variation_level: VariantLevel; candidate_json: string | null; verification_json: string | null
+    validation_errors_json: string | null; instance_fingerprint: string | null
+    failure_code: string | null; created_at: number
+  }>>(
+    `SELECT candidate.id,plan.id AS plan_id,plan.status AS plan_status,candidate.status AS candidate_status,
+       plan.target_difficulty,plan.variation_level,candidate.candidate_json,candidate.verification_json,
+       candidate.validation_errors_json,candidate.instance_fingerprint,plan.failure_code,
+       COALESCE(candidate.created_at,plan.created_at) AS created_at
+     FROM variant_plans plan
+     LEFT JOIN variant_candidates candidate ON candidate.variant_plan_id=plan.id
+     WHERE plan.source_problem_id=$1
+     ORDER BY COALESCE(candidate.created_at,plan.created_at) DESC,plan.id,candidate.id`,
+    [problemId],
+  )
+  return rows.map((row) => ({
+    id: row.id, planId: row.plan_id, planStatus: row.plan_status,
+    candidateStatus: row.candidate_status, targetDifficulty: row.target_difficulty,
+    variationLevel: row.variation_level,
+    candidate: row.candidate_json ? JSON.parse(row.candidate_json) : null,
+    verification: row.verification_json ? JSON.parse(row.verification_json) : null,
+    validationErrors: row.validation_errors_json ? JSON.parse(row.validation_errors_json) : [],
+    instanceFingerprint: row.instance_fingerprint ?? '', failureCode: row.failure_code,
+    createdAt: Number(row.created_at),
+  }))
+}
 
 export interface PreparedPracticeVariant {
   plan: PracticeVariantPlan
@@ -39,6 +100,7 @@ export interface PracticeVariantPreparationOutcome {
 interface CachedVariantRow {
   plan_id: string; subject: string; source_problem_id: string; skill_bundle_id: string | null
   target_tags_json: string; target_difficulty: DifficultyLevel; invariants_json: string
+  variation_level: VariantLevel
   allowed_changes_json: string; forbidden_changes_json: string; source_input_hash: string
   prompt_version: PracticeVariantPlan['promptVersion']; schema_version: PracticeVariantPlan['schemaVersion']
   plan_created_at: number; candidate_json: string; verification_json: string
@@ -48,7 +110,7 @@ interface CachedVariantRow {
 async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPracticeVariant | null> {
   const rows = await select<CachedVariantRow[]>(
     `SELECT plan.id AS plan_id,plan.subject,plan.source_problem_id,plan.skill_bundle_id,
-      plan.target_tags_json,plan.target_difficulty,plan.invariants_json,plan.allowed_changes_json,
+      plan.target_tags_json,plan.target_difficulty,plan.variation_level,plan.invariants_json,plan.allowed_changes_json,
       plan.forbidden_changes_json,plan.source_input_hash,plan.prompt_version,plan.schema_version,
       plan.created_at AS plan_created_at,candidate.candidate_json,candidate.verification_json,
       generation.provider,generation.model,generation.id AS generation_run_id,
@@ -57,8 +119,8 @@ async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPra
      JOIN variant_candidates candidate ON candidate.id=plan.selected_candidate_id AND candidate.status='verified'
      JOIN variant_model_runs generation ON generation.id=candidate.generation_model_run_id
      JOIN variant_model_runs verification ON verification.id=candidate.verification_model_run_id
-     WHERE plan.source_problem_id=$1 AND plan.target_difficulty=$2 AND plan.source_input_hash=$3
-       AND plan.prompt_version=$4 AND plan.schema_version=$5 AND plan.status='verified'
+     WHERE plan.source_problem_id=$1 AND plan.target_difficulty=$2 AND plan.variation_level=$3 AND plan.source_input_hash=$4
+       AND plan.prompt_version=$5 AND plan.schema_version=$6 AND plan.status='verified'
        AND NOT EXISTS (
          SELECT 1 FROM practice_items used_item
          JOIN practice_responses used_response ON used_response.practice_item_id=used_item.id
@@ -66,7 +128,7 @@ async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPra
          WHERE used_item.variant_plan_id=plan.id
        )
      ORDER BY plan.updated_at DESC LIMIT 1`,
-    [plan.sourceProblemId, plan.targetDifficulty, plan.sourceInputHash, plan.promptVersion, plan.schemaVersion],
+    [plan.sourceProblemId, plan.targetDifficulty, plan.variationLevel, plan.sourceInputHash, plan.promptVersion, plan.schemaVersion],
   )
   const row = Array.isArray(rows) ? rows[0] : undefined
   if (!row) return null
@@ -75,6 +137,7 @@ async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPra
       id: row.plan_id, subject: row.subject, sourceProblemId: row.source_problem_id,
       skillBundleId: row.skill_bundle_id, targetTags: JSON.parse(row.target_tags_json),
       targetDifficulty: row.target_difficulty, invariants: JSON.parse(row.invariants_json),
+      variationLevel: row.variation_level,
       allowedChanges: JSON.parse(row.allowed_changes_json), forbiddenChanges: JSON.parse(row.forbidden_changes_json),
       sourceInputHash: row.source_input_hash, promptVersion: row.prompt_version,
       schemaVersion: row.schema_version, createdAt: Number(row.plan_created_at),
@@ -87,12 +150,12 @@ async function findCachedVariant(plan: PracticeVariantPlan): Promise<PreparedPra
 
 async function persistPlan(plan: PracticeVariantPlan) {
   await execute(`INSERT INTO variant_plans(
-    id,subject,source_problem_id,skill_bundle_id,target_tags_json,target_difficulty,
+    id,subject,source_problem_id,skill_bundle_id,target_tags_json,target_difficulty,variation_level,
     invariants_json,allowed_changes_json,forbidden_changes_json,source_input_hash,
     prompt_version,schema_version,status,created_at,updated_at
-  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'planned',$13,$13)`, [
+  ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'planned',$14,$14)`, [
     plan.id, plan.subject, plan.sourceProblemId, plan.skillBundleId, JSON.stringify(plan.targetTags),
-    plan.targetDifficulty, JSON.stringify(plan.invariants), JSON.stringify(plan.allowedChanges),
+    plan.targetDifficulty, plan.variationLevel, JSON.stringify(plan.invariants), JSON.stringify(plan.allowedChanges),
     JSON.stringify(plan.forbiddenChanges), plan.sourceInputHash, plan.promptVersion, plan.schemaVersion, plan.createdAt,
   ])
 }
@@ -139,9 +202,10 @@ async function failRun(run: { id: string; createdAt: number }, reason: unknown) 
 
 async function insertCandidate(planId: string, generationRunId: string, candidate: PracticeVariantCandidate) {
   const id = uuid()
+  const fingerprint = stableVariantFingerprint(candidate)
   await execute(`INSERT INTO variant_candidates(
-    id,variant_plan_id,generation_model_run_id,candidate_json,status,created_at
-  ) VALUES($1,$2,$3,$4,'generated',$5)`, [id, planId, generationRunId, JSON.stringify(candidate), Date.now()])
+    id,variant_plan_id,generation_model_run_id,candidate_json,instance_fingerprint,status,created_at
+  ) VALUES($1,$2,$3,$4,$5,'generated',$6)`, [id, planId, generationRunId, JSON.stringify(candidate), fingerprint, Date.now()])
   return id
 }
 
@@ -162,8 +226,9 @@ async function verifyCandidate(candidateId: string, verificationRunId: string, v
 export async function generateVerifiedPracticeVariant(input: {
   source: PracticeProblemCandidate
   targetDifficulty: DifficultyLevel
+  variationLevel?: VariantLevel
 }): Promise<PracticeVariantPreparationOutcome> {
-  const plan = createPracticeVariantPlan({ id: uuid(), source: input.source, targetDifficulty: input.targetDifficulty })
+  const plan = createPracticeVariantPlan({ id: uuid(), source: input.source, targetDifficulty: input.targetDifficulty, variationLevel: input.variationLevel })
   const cached = await findCachedVariant(plan)
   if (cached) return { planId: cached.plan.id, variant: cached, fallbackCode: null }
   await persistPlan(plan)

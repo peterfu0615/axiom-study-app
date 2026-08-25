@@ -110,6 +110,7 @@ function bool(value: unknown, field: string) {
 export function buildPracticeVariantGenerationPrompt(input: PracticeVariantGenerationInput) {
   return `你是中国中学受约束变式题生成器。生成一道新题以检验迁移能力，不得只是复制或改写标点。
 必须严格保持 plan.invariants 中的科目、核心知识点、核心方法、题型模型、难度和必要步骤；只能使用 allowedChanges，绝不能使用 forbiddenChanges。
+变化等级必须服从 plan.variationLevel：numeric 只改变数字、符号、名称或非关键干扰项；condition 可替换、增减或重组已知条件与数据，但必须保持结论、核心知识和解法，禁止条件与结论互换；rebuild 可更换情境、叙述和图形表现，但仍须保持知识、方法、题型模型与目标难度。
 若原题有图且变化后仍完全兼容，diagram_policy 使用 preserved；若改变朝向、标签、数值或关系，必须使用 generated 并返回受控 GeometryScene；无图使用 none。
 选择题 canonical_answer 必须是 options 数组中的完整选项文本。数学内容使用 Markdown/LaTeX。只返回符合 JSON Schema 的 JSON。
 

@@ -78,18 +78,42 @@ import {
 } from '../../platform/geometrySceneDatabase'
 import { getPreferredDiagram } from '../../platform/diagramDatabase'
 import {
-  createPracticeSetFromVariantPreview,
   getSingleVariantPrerequisites,
   prepareSingleProblemVariant,
   type SingleVariantPrerequisites,
   type SingleVariantPreview,
 } from '../../platform/practiceDatabase'
-import type { PracticeSet } from '../../domain/practice'
-import { PracticeSetView } from '../practice/PracticeSetView'
 import { MathMarkdown } from '../../components/MathMarkdown'
+import {
+  listProblemVariantCandidates,
+  type StoredVariantCandidate,
+} from '../../platform/variantPracticeDatabase'
+import type { VariantLevel } from '../../domain/variantPractice'
 
 type LibraryView = 'active' | 'archived' | 'trash'
-type DetailTab = 'content' | 'info'
+type DetailTab = 'content' | 'knowledge' | 'method' | 'classification' | 'variants'
+
+const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' } as const
+const difficultyValues = ['basic', 'intermediate', 'advanced'] as const
+const variationValues = ['numeric', 'condition', 'rebuild'] as const
+const variationLabels: Record<VariantLevel, string> = {
+  numeric: '改变数字',
+  condition: '调整已知条件',
+  rebuild: '重新构建',
+}
+
+function variantSolutionMarkdown(value: string) {
+  try {
+    const parsed = JSON.parse(value) as {
+      contentMarkdown?: string
+      content_markdown?: string
+      steps?: Array<{ content?: string; contentMarkdown?: string; content_markdown?: string }>
+    }
+    const content = parsed.contentMarkdown ?? parsed.content_markdown
+    if (content?.trim()) return content
+    return (parsed.steps ?? []).map((step) => step.content ?? step.contentMarkdown ?? step.content_markdown ?? '').filter(Boolean).join('\n\n')
+  } catch { return value }
+}
 
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
@@ -301,8 +325,10 @@ export function ProblemLibrary() {
   const [variantDraftSubject, setVariantDraftSubject] = useState('')
   const [variantDraftStem, setVariantDraftStem] = useState('')
   const [variantDraftDifficulty, setVariantDraftDifficulty] = useState<'basic' | 'intermediate' | 'advanced'>('intermediate')
+  const [variantLevel, setVariantLevel] = useState<VariantLevel>('numeric')
   const [singleVariantPreview, setSingleVariantPreview] = useState<SingleVariantPreview | null>(null)
-  const [activePracticeSet, setActivePracticeSet] = useState<PracticeSet | null>(null)
+  const [storedVariants, setStoredVariants] = useState<StoredVariantCandidate[]>([])
+  const [activeVariantKey, setActiveVariantKey] = useState('')
   const [duplicateDecisionIds, setDuplicateDecisionIds] = useState<Set<string>>(new Set())
   const [batchMode, setBatchMode] = useState(false)
   const [batchProblemIds, setBatchProblemIds] = useState<Set<string>>(new Set())
@@ -535,6 +561,33 @@ export function ProblemLibrary() {
       : [],
     [duplicateDecisionIds, problems, selected],
   )
+  const activeStoredVariant = storedVariants.find((item) => (item.id ?? item.planId) === activeVariantKey) ?? storedVariants[0] ?? null
+  const detailTags = selected?.libraryMetadata.tags.filter((tag) => {
+    if (detailTab === 'knowledge') return tag.type === 'knowledge'
+    if (detailTab === 'method') return tag.type === 'method'
+    if (detailTab === 'classification') return tag.type === 'model' || tag.type === 'error'
+    return false
+  }) ?? []
+
+  const refreshStoredVariants = useCallback(async (problemId: string) => {
+    const candidates = await listProblemVariantCandidates(problemId)
+    if (selectedIdRef.current !== problemId) return
+    setStoredVariants(candidates)
+    setActiveVariantKey((current) => candidates.some((item) => (item.id ?? item.planId) === current)
+      ? current
+      : (candidates[0]?.id ?? candidates[0]?.planId ?? ''))
+  }, [])
+
+  useEffect(() => {
+    if (!selectedId) {
+      setStoredVariants([])
+      setActiveVariantKey('')
+      return
+    }
+    void refreshStoredVariants(selectedId).catch(() => {
+      if (selectedIdRef.current === selectedId) setStoredVariants([])
+    })
+  }, [refreshStoredVariants, selectedId])
 
   useEffect(() => {
     // Guard against out-of-order responses when switching problems quickly:
@@ -786,7 +839,8 @@ export function ProblemLibrary() {
     setVariantBusy(true)
     setVariantDialogError(null)
     try {
-      setSingleVariantPreview(await prepareSingleProblemVariant(selected.id))
+      setSingleVariantPreview(await prepareSingleProblemVariant(selected.id, variantDraftDifficulty, variantLevel))
+      await refreshStoredVariants(selected.id)
     } catch (error) {
       setVariantDialogError(String(error instanceof Error ? error.message : error))
     } finally {
@@ -800,7 +854,6 @@ export function ProblemLibrary() {
     setVariantPrerequisites(snapshot)
     setVariantDraftSubject((current) => current || snapshot.subject)
     setVariantDraftStem((current) => current || snapshot.stemMarkdown)
-    if (snapshot.difficulty) setVariantDraftDifficulty(snapshot.difficulty)
     if (autoGenerate && snapshot.missing.length === 0 && !variantBusy && !singleVariantPreview) {
       await generateSingleVariant()
     }
@@ -866,20 +919,6 @@ export function ProblemLibrary() {
     // prerequisite refresh itself updates local dialog state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [solution?.status, variantDialogOpen])
-
-  const startSingleVariantPractice = async () => {
-    if (!singleVariantPreview) return
-    setVariantBusy(true)
-    try {
-      setActivePracticeSet(await createPracticeSetFromVariantPreview(singleVariantPreview))
-      setSingleVariantPreview(null)
-      setVariantDialogOpen(false)
-    } catch (error) {
-      notify(`无法创建单题练习：${String(error)}`, 'error')
-    } finally {
-      setVariantBusy(false)
-    }
-  }
 
   const toggleArchive = async () => {
     if (!selected) return
@@ -1147,14 +1186,6 @@ export function ProblemLibrary() {
     }
   }
 
-  if (activePracticeSet) {
-    return <PracticeSetView
-      onBack={() => setActivePracticeSet(null)}
-      onOpenPracticeSet={setActivePracticeSet}
-      practiceSet={activePracticeSet}
-    />
-  }
-
   if (recropping && selected) {
     return (
       <ProblemCropEditor
@@ -1362,15 +1393,6 @@ export function ProblemLibrary() {
                     </>
                   ) : (
                     <>
-                      <button
-                        className="secondary-action"
-                        disabled={updating || variantBusy}
-                        onClick={() => void openVariantDialog()}
-                        title="生成并独立审校一道变式题"
-                        type="button"
-                      >
-                        {variantBusy ? '生成中…' : '生成变式'}
-                      </button>
                       <IconButton
                         aria-pressed={selected.libraryMetadata.favorite}
                         className={selected.libraryMetadata.favorite ? 'is-favorite' : ''}
@@ -1468,7 +1490,13 @@ export function ProblemLibrary() {
                   <SegmentedControl
                     ariaLabel="错题详情视图"
                     onChange={setDetailTab}
-                    options={[{ value: 'content', label: '题目内容' }, { value: 'info', label: '信息' }]}
+                    options={[
+                      { value: 'content', label: '题目内容' },
+                      { value: 'knowledge', label: '知识点' },
+                      { value: 'method', label: '方法' },
+                      { value: 'classification', label: '题型与错误' },
+                      { value: 'variants', label: '变式' },
+                    ]}
                     value={detailTab}
                   />
 
@@ -1734,8 +1762,90 @@ export function ProblemLibrary() {
                       />
 
                     </div>
+                  ) : detailTab === 'variants' ? (
+                    <div className="problem-variants-page">
+                      <section className="problem-variant-create-card">
+                        <div>
+                          <p className="eyebrow">多变式候选池</p>
+                          <h3>生成并保存新的变式</h3>
+                          <p>手动生成只会加入候选池，不会立刻开始练习。每个候选都需经过独立求解与审校。</p>
+                        </div>
+                        <label>
+                          <span>难度</span>
+                          <input
+                            aria-label="变式难度"
+                            max={2}
+                            min={0}
+                            onChange={(event) => setVariantDraftDifficulty(difficultyValues[Number(event.target.value)])}
+                            step={1}
+                            type="range"
+                            value={difficultyValues.indexOf(variantDraftDifficulty)}
+                          />
+                          <small>{difficultyLabels[variantDraftDifficulty]}</small>
+                        </label>
+                        <label>
+                          <span>变化</span>
+                          <input
+                            aria-label="变式变化等级"
+                            max={2}
+                            min={0}
+                            onChange={(event) => setVariantLevel(variationValues[Number(event.target.value)])}
+                            step={1}
+                            type="range"
+                            value={variationValues.indexOf(variantLevel)}
+                          />
+                          <small>{variationLabels[variantLevel]}</small>
+                        </label>
+                        <Button disabled={variantBusy} loading={variantBusy} onClick={() => void openVariantDialog()} variant="primary">
+                          生成变式
+                        </Button>
+                      </section>
+
+                      {storedVariants.length ? <section className="problem-variant-library">
+                        <SegmentedControl
+                          ariaLabel="已保存变式"
+                          onChange={setActiveVariantKey}
+                          options={storedVariants.map((item, index) => ({
+                            value: item.id ?? item.planId,
+                            label: `变式 ${index + 1} · ${difficultyLabels[item.targetDifficulty]}`,
+                          }))}
+                          value={activeStoredVariant?.id ?? activeStoredVariant?.planId ?? ''}
+                        />
+                        {activeStoredVariant && <article className="problem-variant-candidate">
+                          <header>
+                            <div>
+                              <p className="eyebrow">{variationLabels[activeStoredVariant.variationLevel]} · {difficultyLabels[activeStoredVariant.targetDifficulty]}</p>
+                              <h3>{activeStoredVariant.candidateStatus === 'verified' ? '已验证候选' : activeStoredVariant.planStatus === 'generating' ? '生成与审校中' : activeStoredVariant.planStatus === 'failed' || activeStoredVariant.planStatus === 'rejected' ? '生成失败' : '候选状态'}</h3>
+                            </div>
+                            <small>{dateFormatter.format(activeStoredVariant.createdAt)}</small>
+                          </header>
+                          {activeStoredVariant.candidate ? <>
+                            <section><h4>题干</h4><MathMarkdown>{activeStoredVariant.candidate.statementMarkdown}</MathMarkdown></section>
+                            <section><h4>答案</h4><MathMarkdown>{activeStoredVariant.candidate.canonicalAnswer}</MathMarkdown></section>
+                            <section><h4>解答</h4><MathMarkdown>{variantSolutionMarkdown(activeStoredVariant.candidate.solutionJson)}</MathMarkdown></section>
+                            <dl className="problem-variant-metadata">
+                              <div><dt>审校</dt><dd>{activeStoredVariant.candidateStatus === 'verified' ? '独立审校通过' : activeStoredVariant.candidateStatus ?? activeStoredVariant.planStatus}</dd></div>
+                              <div><dt>实例指纹</dt><dd title={activeStoredVariant.instanceFingerprint}>{activeStoredVariant.instanceFingerprint || '生成后写入'}</dd></div>
+                            </dl>
+                          </> : <p>{activeStoredVariant.failureCode ? `安全错误：${activeStoredVariant.failureCode}` : '候选尚未生成完成。'}</p>}
+                          {activeStoredVariant.validationErrors.length > 0 && <div className="ai-warning-list">
+                            {activeStoredVariant.validationErrors.map((error) => <p key={error}>{error}</p>)}
+                          </div>}
+                        </article>}
+                      </section> : <div className="empty-detail-state"><strong>还没有变式</strong><p>选择难度与变化等级后生成第一道候选。</p></div>}
+                    </div>
                   ) : (
                     <div className="problem-information-page">
+                      <section className="problem-dimension-summary">
+                        <div>
+                          <p className="eyebrow">{detailTab === 'knowledge' ? '知识点' : detailTab === 'method' ? '方法' : '题型与错误'}</p>
+                          <h3>{detailTab === 'knowledge' ? '本题知识结构' : detailTab === 'method' ? '解题方法' : '题型模型与错误类型'}</h3>
+                        </div>
+                        <div className="ai-tag-list">
+                          {detailTags.length ? detailTags.map((tag) => <span key={`${tag.type}:${tag.id ?? tag.name}`}>{tag.name}</span>) : <span>待确认</span>}
+                        </div>
+                        {detailTab === 'classification' && selected.aiProblemType && <p>AI 题型：{selected.aiProblemType}</p>}
+                      </section>
                       <dl className="problem-metadata">
                         <div>
                           <dt>状态</dt>
@@ -2008,7 +2118,7 @@ export function ProblemLibrary() {
       <Dialog
         onClose={() => { if (!variantBusy) { setVariantDialogOpen(false); setSingleVariantPreview(null) } }}
         open={variantDialogOpen}
-        title={singleVariantPreview ? '变式题预览' : '生成变式'}
+        title={singleVariantPreview ? '变式已保存' : '生成变式'}
       >
         {!variantPrerequisites && !variantDialogError && <FlowingTaskSurface compact state="running" title="正在检查题目条件" />}
         {variantBusy && !singleVariantPreview && <FlowingTaskSurface compact detail="正在生成、独立求解并校验题目" state="running" title="正在生成变式题" />}
@@ -2041,7 +2151,7 @@ export function ProblemLibrary() {
           <div className="curriculum-dialog-actions"><Button onClick={() => setVariantDialogOpen(false)} variant="ghost">关闭</Button><Button onClick={() => void refreshVariantPrerequisites(true)} variant="primary">重试</Button></div>
         </div>}
         {singleVariantPreview?.outcome.variant && <div className="problem-edit-form">
-          <p>该变式已通过独立求解、标签、难度和必要步骤审校。</p>
+          <p>该变式已通过独立求解、标签、难度和必要步骤审校，并保存到统一候选池。</p>
           <section>
             <small>原题</small>
             <MathMarkdown>{singleVariantPreview.source.statementMarkdown}</MathMarkdown>
@@ -2056,8 +2166,7 @@ export function ProblemLibrary() {
             ))}
           </div>
           <div className="curriculum-dialog-actions">
-            <Button disabled={variantBusy} onClick={() => { setSingleVariantPreview(null); setVariantDialogOpen(false) }} variant="ghost">关闭</Button>
-            <Button loading={variantBusy} onClick={() => void startSingleVariantPractice()} variant="primary">加入今日练习并开始</Button>
+            <Button disabled={variantBusy} onClick={() => { setSingleVariantPreview(null); setVariantDialogOpen(false) }} variant="primary">返回候选池</Button>
           </div>
         </div>}
       </Dialog>

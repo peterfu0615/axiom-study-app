@@ -17,6 +17,37 @@ const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('
 const select = <T>(sql: string, params: unknown[] = []) => invoke<T>('db_select', { sql, params })
 const uuid = () => crypto.randomUUID()
 
+async function recordPracticeInstanceExposures(practiceSetId: string, reason: 'export' | 'practice_open') {
+  const rows = await select<Array<{
+    practice_item_id: string
+    source_problem_id: string
+    variant_candidate_id: string | null
+    instance_fingerprint: string | null
+  }>>(`SELECT item.id AS practice_item_id,item.source_problem_id,
+      candidate.id AS variant_candidate_id,candidate.instance_fingerprint
+    FROM practice_items item
+    LEFT JOIN variant_plans plan ON plan.id=item.variant_plan_id
+    LEFT JOIN variant_candidates candidate ON candidate.id=plan.selected_candidate_id
+    WHERE item.practice_set_id=$1 AND item.source_problem_id IS NOT NULL`, [practiceSetId])
+  const now = Date.now()
+  for (const row of rows) {
+    await execute(`INSERT OR IGNORE INTO practice_instance_exposures(
+      id,practice_set_id,practice_item_id,source_problem_id,variant_candidate_id,
+      instance_fingerprint,exposed_at,reason
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [
+      uuid(), practiceSetId, row.practice_item_id, row.source_problem_id,
+      row.variant_candidate_id,
+      row.instance_fingerprint || `original:${row.source_problem_id}`,
+      now, reason,
+    ])
+  }
+}
+
+async function recordExposureWithoutBlocking(practiceSetId: string, reason: 'export' | 'practice_open') {
+  try { await recordPracticeInstanceExposures(practiceSetId, reason) }
+  catch (error) { console.warn(`记录练习 ${practiceSetId} 的实例曝光失败：`, error) }
+}
+
 export interface PracticeDocumentRecord extends CompletePdfRenderResult {
   id: string
   practiceSetId: string
@@ -170,7 +201,7 @@ async function readReadyDocument(practiceSet: PracticeSet): Promise<PracticeDocu
       grouped.set(Number(row.page_index), page)
     }
     if (!grouped.size || !candidate.file_path || !(await practicePdfExists(candidate.file_path))) continue
-    return {
+    const record: PracticeDocumentRecord = {
       documentId: candidate.id, filePath: candidate.file_path, contentHash: candidate.content_hash,
       rendererVersion: metadata.rendererVersion ?? PRACTICE_RENDERER_CONTRACT, pageCount: Number(candidate.page_count),
       byteLength: Number(metadata.byteLength ?? 0), cacheHit: true,
@@ -179,6 +210,8 @@ async function readReadyDocument(practiceSet: PracticeSet): Promise<PracticeDocu
       id: candidate.id, practiceSetId: practiceSet.id, attemptId: candidate.attempt_id,
       documentType: 'complete', layoutVersion: candidate.layout_version, status: 'ready',
     }
+    await recordExposureWithoutBlocking(practiceSet.id, 'practice_open')
+    return record
   }
   return null
 }
@@ -252,6 +285,7 @@ export async function exportPracticePdf(practiceSet: PracticeSet) {
     const document = await atStage('document_build', practiceSet.id, () => buildCompletePracticeDocument(hydrated, { attemptId, generatedAt: practiceSet.createdAt }))
     const rendered = await atStage('render_pdf', practiceSet.id, () => renderCompletePracticePdf(document))
     const persisted = await atStage('persistence', practiceSet.id, () => persistDocument(document, rendered))
+    await recordExposureWithoutBlocking(practiceSet.id, 'export')
     await transitionPracticeSessionForSet(practiceSet.id, {
       to: 'exported', safeCode: 'practice_pdf_ready',
       metadata: { documentId: persisted.id, layoutVersion: persisted.layoutVersion, pageCount: persisted.pageCount },

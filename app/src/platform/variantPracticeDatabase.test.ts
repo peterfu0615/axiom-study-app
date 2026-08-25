@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { MockAIProvider, setAIProviderForTests, type AIProvider } from '../ai/provider'
 import type { PracticeProblemCandidate } from '../domain/practice'
-import { generateVerifiedPracticeVariant } from './variantPracticeDatabase'
+import { generateVerifiedPracticeVariant, listProblemVariantCandidates, stableVariantFingerprint } from './variantPracticeDatabase'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
@@ -60,6 +60,26 @@ describe('variant practice persistence pipeline', () => {
     expect(outcome.variant?.candidate.statementMarkdown).toContain('3y')
     expect(outcome.variant?.generationModelRunId).not.toBe(outcome.variant?.verificationModelRunId)
     expect(mockedInvoke.mock.calls.some(([, input]) => String((input as { sql?: unknown }).sql).includes("status='verified'"))).toBe(true)
+    expect(mockedInvoke.mock.calls.some(([, input]) => String((input as { sql?: unknown }).sql).includes('variation_level'))).toBe(true)
+  })
+
+  it('normalizes equivalent candidate surfaces into one instance fingerprint', () => {
+    const candidate = provider().generatePracticeVariant
+    expect(candidate).toBeTypeOf('function')
+    const left = { subject: '数学', statementMarkdown: '解方程 $3x = 9$', options: null, canonicalAnswer: 'x = 3' }
+    const right = { subject: ' 数学 ', statementMarkdown: '解方程\n$3x=9$', options: null, canonicalAnswer: 'x=3' }
+    expect(stableVariantFingerprint(left)).toBe(stableVariantFingerprint(right))
+  })
+
+  it('lists every saved status with difficulty, variation level and provenance', async () => {
+    mockedInvoke.mockResolvedValueOnce([{ id: 'candidate-1', plan_id: 'plan-1', plan_status: 'verified',
+      candidate_status: 'verified', target_difficulty: 'advanced', variation_level: 'rebuild',
+      candidate_json: JSON.stringify({ subject: '数学', statementMarkdown: '新题', options: null, canonicalAnswer: '1', solutionJson: '{}', difficulty: 'advanced', targetTagIds: [], changes: [], diagramPolicy: 'none' }),
+      verification_json: null, validation_errors_json: '[]', instance_fingerprint: 'fingerprint-1',
+      failure_code: null, created_at: 10 }])
+    await expect(listProblemVariantCandidates('problem-1')).resolves.toMatchObject([
+      { id: 'candidate-1', targetDifficulty: 'advanced', variationLevel: 'rebuild', instanceFingerprint: 'fingerprint-1' },
+    ])
   })
 
   it('rejects an independently inconsistent answer and returns the original-question fallback', async () => {

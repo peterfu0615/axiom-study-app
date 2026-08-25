@@ -20,9 +20,21 @@ describe('variant practice contract', () => {
     expect(plan.invariants).toMatchObject({
       subject: '数学', sourceProblemId: 'problem-1', targetKnowledgeTagIds: ['knowledge-1'],
       targetMethodTagIds: ['method-1'], targetModelTagIds: ['model-1'], targetDifficulty: 'basic',
+      variationLevel: 'numeric',
     })
     expect(plan.invariants.requiredSteps).toEqual(['移项得 2x=4', 'x=2'])
     expect(variantPlanEligibilityErrors(plan)).toEqual([])
+  })
+
+  it('uses level-specific changes and includes the level in the deterministic input hash', () => {
+    const numeric = createPracticeVariantPlan({ id: 'numeric', source, targetDifficulty: 'basic', variationLevel: 'numeric' })
+    const condition = createPracticeVariantPlan({ id: 'condition', source, targetDifficulty: 'basic', variationLevel: 'condition' })
+    const rebuild = createPracticeVariantPlan({ id: 'rebuild', source, targetDifficulty: 'basic', variationLevel: 'rebuild' })
+    expect(numeric.allowedChanges).not.toContain('known_condition')
+    expect(condition.allowedChanges).toContain('known_condition')
+    expect(condition.allowedChanges).not.toContain('real_world_context')
+    expect(rebuild.allowedChanges).toContain('real_world_context')
+    expect(new Set([numeric.sourceInputHash, condition.sourceInputHash, rebuild.sourceInputHash]).size).toBe(3)
   })
 
   it('accepts a changed surface only after independent invariant verification', () => {
