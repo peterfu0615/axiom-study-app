@@ -3395,6 +3395,7 @@
 }
 
 .problem-variants-page,
+.problem-variant-dialog,
 .problem-variant-library,
 .problem-variant-candidate {
   display: grid;
@@ -3406,6 +3407,63 @@
   display: grid;
   gap: 14px;
 }
+
+.problem-variant-create-card > div > p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.problem-variant-summary-card {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--brand-wash) 48%, var(--surface));
+}
+
+.problem-variant-summary-card > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.problem-variant-summary-card > button:hover {
+  background: color-mix(in srgb, var(--brand-wash) 72%, transparent);
+}
+
+.problem-variant-summary-card > button:focus-visible {
+  outline: none;
+  box-shadow: inset var(--ax-focus-ring);
+}
+
+.problem-variant-summary-card h3,
+.problem-variant-summary-card p { margin: 0; }
+.problem-variant-summary-card h3 { margin-top: 4px; }
+.problem-variant-summary-card div > p:last-child { margin-top: 7px; color: var(--muted); line-height: 1.5; }
+.problem-variant-summary-card__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--brand-ink); white-space: nowrap; }
+
+.problem-variant-error,
+.problem-variant-success {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.problem-variant-error { flex-wrap: wrap; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+.problem-variant-error p { flex: 1 1 280px; margin: 0; color: var(--ink); }
+.problem-variant-error .ax-button { margin-left: auto; }
+.problem-variant-success { color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
 
 .problem-variant-create-card > label {
   display: grid;

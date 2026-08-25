@@ -6,10 +6,9 @@
   max-width: 100%;
   box-sizing: border-box;
   margin-top: var(--ax-space-6);
-  padding: var(--ax-space-6);
-  border: 1px solid var(--ax-border-default);
-  border-radius: var(--ax-radius-lg);
-  background: var(--ax-color-surface);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .problem-ai-error-region { display: grid; min-width: 0; max-width: 100%; place-items: center; padding: var(--ax-space-6) 0; }
 
@@ -25,7 +24,7 @@
 .problem-tags h3 { color: var(--ax-text-primary); font-size: var(--ax-type-section-size); line-height: var(--ax-type-section-line); font-weight: var(--ax-type-section-weight); }
 .problem-tag-error { margin-bottom: var(--ax-space-4) !important; color: var(--ax-danger-fg); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .problem-tag-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ax-space-6); }
-.problem-tag-dimension { min-width: 0; max-width: 100%; }
+.problem-tag-dimension { min-width: 0; max-width: 100%; padding: var(--ax-space-5); border: 1px solid var(--ax-border-default); border-radius: var(--ax-radius-lg); background: var(--ax-color-surface); }
 .problem-tag-dimension-title { display: flex; align-items: center; justify-content: space-between; gap: var(--ax-space-4); margin-bottom: var(--ax-space-3); border-bottom: 1px solid var(--ax-border-subtle); }
 .problem-tag-dimension-title strong { color: var(--ax-text-primary); font-size: var(--ax-type-item-size); line-height: var(--ax-type-item-line); font-weight: var(--ax-type-item-weight); }
 .problem-tag-add { width: var(--ax-control-sm); height: var(--ax-control-sm); border-color: transparent; background: transparent; }

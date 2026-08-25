@@ -37,6 +37,24 @@ describe('variant practice contract', () => {
     expect(new Set([numeric.sourceInputHash, condition.sourceInputHash, rebuild.sourceInputHash]).size).toBe(3)
   })
 
+  it('allows an explicit variant request before tags and solution steps are available', () => {
+    const sparse = { ...source, subject: '综合', targetTags: [], canonicalAnswer: '', solutionJson: '{}' }
+    const plan = createPracticeVariantPlan({ id: 'sparse', source: sparse, targetDifficulty: 'intermediate' })
+    expect(plan.invariants.requiredSteps).toEqual([])
+    expect(variantPlanEligibilityErrors(plan)).toEqual([])
+    const candidate = {
+      subject: '数学', statementMarkdown: '计算 $3+4$', options: null, canonicalAnswer: '7',
+      solutionJson: JSON.stringify({ contentMarkdown: '$3+4=7$' }), difficulty: 'intermediate' as const,
+      targetTagIds: ['inferred-addition'], changes: [{ kind: 'numeric_values' as const, summary: '修改数字' }], diagramPolicy: 'none' as const,
+    }
+    expect(validatePracticeVariant(plan, sparse, candidate, {
+      independentAnswer: '7', independentSolutionJson: candidate.solutionJson,
+      conditionComplete: true, uniqueAnswer: true, preservesCoreKnowledge: true, preservesCoreMethod: true,
+      preservesCoreModel: true, targetTagIds: ['inferred-addition'], difficulty: 'intermediate',
+      diagramCompatible: true, usesOutOfScopeKnowledge: false, requiredStepCoverage: [], notes: [],
+    })).toEqual([])
+  })
+
   it('accepts a changed surface only after independent invariant verification', () => {
     const plan = createPracticeVariantPlan({ id: 'plan-1', source, targetDifficulty: 'basic' })
     const candidate = {

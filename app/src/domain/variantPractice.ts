@@ -85,6 +85,7 @@ export interface PracticeVariantGenerationInput {
     options: string[] | null
     canonicalAnswer: string
     solutionJson: string
+    questionImagePath: string | null
     diagramImagePaths: string[]
   }
 }
@@ -174,9 +175,6 @@ export function createPracticeVariantPlan(input: {
 
 export function variantPlanEligibilityErrors(plan: PracticeVariantPlan) {
   const errors: string[] = []
-  const targetIds = plan.targetTags.map((tag) => tag.id).filter(Boolean)
-  if (!targetIds.length) errors.push('missing_confirmed_target_tags')
-  if (!plan.invariants.requiredSteps.length) errors.push('missing_required_solution_steps')
   if (!plan.sourceProblemId) errors.push('missing_source_problem')
   return errors
 }
@@ -200,7 +198,7 @@ export function validatePracticeVariant(
   verification: PracticeVariantVerification,
 ) {
   const errors: string[] = []
-  if (candidate.subject !== plan.subject) errors.push('subject_changed')
+  if (plan.subject !== '综合' && candidate.subject !== plan.subject) errors.push('subject_changed')
   if (!candidate.statementMarkdown.trim()) errors.push('statement_empty')
   if (normalizedSurface(candidate.statementMarkdown) === normalizedSurface(source.statementMarkdown)) errors.push('surface_unchanged')
   if (!candidate.canonicalAnswer.trim()) errors.push('answer_empty')
@@ -213,8 +211,10 @@ export function validatePracticeVariant(
   const expectedTags = new Set(plan.targetTags.flatMap((tag) => tag.id ? [tag.id] : []))
   const candidateTags = new Set(candidate.targetTagIds)
   const verifiedTags = new Set(verification.targetTagIds)
-  if ([...expectedTags].some((tag) => !candidateTags.has(tag) || !verifiedTags.has(tag))) errors.push('target_mismatch')
-  if ([...candidateTags].some((tag) => !expectedTags.has(tag)) || [...verifiedTags].some((tag) => !expectedTags.has(tag))) errors.push('unexpected_target')
+  if (expectedTags.size) {
+    if ([...expectedTags].some((tag) => !candidateTags.has(tag) || !verifiedTags.has(tag))) errors.push('target_mismatch')
+    if ([...candidateTags].some((tag) => !expectedTags.has(tag)) || [...verifiedTags].some((tag) => !expectedTags.has(tag))) errors.push('unexpected_target')
+  }
   if (!candidate.changes.length || candidate.changes.some((change) => !plan.allowedChanges.includes(change.kind))) errors.push('change_not_allowed')
   if (!sameAnswer(candidate.canonicalAnswer, verification.independentAnswer)) errors.push('independent_answer_mismatch')
   if (!verification.conditionComplete) errors.push('condition_incomplete')

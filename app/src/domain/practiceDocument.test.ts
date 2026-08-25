@@ -120,7 +120,8 @@ describe('PracticeDocument', () => {
     const document = buildCompletePracticeDocument(practiceSet, { attemptId: 'attempt-variant', generatedAt: 1 })
     document.sections.forEach((section) => {
       const serialized = JSON.stringify(section)
-      expect(serialized).toContain('AI 变式题 · 已独立审校')
+      expect(serialized).toContain('AI 变式题')
+      expect(serialized).not.toContain('审校')
       expect(serialized).not.toContain('targetTags')
     })
   })

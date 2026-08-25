@@ -44,7 +44,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, ErrorState, FlowingTaskSurface, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
+import { Button, Dialog, DiscreteSlider, ErrorState, FlowingTaskSurface, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -62,7 +62,6 @@ import { getProblemReviewHistory, type ProblemReviewHistoryEntry } from '../../p
 import { findProblemDuplicateSuggestions } from '../../domain/problemDuplicates'
 import {
   createRelabelBatch,
-  setUserProblemDifficulty,
   listTextbooks,
   setProblemTextbookMatches,
 } from '../../platform/horizonDatabase'
@@ -78,9 +77,7 @@ import {
 } from '../../platform/geometrySceneDatabase'
 import { getPreferredDiagram } from '../../platform/diagramDatabase'
 import {
-  getSingleVariantPrerequisites,
   prepareSingleProblemVariant,
-  type SingleVariantPrerequisites,
   type SingleVariantPreview,
 } from '../../platform/practiceDatabase'
 import { MathMarkdown } from '../../components/MathMarkdown'
@@ -91,7 +88,6 @@ import {
 import type { VariantLevel } from '../../domain/variantPractice'
 
 type LibraryView = 'active' | 'archived' | 'trash'
-type DetailTab = 'content' | 'knowledge' | 'method' | 'classification' | 'variants'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' } as const
 const difficultyValues = ['basic', 'intermediate', 'advanced'] as const
@@ -115,6 +111,21 @@ function variantSolutionMarkdown(value: string) {
   } catch { return value }
 }
 
+function variantStatusLabel(item: StoredVariantCandidate) {
+  if (item.candidateStatus === 'verified') return '可使用'
+  if (item.planStatus === 'generating' || item.candidateStatus === 'generated') return '生成中'
+  if (item.planStatus === 'failed' || item.planStatus === 'rejected') return '生成失败'
+  return '等待生成'
+}
+
+function variantProductError(error: unknown) {
+  const value = String(error instanceof Error ? error.message : error)
+  if (value.includes('题目内容不可用')) return '题目内容不可用，请重新裁剪或整理后再试。'
+  if (/401|unauthorized|api key|认证/iu.test(value)) return 'AI 服务认证失败，请在设置中检查 API Key。'
+  if (/provider|模型|model|endpoint|端点/iu.test(value)) return '当前 AI 服务暂时无法生成变式，请检查模型设置或稍后重试。'
+  return '这次没有生成可用的变式，请稍后重试。'
+}
+
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
   month: 'long',
@@ -122,36 +133,6 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit',
   minute: '2-digit',
 })
-
-const modelRunTaskLabels: Record<string, string> = {
-  analyze_problem_image: '题目理解',
-  geometry_scene: '几何图重建',
-  generate_solution: '正解生成',
-  extract_student_attempt: '作答识别',
-  analyze_student_reasoning: '错因推理',
-  explain_selection: '局部解释',
-}
-
-function modelRunMetrics(run: ModelRun) {
-  const metrics: string[] = []
-  if (run.latencyMs != null) {
-    metrics.push(run.latencyMs >= 1000
-      ? `${(run.latencyMs / 1000).toFixed(1)} 秒`
-      : `${run.latencyMs} ms`)
-  }
-  if (run.usage?.totalTokens != null) {
-    const breakdown = run.usage.promptTokens != null && run.usage.completionTokens != null
-      ? `（输入 ${run.usage.promptTokens.toLocaleString('zh-CN')} / 输出 ${run.usage.completionTokens.toLocaleString('zh-CN')}）`
-      : ''
-    metrics.push(`${run.usage.totalTokens.toLocaleString('zh-CN')} tokens${breakdown}`)
-  }
-  if (run.estimatedCostUsd != null) {
-    metrics.push(`约 $${run.estimatedCostUsd.toFixed(6)}`)
-  } else if (run.usage?.totalTokens != null) {
-    metrics.push('成本未配置')
-  }
-  return metrics.join(' · ')
-}
 
 const aiStatusLabels: Record<ProblemAIStatus, string> = {
   not_started: 'AI 未处理',
@@ -306,7 +287,6 @@ export function ProblemLibrary() {
   const [updating, setUpdating] = useState(false)
   const [editing, setEditing] = useState(false)
   const [recropping, setRecropping] = useState(false)
-  const [detailTab, setDetailTab] = useState<DetailTab>('content')
   const [modelRuns, setModelRuns] = useState<ModelRun[]>([])
   const [solution, setSolution] = useState<Solution | null>(null)
   const [studentAttempt, setStudentAttempt] = useState<StudentAttempt | null>(null)
@@ -320,10 +300,7 @@ export function ProblemLibrary() {
   const [geometryDialogOpen, setGeometryDialogOpen] = useState(false)
   const [variantBusy, setVariantBusy] = useState(false)
   const [variantDialogOpen, setVariantDialogOpen] = useState(false)
-  const [variantPrerequisites, setVariantPrerequisites] = useState<SingleVariantPrerequisites | null>(null)
   const [variantDialogError, setVariantDialogError] = useState<string | null>(null)
-  const [variantDraftSubject, setVariantDraftSubject] = useState('')
-  const [variantDraftStem, setVariantDraftStem] = useState('')
   const [variantDraftDifficulty, setVariantDraftDifficulty] = useState<'basic' | 'intermediate' | 'advanced'>('intermediate')
   const [variantLevel, setVariantLevel] = useState<VariantLevel>('numeric')
   const [singleVariantPreview, setSingleVariantPreview] = useState<SingleVariantPreview | null>(null)
@@ -562,13 +539,6 @@ export function ProblemLibrary() {
     [duplicateDecisionIds, problems, selected],
   )
   const activeStoredVariant = storedVariants.find((item) => (item.id ?? item.planId) === activeVariantKey) ?? storedVariants[0] ?? null
-  const detailTags = selected?.libraryMetadata.tags.filter((tag) => {
-    if (detailTab === 'knowledge') return tag.type === 'knowledge'
-    if (detailTab === 'method') return tag.type === 'method'
-    if (detailTab === 'classification') return tag.type === 'model' || tag.type === 'error'
-    return false
-  }) ?? []
-
   const refreshStoredVariants = useCallback(async (problemId: string) => {
     const candidates = await listProblemVariantCandidates(problemId)
     if (selectedIdRef.current !== problemId) return
@@ -842,83 +812,18 @@ export function ProblemLibrary() {
       setSingleVariantPreview(await prepareSingleProblemVariant(selected.id, variantDraftDifficulty, variantLevel))
       await refreshStoredVariants(selected.id)
     } catch (error) {
-      setVariantDialogError(String(error instanceof Error ? error.message : error))
+      setVariantDialogError(variantProductError(error))
     } finally {
       setVariantBusy(false)
     }
   }
 
-  const refreshVariantPrerequisites = async (autoGenerate = false) => {
-    if (!selected) return null
-    const snapshot = await getSingleVariantPrerequisites(selected.id)
-    setVariantPrerequisites(snapshot)
-    setVariantDraftSubject((current) => current || snapshot.subject)
-    setVariantDraftStem((current) => current || snapshot.stemMarkdown)
-    if (autoGenerate && snapshot.missing.length === 0 && !variantBusy && !singleVariantPreview) {
-      await generateSingleVariant()
-    }
-    return snapshot
-  }
-
-  const openVariantDialog = async () => {
+  const openVariantDialog = () => {
     if (!selected) return
     setVariantDialogOpen(true)
     setSingleVariantPreview(null)
     setVariantDialogError(null)
-    setVariantPrerequisites(null)
-    setVariantDraftSubject(selected.subject ?? '')
-    setVariantDraftStem(selected.stemMarkdown ?? '')
-    try { await refreshVariantPrerequisites(true) }
-    catch (error) { setVariantDialogError(`无法检查生成条件：${String(error)}`) }
   }
-
-  const completeVariantProblemFields = async () => {
-    if (!selected) return
-    setVariantBusy(true); setVariantDialogError(null)
-    try {
-      const updated = await updateProblemUserFields(selected.id, {
-        title: selected.title,
-        subject: variantDraftSubject,
-        stemMarkdown: variantDraftStem,
-        knowledgePoints: selected.knowledgePoints,
-      })
-      setProblems((current) => current.map((problem) => problem.id === updated.id ? updated : problem))
-      setVariantBusy(false)
-      await refreshVariantPrerequisites(true)
-    } catch (error) {
-      setVariantDialogError(error instanceof ProblemSubjectChangeConflict
-        ? '更改科目需要先在题目编辑页确认教材与标签重置。'
-        : String(error))
-      setVariantBusy(false)
-    }
-  }
-
-  const completeVariantDifficulty = async () => {
-    if (!selected) return
-    setVariantBusy(true); setVariantDialogError(null)
-    try {
-      await setUserProblemDifficulty(selected.id, variantDraftSubject || selected.subject || '', variantDraftDifficulty)
-      setVariantBusy(false)
-      await refreshVariantPrerequisites(true)
-    } catch (error) { setVariantDialogError(String(error)); setVariantBusy(false) }
-  }
-
-  const completeVariantSolution = async () => {
-    if (!selected) return
-    setVariantDialogError(null)
-    try {
-      setSolution(await queueProblemSolution(selected.id))
-      void runSolutionWorker()
-    } catch (error) { setVariantDialogError(`无法生成解答：${String(error)}`) }
-  }
-
-  useEffect(() => {
-    if (!variantDialogOpen || solution?.status !== 'completed' || variantBusy || singleVariantPreview) return
-    void refreshVariantPrerequisites(true).catch((error) => setVariantDialogError(String(error)))
-    // The completed solution event is the only trigger needed here; the
-    // prerequisite refresh itself updates local dialog state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [solution?.status, variantDialogOpen])
 
   const toggleArchive = async () => {
     if (!selected) return
@@ -1314,7 +1219,6 @@ export function ProblemLibrary() {
                       return
                     }
                     setSelectedId(problem.id)
-                    setDetailTab('content')
                   }}
                   type="button"
                 >
@@ -1487,21 +1391,7 @@ export function ProblemLibrary() {
                 </div>
               ) : (
                 <>
-                  <SegmentedControl
-                    ariaLabel="错题详情视图"
-                    onChange={setDetailTab}
-                    options={[
-                      { value: 'content', label: '题目内容' },
-                      { value: 'knowledge', label: '知识点' },
-                      { value: 'method', label: '方法' },
-                      { value: 'classification', label: '题型与错误' },
-                      { value: 'variants', label: '变式' },
-                    ]}
-                    value={detailTab}
-                  />
-
                   <div className="problem-detail-content">
-                  {detailTab === 'content' ? (
                     <div className="problem-learning-page">
                       <section className="problem-reading-section">
                         <header className="problem-reading-header">
@@ -1761,313 +1651,57 @@ export function ProblemLibrary() {
                         onRetrySolution={() => void retrySolution()}
                       />
 
-                    </div>
-                  ) : detailTab === 'variants' ? (
-                    <div className="problem-variants-page">
-                      <section className="problem-variant-create-card">
-                        <div>
-                          <p className="eyebrow">多变式候选池</p>
-                          <h3>生成并保存新的变式</h3>
-                          <p>手动生成只会加入候选池，不会立刻开始练习。每个候选都需经过独立求解与审校。</p>
-                        </div>
-                        <label>
-                          <span>难度</span>
-                          <input
-                            aria-label="变式难度"
-                            max={2}
-                            min={0}
-                            onChange={(event) => setVariantDraftDifficulty(difficultyValues[Number(event.target.value)])}
-                            step={1}
-                            type="range"
-                            value={difficultyValues.indexOf(variantDraftDifficulty)}
-                          />
-                          <small>{difficultyLabels[variantDraftDifficulty]}</small>
-                        </label>
-                        <label>
-                          <span>变化</span>
-                          <input
-                            aria-label="变式变化等级"
-                            max={2}
-                            min={0}
-                            onChange={(event) => setVariantLevel(variationValues[Number(event.target.value)])}
-                            step={1}
-                            type="range"
-                            value={variationValues.indexOf(variantLevel)}
-                          />
-                          <small>{variationLabels[variantLevel]}</small>
-                        </label>
-                        <Button disabled={variantBusy} loading={variantBusy} onClick={() => void openVariantDialog()} variant="primary">
-                          生成变式
-                        </Button>
-                      </section>
-
-                      {storedVariants.length ? <section className="problem-variant-library">
-                        <SegmentedControl
-                          ariaLabel="已保存变式"
-                          onChange={setActiveVariantKey}
-                          options={storedVariants.map((item, index) => ({
-                            value: item.id ?? item.planId,
-                            label: `变式 ${index + 1} · ${difficultyLabels[item.targetDifficulty]}`,
-                          }))}
-                          value={activeStoredVariant?.id ?? activeStoredVariant?.planId ?? ''}
-                        />
-                        {activeStoredVariant && <article className="problem-variant-candidate">
-                          <header>
-                            <div>
-                              <p className="eyebrow">{variationLabels[activeStoredVariant.variationLevel]} · {difficultyLabels[activeStoredVariant.targetDifficulty]}</p>
-                              <h3>{activeStoredVariant.candidateStatus === 'verified' ? '已验证候选' : activeStoredVariant.planStatus === 'generating' ? '生成与审校中' : activeStoredVariant.planStatus === 'failed' || activeStoredVariant.planStatus === 'rejected' ? '生成失败' : '候选状态'}</h3>
-                            </div>
-                            <small>{dateFormatter.format(activeStoredVariant.createdAt)}</small>
-                          </header>
-                          {activeStoredVariant.candidate ? <>
-                            <section><h4>题干</h4><MathMarkdown>{activeStoredVariant.candidate.statementMarkdown}</MathMarkdown></section>
-                            <section><h4>答案</h4><MathMarkdown>{activeStoredVariant.candidate.canonicalAnswer}</MathMarkdown></section>
-                            <section><h4>解答</h4><MathMarkdown>{variantSolutionMarkdown(activeStoredVariant.candidate.solutionJson)}</MathMarkdown></section>
-                            <dl className="problem-variant-metadata">
-                              <div><dt>审校</dt><dd>{activeStoredVariant.candidateStatus === 'verified' ? '独立审校通过' : activeStoredVariant.candidateStatus ?? activeStoredVariant.planStatus}</dd></div>
-                              <div><dt>实例指纹</dt><dd title={activeStoredVariant.instanceFingerprint}>{activeStoredVariant.instanceFingerprint || '生成后写入'}</dd></div>
-                            </dl>
-                          </> : <p>{activeStoredVariant.failureCode ? `安全错误：${activeStoredVariant.failureCode}` : '候选尚未生成完成。'}</p>}
-                          {activeStoredVariant.validationErrors.length > 0 && <div className="ai-warning-list">
-                            {activeStoredVariant.validationErrors.map((error) => <p key={error}>{error}</p>)}
-                          </div>}
-                        </article>}
-                      </section> : <div className="empty-detail-state"><strong>还没有变式</strong><p>选择难度与变化等级后生成第一道候选。</p></div>}
-                    </div>
-                  ) : (
-                    <div className="problem-information-page">
-                      <section className="problem-dimension-summary">
-                        <div>
-                          <p className="eyebrow">{detailTab === 'knowledge' ? '知识点' : detailTab === 'method' ? '方法' : '题型与错误'}</p>
-                          <h3>{detailTab === 'knowledge' ? '本题知识结构' : detailTab === 'method' ? '解题方法' : '题型模型与错误类型'}</h3>
-                        </div>
-                        <div className="ai-tag-list">
-                          {detailTags.length ? detailTags.map((tag) => <span key={`${tag.type}:${tag.id ?? tag.name}`}>{tag.name}</span>) : <span>待确认</span>}
-                        </div>
-                        {detailTab === 'classification' && selected.aiProblemType && <p>AI 题型：{selected.aiProblemType}</p>}
-                      </section>
-                      <dl className="problem-metadata">
-                        <div>
-                          <dt>状态</dt>
-                          <dd>
-                            {selected.deletedAt ? '回收站' : selected.archivedAt ? '已归档' : '已保存'}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>科目</dt>
-                          <dd title={selected.subject || '待补充'}>
-                            {selected.subject || '待补充'}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>AI 状态</dt>
-                          <dd>{aiStatusLabels[selected.aiStatus]}</dd>
-                        </div>
-                        <div>
-                          <dt>Model Runs</dt>
-                          <dd>{modelRuns.length}</dd>
-                        </div>
-                        <div>
-                          <dt>创建时间</dt>
-                          <dd>{dateFormatter.format(selected.createdAt)}</dd>
-                        </div>
-                        <div>
-                          <dt>最近更新</dt>
-                          <dd>{dateFormatter.format(selected.updatedAt)}</dd>
-                        </div>
-                        <div>
-                          <dt>来源页面</dt>
-                          <dd title={selected.sourceDocumentId}>
-                            {selected.sourceDocumentId.slice(0, 8)}
-                          </dd>
-                        </div>
-                      </dl>
-
-                      <section className="problem-source-information">
-                        <div>
-                          <p className="eyebrow">题目图片</p>
-                          <h3>保存的完整题块</h3>
-                          <p>
-                            内容页仅在检测到图形时展示 AI 标注区域；这里保留完整裁图。
-                          </p>
-                        </div>
-                        <ProblemImage
-                          alt={selected.title}
-                          className="problem-source-image"
-                          path={selected.cropImagePath}
-                        />
-                      </section>
-
-                      <section className="problem-source-information">
-                        <div><p className="eyebrow">采集来源</p><h3>原图与校正图</h3><p>这些媒体与题块图分别保留，删除到回收站后仍可恢复。</p></div>
-                        <div className="problem-source-variants">
-                          <figure><ProblemImage alt={`${selected.title}原始采集页`} className="problem-source-image" path={selected.originalImagePath} /><figcaption>原图</figcaption></figure>
-                          {selected.correctedImagePath && <figure><ProblemImage alt={`${selected.title}校正页`} className="problem-source-image" path={selected.correctedImagePath} /><figcaption>校正图</figcaption></figure>}
-                        </div>
-                      </section>
-
-                      <section className="problem-ai-information">
-                        <p className="eyebrow">AI 解析信息</p>
-                        <h3>结构化结果</h3>
-                        <dl>
-                          <div>
-                            <dt>状态</dt>
-                            <dd>{aiStatusLabels[selected.aiStatus]}</dd>
-                          </div>
-                          <div>
-                            <dt>AI 标题</dt>
-                            <dd>{selected.aiTitle || '未生成'}</dd>
-                          </div>
-                          <div>
-                            <dt>AI 科目</dt>
-                            <dd>{selected.aiSubject || '未识别'}</dd>
-                          </div>
-                          <div>
-                            <dt>题型</dt>
-                            <dd>{selected.aiProblemType || '未识别'}</dd>
-                          </div>
-                          <div>
-                            <dt>图形识别</dt>
-                            <dd>
-                              {selected.aiHasDiagram
-                                ? selected.aiDiagramImagePath
-                                  ? '已检测并抠图'
-                                  : '已检测（边界回退）'
-                                : '未检测到'}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>图形区域</dt>
-                            <dd>
-                              {selected.aiDiagramBBox
-                                ? JSON.stringify(selected.aiDiagramBBox)
-                                : '—'}
-                            </dd>
-                          </div>
-                        </dl>
-
-                        {selected.aiWarnings.length > 0 && (
-                          <div className="ai-warning-list">
-                            {selected.aiWarnings.map((warning) => (
-                              <p key={warning}>{warning}</p>
-                            ))}
-                          </div>
-                        )}
-                      </section>
-
-                      <section className="ocr-information">
-                        <p className="eyebrow">Apple Vision OCR</p>
-                        <h3>本地识别结果</h3>
-                        <dl>
-                          <div>
-                            <dt>标题</dt>
-                            <dd>{selected.ocrTitle}</dd>
-                          </div>
-                          <div>
-                            <dt>科目</dt>
-                            <dd>{selected.ocrSubject || '未识别'}</dd>
-                          </div>
-                          <div>
-                            <dt>题干</dt>
-                            <dd>{selected.ocrStemMarkdown || '未识别'}</dd>
-                          </div>
-                        </dl>
-                      </section>
-
-                      <section className="model-run-history">
-                        <p className="eyebrow">Model Run 历史</p>
-                        <h3>每次执行独立保留</h3>
-                        {modelRuns.length ? (
-                          <ul>
-                            {modelRuns.map((run) => (
-                              <li key={run.id}>
-                                <div>
-                                  <strong>
-                                    {modelRunTaskLabels[run.taskType] ?? run.taskType} · {run.provider} / {run.model}
-                                  </strong>
-                                  <small>
-                                    {dateFormatter.format(run.createdAt)}
-                                  </small>
-                                  {modelRunMetrics(run) && (
-                                    <small>{modelRunMetrics(run)}</small>
-                                  )}
-                                </div>
-                                <span className={run.status}>
-                                  {run.status}
-                                </span>
-                                {(run.rawOutput || run.repairStrategy) && (
-                                  <details className="model-run-output">
-                                    <summary>查看模型原始输出</summary>
-                                    {run.repairStrategy && (
-                                      <small>
-                                        修复策略：{run.repairStrategy}
-                                      </small>
-                                    )}
-                                    <pre>{run.rawOutput || '（没有模型输出）'}</pre>
-                                  </details>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p>暂无调用记录。</p>
-                        )}
-                      </section>
-
                       <section className="model-run-history problem-review-history">
-                        <p className="eyebrow">学习证据</p>
-                        <h3>复习记录</h3>
+                        <p className="eyebrow">学习记录</p>
+                        <h3>复习表现</h3>
                         {reviewHistory.length ? <ul>
                           {reviewHistory.map((entry) => <li key={entry.attemptId}>
-                            <div><strong>{entry.overallResult === 'correct' ? '正确' : entry.overallResult === 'partial' ? '部分正确' : '错误'}</strong><small>{dateFormatter.format(entry.createdAt)} · 批改置信度 {Math.round(entry.gradingConfidence * 100)}%</small></div>
+                            <div>
+                              <strong>{entry.overallResult === 'correct' ? '正确' : entry.overallResult === 'partial' ? '部分正确' : '错误'}</strong>
+                              <small>{dateFormatter.format(entry.createdAt)} · 可信度 {Math.round(entry.gradingConfidence * 100)}%</small>
+                            </div>
                             {entry.firstErrorStep && <p>首错：第 {entry.firstErrorStep} 步{entry.errorCategory ? ` · ${entry.errorCategory}` : ''}</p>}
                             {entry.answerImagePath && <ProblemImage alt="本次复习的用户作答图" className="problem-review-history__answer" path={entry.answerImagePath} />}
                             {entry.evidence.length > 0 && <div className="problem-review-history__evidence">{entry.evidence.map((evidence) => <span key={`${entry.attemptId}:${evidence.tagName}`}>{evidence.tagName} · {evidence.result}</span>)}</div>}
                           </li>)}
-                        </ul> : <p>暂无复习作答或标签证据。</p>}
+                        </ul> : <p>完成练习后，这里会显示你的复习记录。</p>}
                       </section>
 
                       {!selected.deletedAt && <section className="problem-delete-section">
-                        <p className="eyebrow">危险操作</p>
+                        <p className="eyebrow">管理题目</p>
                         <h3>移入回收站</h3>
-                        <p>
-                          题目将从学习安排中移除，但解答、AI 分析、复习证据与相关图片都会保留，可从回收站恢复。
-                        </p>
+                        <p>题目会从学习安排中移除，解答、复习证据与相关图片都会保留，可从回收站恢复。</p>
                         {deleteConfirming ? (
                           <div className="problem-delete-confirm">
                             <span>确认要把这道错题移入回收站吗？</span>
                             <div className="problem-delete-confirm-actions">
-                              <button
-                                className="problem-delete-cancel"
-                                disabled={deleting}
-                                onClick={() => setDeleteConfirming(false)}
-                                type="button"
-                              >
-                                取消
-                              </button>
-                              <button
-                                className="problem-delete-confirm-button"
-                                disabled={deleting}
-                                onClick={() => void handleDelete()}
-                                type="button"
-                              >
+                              <button className="problem-delete-cancel" disabled={deleting} onClick={() => setDeleteConfirming(false)} type="button">取消</button>
+                              <button className="problem-delete-confirm-button" disabled={deleting} onClick={() => void handleDelete()} type="button">
                                 {deleting ? '处理中…' : '移入回收站'}
                               </button>
                             </div>
                           </div>
                         ) : (
-                          <button
-                            className="problem-delete-button"
-                            disabled={deleting}
-                            onClick={() => setDeleteConfirming(true)}
-                            type="button"
-                          >
-                            移入回收站
-                          </button>
+                          <button className="problem-delete-button" disabled={deleting} onClick={() => setDeleteConfirming(true)} type="button">移入回收站</button>
                         )}
                       </section>}
+
+                      <section className="problem-variant-summary-card">
+                        <button onClick={openVariantDialog} type="button">
+                          <div>
+                            <p className="eyebrow">变式题</p>
+                            <h3>{storedVariants.length ? `已保存 ${storedVariants.length} 道变式` : '创建第一道变式'}</h3>
+                            <p>{storedVariants.length
+                              ? '查看不同难度和变化方式的题目，或继续生成。'
+                              : '选择难度与变化方式，生成后保存到本题。'}</p>
+                          </div>
+                          <span className="problem-variant-summary-card__status">
+                            {activeStoredVariant ? variantStatusLabel(activeStoredVariant) : '尚未生成'}
+                            <Icon name="chevron" size={18} />
+                          </span>
+                        </button>
+                      </section>
                     </div>
-                  )}
                   </div>
                 </>
               )}
@@ -2116,59 +1750,76 @@ export function ProblemLibrary() {
       </Dialog>
 
       <Dialog
-        onClose={() => { if (!variantBusy) { setVariantDialogOpen(false); setSingleVariantPreview(null) } }}
+        onClose={() => setVariantDialogOpen(false)}
         open={variantDialogOpen}
-        title={singleVariantPreview ? '变式已保存' : '生成变式'}
+        title="变式题"
       >
-        {!variantPrerequisites && !variantDialogError && <FlowingTaskSurface compact state="running" title="正在检查题目条件" />}
-        {variantBusy && !singleVariantPreview && <FlowingTaskSurface compact detail="正在生成、独立求解并校验题目" state="running" title="正在生成变式题" />}
-        {!variantBusy && solution && ['pending', 'processing'].includes(solution.status) && variantPrerequisites?.missing.includes('solution') && <FlowingTaskSurface compact detail="完成后会自动继续生成变式" state="running" title="正在准备有效解答" />}
-        {!variantBusy && variantPrerequisites && variantPrerequisites.missing.length > 0 && <div className="problem-edit-form">
-          <p>请在这里完成缺少的信息；最后一项完成后会自动开始生成。</p>
-          {(variantPrerequisites.missing.includes('subject') || variantPrerequisites.missing.includes('stem')) && <section>
-            <h3>题目信息</h3>
-            {variantPrerequisites.missing.includes('subject') && <label><span>科目</span><input onChange={(event) => setVariantDraftSubject(event.target.value)} placeholder="例如：数学" value={variantDraftSubject} /></label>}
-            {variantPrerequisites.missing.includes('stem') && <Textarea label="完整题干" onChange={(event) => setVariantDraftStem(event.target.value)} rows={6} value={variantDraftStem} />}
-            <Button disabled={!variantDraftSubject.trim() || !variantDraftStem.trim()} onClick={() => void completeVariantProblemFields()} variant="secondary">完成题目信息</Button>
-          </section>}
-          {variantPrerequisites.missing.includes('solution') && <section>
-            <h3>有效解答</h3><p>变式审校需要一份完整解答作为不变量依据。</p>
-            <Button disabled={solution?.status === 'pending' || solution?.status === 'processing'} onClick={() => void completeVariantSolution()} variant="secondary">生成并完成解答</Button>
-          </section>}
-          {variantPrerequisites.missing.includes('difficulty') && <section>
-            <h3>题目难度</h3>
-            <ListboxSelect ariaLabel="题目难度" onValueChange={(value) => setVariantDraftDifficulty(value as typeof variantDraftDifficulty)} options={[{ value: 'basic', label: '基础' }, { value: 'intermediate', label: '中档' }, { value: 'advanced', label: '进阶' }]} value={variantDraftDifficulty} />
-            <Button onClick={() => void completeVariantDifficulty()} variant="secondary">确认难度</Button>
-          </section>}
-          {variantPrerequisites.missing.includes('tags') && selected && <section>
-            <h3>已确认标签</h3><p>确认或添加至少一个知识、方法或模型标签。</p>
-            <ProblemTags onChange={() => void refreshVariantPrerequisites(true)} problemId={selected.id} subject={selected.subject} subjectId={selected.subjectId} />
-          </section>}
-          <div className="curriculum-dialog-actions"><Button onClick={() => setVariantDialogOpen(false)} variant="ghost">关闭</Button></div>
-        </div>}
-        {variantDialogError && !variantBusy && <div className="problem-edit-form">
-          <ErrorState error={classifyAIError(variantDialogError)} />
-          <div className="curriculum-dialog-actions"><Button onClick={() => setVariantDialogOpen(false)} variant="ghost">关闭</Button><Button onClick={() => void refreshVariantPrerequisites(true)} variant="primary">重试</Button></div>
-        </div>}
-        {singleVariantPreview?.outcome.variant && <div className="problem-edit-form">
-          <p>该变式已通过独立求解、标签、难度和必要步骤审校，并保存到统一候选池。</p>
-          <section>
-            <small>原题</small>
-            <MathMarkdown>{singleVariantPreview.source.statementMarkdown}</MathMarkdown>
+        <div className="problem-variant-dialog">
+          <section className="problem-variant-create-card">
+            <div>
+              <p className="eyebrow">创建变式</p>
+              <h3>选择变化幅度</h3>
+              <p>只有点击生成按钮后才会开始；生成结果会保存到本题，不会自动开始练习。</p>
+            </div>
+            <DiscreteSlider
+              ariaLabel="难度"
+              disabled={variantBusy}
+              onChange={setVariantDraftDifficulty}
+              options={difficultyValues.map((value) => ({ value, label: difficultyLabels[value] }))}
+              value={variantDraftDifficulty}
+            />
+            <DiscreteSlider
+              ariaLabel="变化"
+              disabled={variantBusy}
+              onChange={setVariantLevel}
+              options={variationValues.map((value) => ({ value, label: variationLabels[value] }))}
+              value={variantLevel}
+            />
+            <Button disabled={variantBusy} loading={variantBusy} onClick={() => void generateSingleVariant()} variant="primary">
+              生成变式
+            </Button>
           </section>
-          <section>
-            <small>变式题</small>
-            <MathMarkdown>{singleVariantPreview.outcome.variant.candidate.statementMarkdown}</MathMarkdown>
-          </section>
-          <div>
-            {singleVariantPreview.outcome.variant.candidate.changes.map((change) => (
-              <small key={`${change.kind}:${change.summary}`}>{change.summary}</small>
-            ))}
-          </div>
-          <div className="curriculum-dialog-actions">
-            <Button disabled={variantBusy} onClick={() => { setSingleVariantPreview(null); setVariantDialogOpen(false) }} variant="primary">返回候选池</Button>
-          </div>
-        </div>}
+
+          {variantBusy && <FlowingTaskSurface compact detail="正在出题并检查答案是否完整" state="running" title="正在生成变式题" />}
+          {variantDialogError && !variantBusy && <div className="problem-variant-error" role="alert">
+            <strong>暂时没有生成成功</strong>
+            <p>{variantDialogError}</p>
+            <Button onClick={() => void generateSingleVariant()} variant="secondary">重试</Button>
+          </div>}
+          {singleVariantPreview?.outcome.variant && !variantBusy && <div className="problem-variant-success" role="status">
+            <Icon name="check" size={18} />
+            <span>新变式已保存，可以继续生成或查看下方内容。</span>
+          </div>}
+
+          {storedVariants.length ? <section className="problem-variant-library">
+            <SegmentedControl
+              ariaLabel="已保存变式"
+              onChange={setActiveVariantKey}
+              options={storedVariants.map((item, index) => ({
+                value: item.id ?? item.planId,
+                label: `变式 ${index + 1} · ${difficultyLabels[item.targetDifficulty]}`,
+              }))}
+              value={activeStoredVariant?.id ?? activeStoredVariant?.planId ?? ''}
+            />
+            {activeStoredVariant && <article className="problem-variant-candidate">
+              <header>
+                <div>
+                  <p className="eyebrow">{variationLabels[activeStoredVariant.variationLevel]} · {difficultyLabels[activeStoredVariant.targetDifficulty]}</p>
+                  <h3>{variantStatusLabel(activeStoredVariant)}</h3>
+                </div>
+                <small>{dateFormatter.format(activeStoredVariant.createdAt)}</small>
+              </header>
+              {activeStoredVariant.candidate ? <>
+                <section><h4>题干</h4><MathMarkdown>{activeStoredVariant.candidate.statementMarkdown}</MathMarkdown></section>
+                <section><h4>答案</h4><MathMarkdown>{activeStoredVariant.candidate.canonicalAnswer}</MathMarkdown></section>
+                <section><h4>解答</h4><MathMarkdown>{variantSolutionMarkdown(activeStoredVariant.candidate.solutionJson)}</MathMarkdown></section>
+              </> : <p>{activeStoredVariant.planStatus === 'generating' ? '正在生成，请稍候。' : '这道变式暂时不可用，可以重新生成。'}</p>}
+            </article>}
+          </section> : !variantBusy && <div className="empty-detail-state">
+            <strong>还没有变式</strong>
+            <p>选择难度和变化幅度，然后点击“生成变式”。</p>
+          </div>}
+        </div>
       </Dialog>
       <Dialog
         onClose={() => { if (!updating) setSubjectChangeConfirming(false) }}

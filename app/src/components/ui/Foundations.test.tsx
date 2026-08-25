@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
 import { readFileSync } from 'node:fs'
-import { Badge, Button, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag, Tabs } from './index'
+import { Badge, Button, DiscreteSlider, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag, Tabs } from './index'
 import { Icon } from '../Icon'
 
 describe('design system foundations', () => {
@@ -96,6 +96,20 @@ describe('design system foundations', () => {
     expect(ui).toMatch(/\.ax-button__content \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
     expect(refinement).toMatch(/\.segmented-control button \{[^}]*display: inline-flex;[^}]*align-items: center;/u)
     expect(refinement).not.toMatch(/\.segmented-control[^}]*translateY/u)
+  })
+
+  it('renders the shared discrete selector with slider accessibility metadata', () => {
+    const html = renderToStaticMarkup(<DiscreteSlider
+      ariaLabel="难度"
+      onChange={() => undefined}
+      options={[{ value: 'basic', label: '基础' }, { value: 'middle', label: '中档' }, { value: 'advanced', label: '进阶' }]}
+      value="middle"
+    />)
+    expect(html).toContain('role="slider"')
+    expect(html).toContain('aria-valuenow="1"')
+    expect(html).toContain('aria-valuetext="中档"')
+    expect(html).toContain('ax-discrete-slider__stop is-reached')
+    expect(html).toContain('is-current')
   })
 
   it('supports icon-bearing rail tabs for settings navigation', () => {

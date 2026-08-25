@@ -600,6 +600,9 @@ export class OpenAICompatibleProvider implements AIProvider {
   async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const result = await executeOpenAIContract(this.profile, {
+      imagePaths: this.supportsVision
+        ? [input.source.questionImagePath, ...input.source.diagramImagePaths].filter((path): path is string => Boolean(path))
+        : [],
       prompt: buildPracticeVariantGenerationPrompt(input),
       jsonSchema: JSON.stringify(practiceVariantGenerationJSONSchema),
     }, parsePracticeVariantCandidate)
@@ -900,6 +903,7 @@ export class AntigravityCLIProvider implements AIProvider {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
     const response = await analyzeProblemWithAntigravityCLI({
       commandPath: this.profile.commandPath, model: this.profile.model,
+      imagePaths: [input.source.questionImagePath, ...input.source.diagramImagePaths].filter((path): path is string => Boolean(path)),
       prompt: buildPracticeVariantGenerationPrompt(input),
       jsonSchema: JSON.stringify(practiceVariantGenerationJSONSchema),
     })

@@ -17,7 +17,7 @@ import { generateVerifiedPracticeVariant } from './variantPracticeDatabase'
 import type { PracticeVariantPreparationOutcome } from './variantPracticeDatabase'
 import { createPracticeReviewSession, transitionPracticeReviewSession } from './practiceSessionDatabase'
 import { getProblemSolution, getSavedProblem } from './database'
-import { getProblemDifficulty, listProblemTags } from './horizonDatabase'
+import { listProblemTags } from './horizonDatabase'
 import { getPreferredDiagram } from './diagramDatabase'
 import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
 import { renderTikz } from './native'
@@ -301,7 +301,7 @@ export async function createPracticeSet(
             source_mode,estimated_duration_seconds,order_index,status
           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')`, [
             moduleId, problem.subject, session.id, bundleId, problem.relevance,
-            variant ? '受约束变式题已通过独立审校' : '变式不可安全生成，已回退到已确认原题',
+            variant ? '已准备新的变式题' : '变式暂不可用，已换用原题',
             planned.difficulty, variant ? 'variant' : 'original', durationPerItem, index,
           ])
           await execute(`INSERT INTO question_instances(
@@ -463,36 +463,6 @@ export interface SingleVariantPreview {
   outcome: PracticeVariantPreparationOutcome
 }
 
-export interface SingleVariantPrerequisites {
-  subject: string
-  stemMarkdown: string
-  hasValidSolution: boolean
-  difficulty: DifficultyLevel | null
-  confirmedTagCount: number
-  missing: Array<'subject' | 'stem' | 'solution' | 'difficulty' | 'tags'>
-}
-
-export async function getSingleVariantPrerequisites(problemId: string): Promise<SingleVariantPrerequisites> {
-  const [problem, solution, tags, difficulty] = await Promise.all([
-    getSavedProblem(problemId), getProblemSolution(problemId), listProblemTags(problemId), getProblemDifficulty(problemId),
-  ])
-  if (!problem) throw new Error('找不到这道题')
-  const hasValidSolution = Boolean(solution && solution.status === 'completed' &&
-    (solution.contentMarkdown.trim() || solution.steps.length))
-  const confirmedTagCount = tags.filter((tag) => tag.tagId && tag.tagType !== 'error' &&
-    tag.mappingStatus !== 'rejected' && tag.verificationStatus === 'user_verified').length
-  const missing: SingleVariantPrerequisites['missing'] = []
-  if (!problem.subject?.trim()) missing.push('subject')
-  if (!problem.stemMarkdown?.trim()) missing.push('stem')
-  if (!hasValidSolution) missing.push('solution')
-  if (!difficulty) missing.push('difficulty')
-  if (!confirmedTagCount) missing.push('tags')
-  return {
-    subject: problem.subject?.trim() ?? '', stemMarkdown: problem.stemMarkdown?.trim() ?? '',
-    hasValidSolution, difficulty: difficulty?.level ?? null, confirmedTagCount, missing,
-  }
-}
-
 async function ensureSingleProblemBundle(source: PracticeProblemCandidate) {
   const linked = (await select<Array<{ skill_bundle_id: string }>>(
     `SELECT skill_bundle_id FROM skill_bundle_problems WHERE problem_id=$1 ORDER BY created_at LIMIT 1`,
@@ -503,7 +473,7 @@ async function ensureSingleProblemBundle(source: PracticeProblemCandidate) {
   const canonicalKey = `${source.subject.trim().toLocaleLowerCase('zh-CN')}|${targetIds.join('|') || `problem:${source.problemId}`}|${source.originalDifficulty}`
   const primary = source.targetTags.find((tag) => tag.type === 'knowledge' && tag.id)
     ?? source.targetTags.find((tag) => tag.id)
-  if (!primary?.id) throw new Error('请先确认至少一个知识、方法或模型标签')
+  if (!primary?.id) return null
   const now = Date.now()
   const bundleId = uuid()
   await withTransactionLock(async () => {
@@ -550,30 +520,29 @@ export async function prepareSingleProblemVariant(
     getPreferredDiagram('problem', problemId),
   ])
   if (!problem) throw new Error('找不到这道题')
-  if (!problem.stemMarkdown?.trim()) throw new Error('请先补全题干')
-  if (!problem.subject?.trim()) throw new Error('请先确认题目科目')
-  if (!solution || solution.status !== 'completed' || (!solution.contentMarkdown.trim() && !solution.steps.length)) {
-    throw new Error('请先生成并确认有效解答')
-  }
-  if (!problem.libraryMetadata.difficulty) throw new Error('请先确认题目难度')
+  const statementMarkdown = problem.stemMarkdown?.trim() || problem.ocrStemMarkdown?.trim() || ''
+  if (!statementMarkdown && !problem.cropImagePath) throw new Error('题目内容不可用，请重新裁剪或整理后再试')
   const targetTags: ReviewTag[] = problemTags
-    .filter((tag) => tag.tagId && tag.tagType !== 'error' && tag.mappingStatus !== 'rejected' && tag.verificationStatus === 'user_verified')
+    .filter((tag) => tag.tagId && tag.tagType !== 'error' && tag.mappingStatus !== 'rejected' && tag.verificationStatus !== 'rejected')
     .map((tag) => ({ id: tag.tagId, name: tag.canonicalName, type: tag.tagType, role: tag.role }))
-  if (!targetTags.length) throw new Error('请先确认至少一个知识、方法或模型标签')
-  const solutionJson = JSON.stringify({ contentMarkdown: solution.contentMarkdown, steps: solution.steps })
+  const solutionJson = JSON.stringify({
+    contentMarkdown: solution?.status === 'completed' ? solution.contentMarkdown : '',
+    steps: solution?.status === 'completed' ? solution.steps : [],
+  })
+  const originalDifficulty = problem.libraryMetadata.difficulty ?? targetDifficulty ?? 'intermediate'
   const source: PracticeProblemCandidate = {
-    problemId: problem.id, subject: problem.subject, statementMarkdown: problem.stemMarkdown,
+    problemId: problem.id, subject: problem.subject?.trim() || problem.aiSubject?.trim() || problem.ocrSubject?.trim() || '综合', statementMarkdown,
     solutionJson, canonicalAnswer: canonicalAnswerFromSolution(solutionJson),
     options: problem.aiChoices.length ? problem.aiChoices.map((choice) => choice.text) : null,
     targetTags, diagramIds: diagram ? [diagram.id] : [], questionImagePath: problem.cropImagePath,
     diagramImagePaths: diagram?.renderedAssetPath ? [diagram.renderedAssetPath] : problem.aiDiagramImagePath ? [problem.aiDiagramImagePath] : [],
-    originalDifficulty: problem.libraryMetadata.difficulty, relevance: 100,
+    originalDifficulty, relevance: 100,
   }
-  source.targetSkillBundleId = await ensureSingleProblemBundle(source)
+  source.targetSkillBundleId = await ensureSingleProblemBundle(source) ?? undefined
   const outcome = await generateVerifiedPracticeVariant({
     source, targetDifficulty: targetDifficulty ?? source.originalDifficulty, variationLevel,
   })
-  if (!outcome.variant) throw new Error(`变式未通过安全审校：${outcome.fallbackCode ?? 'unknown'}`)
+  if (!outcome.variant) throw new Error('这次没有生成可用的变式，请稍后重试或换一个模型')
   return { source, outcome }
 }
 

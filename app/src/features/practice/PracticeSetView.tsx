@@ -41,12 +41,12 @@ const baseDocumentTabs: Array<{ value: PracticePdfSection; label: string }> = [
 
 function variantFallbackReason(code: string) {
   if (code.includes('no_variant_provider')) return '没有可用的变式生成模型'
-  if (code.includes('no_variant_verification_provider')) return '没有可用的独立审校模型'
-  if (code.includes('missing_confirmed_target_tags')) return '原题缺少已确认目标标签'
+  if (code.includes('no_variant_verification_provider')) return '没有可用于检查答案的模型'
+  if (code.includes('missing_confirmed_target_tags')) return '原题信息暂时不足'
   if (code.includes('missing_required_solution_steps')) return '原题解答缺少必要步骤'
-  if (code.includes('diagram') || code.includes('geometry')) return '图形一致性没有通过校验'
-  if (code.includes('provider') || code.includes('REQUEST_')) return '模型请求未能安全完成'
-  return '变式没有通过答案、难度、标签或必要步骤校验'
+  if (code.includes('diagram') || code.includes('geometry')) return '图形版本暂时不可用'
+  if (code.includes('provider') || code.includes('REQUEST_')) return 'AI 服务暂时没有完成请求'
+  return '这次生成的变式暂时不可用'
 }
 
 function ResultCorrection({ response, item, onChange, onError }: {
@@ -442,7 +442,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     {fallbackCount > 0 && <InlineNotice feedback={{
       tone: 'warning',
-      message: `${fallbackCount} 道题已安全回退原题：${fallbackReasons.join('；') || '变式未通过完整校验'}。`,
+      message: `${fallbackCount} 道题已换用原题：${fallbackReasons.join('；') || '暂时没有可用变式'}。`,
     }} />}
     <section className="practice-result-summary">
       <div><span>得分</span><strong>{score}</strong><small>/ 100</small></div>
@@ -483,7 +483,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       className="practice-header"
       eyebrow="打印与作答"
       leading={<IconButton appearance="plain" label="返回今日学习" onClick={onBack}><Icon name="chevron" size={20} /></IconButton>}
-      summary={`${practiceSet.items.length} 题 · 已保存 · ${generatedVariantCount} 道变式${fallbackCount ? ` · ${fallbackCount} 道安全回退原题` : ''}`}
+      summary={`${practiceSet.items.length} 题 · 已保存 · ${generatedVariantCount} 道变式${fallbackCount ? ` · ${fallbackCount} 道换用原题` : ''}`}
       title={`${practiceSet.subject}练习`}
     />
     <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />

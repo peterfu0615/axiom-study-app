@@ -239,6 +239,7 @@ export async function generateVerifiedPracticeVariant(input: {
     return { planId: plan.id, variant: null, fallbackCode }
   }
   const generationProviders = getPracticeVariantGenerationProviders()
+    .filter((provider) => input.source.statementMarkdown.trim() || provider.supportsVision)
   const verificationProviders = getPracticeVariantVerificationProviders()
   if (!generationProviders.length) {
     await updatePlan(plan.id, 'rejected', { failureCode: 'no_variant_provider' })
@@ -262,6 +263,7 @@ export async function generateVerifiedPracticeVariant(input: {
           options: input.source.options,
           canonicalAnswer: input.source.canonicalAnswer,
           solutionJson: input.source.solutionJson,
+          questionImagePath: input.source.questionImagePath ?? null,
           diagramImagePaths: input.source.diagramImagePaths,
         },
       })

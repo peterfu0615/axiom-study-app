@@ -221,7 +221,7 @@ const activePreparationRuns = new Map<string, Promise<{ practiceSet: PracticeSet
 
 function PracticePreparationView({ snapshot }: { snapshot: PracticePreparationSnapshot }) {
   const labels: Record<PreparationPhase, string> = {
-    selecting: '正在选择题目', generating: '正在生成所需变式', verifying: '正在独立审校', rendering: '正在准备图形与练习页',
+    selecting: '正在选择题目', generating: '正在生成所需变式', verifying: '正在检查题目', rendering: '正在准备图形与练习页',
   }
   const order: PreparationPhase[] = ['selecting', 'generating', 'verifying', 'rendering']
   const phase = order.includes(snapshot.status as PreparationPhase) ? snapshot.status as PreparationPhase : 'rendering'

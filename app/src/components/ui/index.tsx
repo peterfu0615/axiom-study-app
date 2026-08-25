@@ -8,6 +8,7 @@ import {
   type HTMLAttributes,
   type InputHTMLAttributes,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
   type TextareaHTMLAttributes,
@@ -170,6 +171,75 @@ export function SegmentedControl<T extends string>({
           {option.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+export function DiscreteSlider<T extends string>({
+  ariaLabel,
+  disabled = false,
+  onChange,
+  options,
+  value,
+}: {
+  ariaLabel: string
+  disabled?: boolean
+  onChange: (value: T) => void
+  options: Array<{ value: T; label: string }>
+  value: T
+}) {
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value))
+  const selectIndex = (index: number) => {
+    const option = options[Math.max(0, Math.min(options.length - 1, index))]
+    if (option && option.value !== value) onChange(option.value)
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      event.preventDefault(); selectIndex(selectedIndex - 1)
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      event.preventDefault(); selectIndex(selectedIndex + 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault(); selectIndex(0)
+    } else if (event.key === 'End') {
+      event.preventDefault(); selectIndex(options.length - 1)
+    }
+  }
+  const selectFromPointer = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (disabled || options.length < 2) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)))
+    selectIndex(Math.round(ratio * (options.length - 1)))
+  }
+  const progress = options.length > 1 ? selectedIndex / (options.length - 1) * 100 : 0
+  return (
+    <div className="ax-discrete-slider-field">
+      <span className="ax-field-label">{ariaLabel}</span>
+      <button
+        aria-label={ariaLabel}
+        aria-valuemax={Math.max(0, options.length - 1)}
+        aria-valuemin={0}
+        aria-valuenow={selectedIndex}
+        aria-valuetext={options[selectedIndex]?.label}
+        className="ax-discrete-slider"
+        disabled={disabled}
+        onClick={selectFromPointer}
+        onKeyDown={onKeyDown}
+        role="slider"
+        type="button"
+      >
+        <span aria-hidden="true" className="ax-discrete-slider__track">
+          <span className="ax-discrete-slider__fill" style={{ width: `${progress}%` }} />
+        </span>
+        {options.map((option, index) => <span
+          aria-hidden="true"
+          className={`ax-discrete-slider__stop${index === 0 ? ' is-first' : ''}${index === options.length - 1 ? ' is-last' : ''}${index <= selectedIndex ? ' is-reached' : ''}${index === selectedIndex ? ' is-current' : ''}`}
+          key={option.value}
+          style={{ left: `${options.length > 1 ? index / (options.length - 1) * 100 : 0}%` }}
+        />)}
+      </button>
+      <div aria-hidden="true" className="ax-discrete-slider__labels">
+        {options.map((option, index) => <span className={index === selectedIndex ? 'is-current' : ''} key={option.value}>{option.label}</span>)}
+      </div>
     </div>
   )
 }

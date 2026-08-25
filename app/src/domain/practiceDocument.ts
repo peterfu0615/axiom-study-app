@@ -362,7 +362,7 @@ function questionBlock(item: PracticeItem, section: PracticeSectionKind, practic
       { kind: 'answerSpace' as const, practiceItemId: item.id, ...answerPolicy(item, mode, true) },
     ] : [
       ...(item.sourceType === 'generated_variant'
-        ? [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: 'AI 变式题 · 已独立审校' }] }]
+        ? [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, text: 'AI 变式题' }] }]
         : []),
       ...parsePracticeMarkdown(item.statementMarkdown),
       ...(item.options?.length ? [{ kind: 'list' as const, ordered: false, items: item.options.map((option, index) => parsePracticeInlineContent(`${String.fromCharCode(65 + index)}. ${option}`)) }] : []),
