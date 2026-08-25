@@ -83,6 +83,7 @@ async function applyPracticeEvidence(input: {
   grading: PracticeGradingResult; reviewedAt: number
   targetRetention: number
   verifiedVariant: boolean
+  variationLevel: 'numeric' | 'condition' | 'rebuild' | null
 }) {
   const resultKey = `practice:${input.responseId}`
   const existing = await select<Array<{ id: string }>>('SELECT id FROM review_attempts WHERE result_key=$1 LIMIT 1', [resultKey])
@@ -96,6 +97,8 @@ async function applyPracticeEvidence(input: {
   if (!question) throw new Error(`练习题 ${input.itemId} 缺少可追溯的 Review Question 快照`)
   const rating = practiceRating(input.grading)
   const evidence = ratingEvidence(rating)
+  const variationStrength = input.variationLevel === 'rebuild' ? 1.1
+    : input.variationLevel === 'condition' ? 1 : input.variationLevel === 'numeric' ? .9 : 1
   const reviewAttemptId = uuid()
   await execute(`INSERT INTO review_attempts(
     id,subject,question_instance_id,answer_text,answer_image_path,is_correct,error_category,
@@ -139,7 +142,7 @@ async function applyPracticeEvidence(input: {
     const tagUpdate = tagEvidenceUpdate(gradedEvidence, input.grading)
     const next = tagUpdate.rating
       ? applyWeightedReviewRating(current, tagUpdate.rating, input.difficulty, input.reviewedAt,
-        tagUpdate.strength * reviewTagEvidenceWeight(tag),
+        tagUpdate.strength * reviewTagEvidenceWeight(tag) * variationStrength,
         input.verifiedVariant && input.grading.bundleEvidence.transfer, input.targetRetention)
       : current
     if (row && tagUpdate.rating) await execute(`UPDATE skill_states SET mastery_estimate=$1,stability=$2,retrievability=$3,
@@ -167,6 +170,7 @@ async function applyPracticeEvidence(input: {
   const bundleStrength = bundleRating
     ? input.grading.bundleEvidence.confidence
       * (input.grading.independentCompletion ? 1 : .75) * (input.grading.usedHint ? .65 : 1)
+      * variationStrength
     : 0
   const nextBundle = bundleRating
     ? applyWeightedReviewRating(previousBundle, bundleRating, input.difficulty, input.reviewedAt,
@@ -252,9 +256,11 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
         item_id: string; subject: string; source_problem_id: string | null
         target_skill_bundle_id: string | null; target_tags_json: string; difficulty: DifficultyLevel
         source_type: PracticeItemSourceType
+        generation_metadata_json: string | null
       }>>(`SELECT response.id AS response_id,response.answer_asset_path,response.corrected_answer_json,
         response.extracted_answer_json,response.grading_result_json,item.id AS item_id,item.subject,
-        item.source_problem_id,item.target_skill_bundle_id,item.target_tags_json,item.difficulty,item.source_type
+        item.source_problem_id,item.target_skill_bundle_id,item.target_tags_json,item.difficulty,item.source_type,
+        item.generation_metadata_json
         FROM practice_responses response JOIN practice_items item ON item.id=response.practice_item_id
         WHERE response.practice_attempt_id=$1 ORDER BY item.order_index`, [attempt.id])
       if (!contexts.length || contexts.length !== practiceSet.items.length) throw new Error('作答区域不完整，不能提交学习证据')
@@ -279,6 +285,7 @@ export async function finalizePracticeAttempt(practiceSet: PracticeSet, attempt:
           difficulty: row.difficulty, targetTags: parseJSON(row.target_tags_json, []), answer,
           answerImagePath: row.answer_asset_path, grading: grades[index]!, reviewedAt: now,
           targetRetention, verifiedVariant: row.source_type === 'generated_variant',
+          variationLevel: parseJSON<{ variationLevel?: 'numeric' | 'condition' | 'rebuild' }>(row.generation_metadata_json, {}).variationLevel ?? null,
         })) inserted += 1
       }
       const consumedItems = Math.min(loopRow.item_budget, loopRow.consumed_items + inserted)

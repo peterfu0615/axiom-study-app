@@ -82,21 +82,21 @@ mod tests {
     ///   - embedded runner 幂等（全部已应用，不再执行任何脚本）；
     ///   - sqlx Migrator（plugin 的同款路径）校验 checksum 全部通过且不应用。
     #[test]
-    fn fresh_database_reaches_60_and_stays_sqlx_compatible() {
+    fn fresh_database_reaches_61_and_stays_sqlx_compatible() {
         tauri::async_runtime::block_on(async {
             let temp = TempDb::new("fresh");
             let mut conn = connect(&temp).await;
-            let migrations = migrations_up_to(60);
+            let migrations = migrations_up_to(61);
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
-                .expect("全新库必须能完整迁移到 60（裸 BEGIN 由 runner 剥离）");
-            assert_eq!(max_applied_version(&mut conn).await, 60);
+                .expect("全新库必须能完整迁移到 61（裸 BEGIN 由 runner 剥离）");
+            assert_eq!(max_applied_version(&mut conn).await, 61);
 
             // 幂等重跑：不得重复执行、不得报错。
             migrate_embedded_schema(&mut conn, &migrations)
                 .await
                 .expect("embedded runner 必须幂等");
-            assert_eq!(max_applied_version(&mut conn).await, 60);
+            assert_eq!(max_applied_version(&mut conn).await, 61);
 
             // plugin 闭环：即使用 sqlx Migrator 的原文校验路径再走一遍，
             // 也应全部通过（checksum 一致、无缺号），不执行任何迁移。
@@ -124,16 +124,16 @@ mod tests {
         });
     }
 
-    /// 迁移列表完整性：版本必须恰好为 1..=60 且严格递增。
+    /// 迁移列表完整性：版本必须恰好为 1..=61 且严格递增。
     /// 用户真实库已应用 codex 分支的 24–27，列表缺号会让任何校验拒绝启动。
     #[test]
-    fn migration_list_covers_versions_1_through_60_exactly() {
+    fn migration_list_covers_versions_1_through_61_exactly() {
         let versions: Vec<i64> = axiom_migrations()
             .iter()
             .map(|migration| migration.version)
             .collect();
-        let expected: Vec<i64> = (1..=60).collect();
-        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=60");
+        let expected: Vec<i64> = (1..=61).collect();
+        assert_eq!(versions, expected, "迁移列表必须严格等于 1..=61");
     }
 
     #[test]
@@ -321,6 +321,54 @@ mod tests {
                 .await
                 .expect("调度器迁移审计可写入");
             assert!(conn.execute("INSERT INTO review_scheduler_migrations(id,state_kind,subject,entity_id,from_version,to_version,previous_state_json,new_state_json,migrated_at) VALUES('duplicate','skill','数学','tag','horizon-v1','ebbinghaus-v2','{}','{}',2)").await.is_err());
+        });
+    }
+
+    #[test]
+    fn review_v3_rebuilds_preferences_and_persists_preparation_jobs() {
+        tauri::async_runtime::block_on(async {
+            let temp = TempDb::new("review-v3-default");
+            let mut conn = connect(&temp).await;
+            migrate_embedded_schema(&mut conn, &migrations_up_to(61))
+                .await
+                .expect("Review v3 schema 必须迁移成功");
+            let preferences: (f64, i64) = sqlx::query_as(
+                "SELECT target_retention,target_retention_customized FROM review_preferences WHERE id='default'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("Review v3 默认偏好");
+            assert_eq!(preferences, (0.70, 0));
+            conn.execute("UPDATE review_preferences SET target_retention=0.40 WHERE id='default'")
+                .await
+                .expect("40% 是合法自定义阈值");
+            assert!(conn
+                .execute("UPDATE review_preferences SET target_retention=0.39 WHERE id='default'")
+                .await
+                .is_err());
+            conn.execute("INSERT INTO practice_preparations(id,source_type,source_ref,session_mode,status,total_slots,created_at,updated_at) VALUES('job','today','today-plan','standard','selecting',2,1,1)")
+                .await
+                .expect("准备作业必须可持久化");
+            assert!(conn.execute("INSERT INTO practice_preparations(id,source_type,source_ref,session_mode,status,total_slots,created_at,updated_at) VALUES('duplicate','today','today-plan','standard','generating',2,1,1)").await.is_err());
+
+            let custom = TempDb::new("review-v3-custom");
+            let mut custom_conn = connect(&custom).await;
+            migrate_embedded_schema(&mut custom_conn, &migrations_up_to(58))
+                .await
+                .expect("Review v2 fixture");
+            custom_conn.execute("UPDATE review_preferences SET target_retention=0.80,updated_at=updated_at+1 WHERE id='default'")
+                .await
+                .expect("模拟用户显式保存");
+            migrate_embedded_schema(&mut custom_conn, &migrations_up_to(61))
+                .await
+                .expect("显式偏好升级");
+            let preserved: (f64, i64) = sqlx::query_as(
+                "SELECT target_retention,target_retention_customized FROM review_preferences WHERE id='default'",
+            )
+            .fetch_one(&mut custom_conn)
+            .await
+            .expect("用户偏好必须保留");
+            assert_eq!(preserved, (0.80, 1));
         });
     }
 

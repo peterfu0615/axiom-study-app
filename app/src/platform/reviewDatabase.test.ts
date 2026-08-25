@@ -31,8 +31,11 @@ describe('forecast persistence boundary', () => {
     invoke.mockResolvedValue([])
     const result = await getSevenDayReviewForecast(new Date(2026, 7, 10, 9).getTime())
     expect(result).toHaveLength(7)
-    expect(invoke).toHaveBeenCalledTimes(5)
+    expect(invoke).toHaveBeenCalledTimes(7)
     expect(invoke.mock.calls.every(([command]) => command === 'db_select')).toBe(true)
+    const sql = invoke.mock.calls.map(([, payload]) => String(payload.sql)).join('\n')
+    expect(sql).toContain('problem_mistake_evidences')
+    expect(sql).toContain('skill_bundle_states')
   })
 })
 

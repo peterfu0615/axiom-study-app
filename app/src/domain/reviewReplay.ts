@@ -77,12 +77,13 @@ export function replayReviewHistory(events: ReviewReplayEvent[]): ExpectedReplay
     left.reviewedAt - right.reviewedAt || left.logId.localeCompare(right.logId))
   const states = new Map<string, ExpectedReplayState>()
   ordered.forEach((event) => {
-    const isV2 = event.schedulerVersion === 'ebbinghaus-v2'
-    const transition = isV2 ? applyReviewRating : applyReviewRatingV1
+    const isModern = event.schedulerVersion === 'ebbinghaus-v2' || event.schedulerVersion === 'ebbinghaus-v3'
+    const modernVersion = event.schedulerVersion === 'ebbinghaus-v3' ? 'ebbinghaus-v3' : 'ebbinghaus-v2'
+    const transition = isModern ? applyReviewRating : applyReviewRatingV1
     const baselineFor = (current: ExpectedReplayState | undefined, fallback?: ReviewSkillState | null) => {
       const state = current?.state ?? fallback
-      if (!state) return isV2 ? initialReviewSkillState() : initialReviewSkillStateV1()
-      return isV2 && current?.schedulerVersion === 'horizon-v1'
+      if (!state) return isModern ? initialReviewSkillState() : initialReviewSkillStateV1()
+      return isModern && current?.schedulerVersion === 'horizon-v1'
         ? convertReviewStateV1ToV2(state, event.reviewedAt)
         : state
     }
@@ -93,7 +94,7 @@ export function replayReviewHistory(events: ReviewReplayEvent[]): ExpectedReplay
       const next = transition(baselineFor(current), event.rating, event.difficulty, event.reviewedAt)
       states.set(key, {
         kind: 'skill', key, subject: event.subject, entityId: tagId,
-        state: next, schedulerVersion: isV2 ? 'ebbinghaus-v2' : 'horizon-v1', eventCount: (current?.eventCount ?? 0) + 1,
+        state: next, schedulerVersion: isModern ? modernVersion : 'horizon-v1', eventCount: (current?.eventCount ?? 0) + 1,
         legacyBoundary: false,
       })
     })
@@ -103,7 +104,7 @@ export function replayReviewHistory(events: ReviewReplayEvent[]): ExpectedReplay
     states.set(key, {
       kind: 'bundle', key, subject: event.subject, entityId: event.skillBundleId,
       state: transition(baseline, event.rating, event.difficulty, event.reviewedAt),
-      schedulerVersion: isV2 ? 'ebbinghaus-v2' : 'horizon-v1', eventCount: (current?.eventCount ?? 0) + 1,
+      schedulerVersion: isModern ? modernVersion : 'horizon-v1', eventCount: (current?.eventCount ?? 0) + 1,
       legacyBoundary: !current && Boolean(event.previousBundleState?.evidenceCount),
     })
   })
@@ -139,7 +140,7 @@ export function previewReviewStateReplay(
 
   currentStates.forEach((actual) => {
     if (expectedByKey.has(actual.key)) return
-    const strictlyCovered = ['horizon-v1', 'ebbinghaus-v2'].includes(actual.schedulerVersion) && actual.state.evidenceCount > 0 &&
+    const strictlyCovered = ['horizon-v1', 'ebbinghaus-v2', 'ebbinghaus-v3'].includes(actual.schedulerVersion) && actual.state.evidenceCount > 0 &&
       (actual.state.lastPracticedAt ?? 0) >= firstEventAt
     if (strictlyCovered) differences.push({ kind: 'extra', stateKind: actual.kind, key: actual.key, actual: actual.state, expected: null })
   })

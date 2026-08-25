@@ -6,12 +6,15 @@ const source = readFileSync(new URL('./TodayWorkspace.tsx', import.meta.url), 'u
 
 describe('today practice preparation contract', () => {
   it('paints the preparation route before starting expensive generation', () => {
-    const paint = source.indexOf("setPreparation({ phase: 'selecting'")
+    const action = source.indexOf('const openTodayPractice')
+    const paint = source.indexOf('setPreparation(optimistic)', action)
     const frame = source.indexOf('window.requestAnimationFrame', paint)
-    const generation = source.indexOf('getOrCreatePracticeSetFromTodayPlan', frame)
+    const persistedJob = source.indexOf('createOrResumePracticePreparation', frame)
     expect(paint).toBeGreaterThan(0)
     expect(frame).toBeGreaterThan(paint)
-    expect(generation).toBeGreaterThan(frame)
+    expect(persistedJob).toBeGreaterThan(frame)
+    expect(source).toContain("status: 'selecting'")
+    expect(source).toContain('runPreparation(snapshot, plan, todayPracticeSet)')
   })
 
   it('keeps one top-level practice action and removes per-topic generation menus', () => {

@@ -24,6 +24,16 @@ import { PracticeSetView } from '../practice/PracticeSetView'
 import { getLatestPracticeAttempt, getPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { practiceErrorMessage } from '../practice/productLanguage'
 import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
+import {
+  completePracticePreparation,
+  claimPracticePreparation,
+  createOrResumePracticePreparation,
+  failPracticePreparation,
+  getActivePracticePreparation,
+  PRACTICE_PREPARATION_EVENT,
+  updatePracticePreparationPhase,
+  type PracticePreparationSnapshot,
+} from '../../platform/practicePreparationDatabase'
 import './Today.css'
 
 const difficultyLabels = { basic: '基础', intermediate: '中档', advanced: '进阶' }
@@ -193,15 +203,17 @@ function LearningTopicRow({ unit }: {
 }
 
 type PreparationPhase = 'selecting' | 'generating' | 'verifying' | 'rendering'
+const activePreparationRuns = new Map<string, Promise<{ practiceSet: PracticeSet; attempt: PracticeAttempt | null }>>()
 
-function PracticePreparationView({ phase, total }: { phase: PreparationPhase; total: number }) {
+function PracticePreparationView({ snapshot }: { snapshot: PracticePreparationSnapshot }) {
   const labels: Record<PreparationPhase, string> = {
     selecting: '正在选择题目', generating: '正在生成所需变式', verifying: '正在独立审校', rendering: '正在准备图形与练习页',
   }
   const order: PreparationPhase[] = ['selecting', 'generating', 'verifying', 'rendering']
+  const phase = order.includes(snapshot.status as PreparationPhase) ? snapshot.status as PreparationPhase : 'rendering'
   const active = order.indexOf(phase)
   return <main className="workspace today-workspace practice-preparation" aria-live="polite">
-    <PageHeader eyebrow="今日练习" title="正在准备练习" summary={`${total} 个学习主题 · 窗口可继续移动和操作`} />
+    <PageHeader eyebrow="今日练习" title="正在准备练习" summary={`${snapshot.totalSlots} 个学习主题 · 窗口可继续移动和操作`} />
     <section className="practice-preparation__card">
       <div className="practice-preparation__spinner" aria-hidden="true" />
       <h2>{labels[phase]}</h2>
@@ -225,11 +237,48 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [preparation, setPreparation] = useState<{ phase: PreparationPhase; total: number } | null>(null)
+  const [preparation, setPreparation] = useState<PracticePreparationSnapshot | null>(null)
 
   const refreshForecast = useCallback(async (range: ForecastRange) => {
     try { setForecast(await getReviewForecast(range)) }
     catch (reason) { console.warn('复习预测加载失败：', reason) }
+  }, [])
+
+  const runPreparation = useCallback(async (
+    snapshot: PracticePreparationSnapshot,
+    nextPlan: TodayReviewPlan,
+    existingPracticeSet: PracticeSet | null,
+  ) => {
+    let task = activePreparationRuns.get(snapshot.id)
+    if (!task) {
+      task = (async () => {
+        const generating = await claimPracticePreparation(snapshot.id, snapshot.updatedAt)
+        if (!generating) throw new Error('练习准备作业已由另一个窗口恢复')
+        const moduleIds = nextPlan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
+        const budget = Math.max(3, moduleIds.length * 2)
+        const practiceSet = existingPracticeSet?.sessionMode === snapshot.sessionMode
+          ? existingPracticeSet
+          : await getOrCreatePracticeSetFromTodayPlan(nextPlan.id, moduleIds, budget, snapshot.sessionMode)
+        await updatePracticePreparationPhase(snapshot.id, 'verifying')
+        await updatePracticePreparationPhase(snapshot.id, 'rendering')
+        const attempt = await getLatestPracticeAttempt(practiceSet.id)
+        await completePracticePreparation(snapshot.id, practiceSet.id)
+        return { practiceSet, attempt }
+      })()
+      activePreparationRuns.set(snapshot.id, task)
+      void task.finally(() => {
+        if (activePreparationRuns.get(snapshot.id) === task) activePreparationRuns.delete(snapshot.id)
+      }).catch(() => undefined)
+    }
+    try {
+      const { practiceSet, attempt } = await task
+      setTodayPracticeSet(practiceSet); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(practiceSet)
+    } catch (reason) {
+      await failPracticePreparation(snapshot.id, reason).catch(() => undefined)
+      setError(practiceErrorMessage(reason))
+    } finally {
+      setPreparation(null)
+    }
   }, [])
 
   const load = useCallback(async (isCancelled: () => boolean = () => false) => {
@@ -238,23 +287,39 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
       // The forward forecast is independent of today's plan; overlap it with
       // the practice-set lookup instead of waiting for both sequentially.
       const nextPlan = await getOrCreateTodayPlan()
-      const [nextForecast, existingPracticeSet, nextCorrections] = await Promise.all([
+      const [nextForecast, existingPracticeSet, nextCorrections, activePreparation] = await Promise.all([
         getReviewForecast(forecastRangeRef.current),
         findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
         listTodayCorrectionTasks(),
+        getActivePracticePreparation('today', nextPlan.id, nextPlan.preferences.preferredMode),
       ])
       if (isCancelled()) return
       setPlan(nextPlan); setForecast(nextForecast); setCorrections(nextCorrections)
       setTodayPracticeSet(existingPracticeSet)
       setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
+      if (activePreparation) {
+        setPreparation(activePreparation)
+        window.requestAnimationFrame(() => void runPreparation(activePreparation, nextPlan, existingPracticeSet))
+      }
     } catch (reason) { if (!isCancelled()) setError(practiceErrorMessage(reason)) }
     finally { if (!isCancelled()) setLoading(false) }
-  }, [])
+  }, [runPreparation])
   useEffect(() => {
     let cancelled = false
     void load(() => cancelled)
     return () => { cancelled = true }
   }, [load])
+  useEffect(() => {
+    const update = (event: Event) => {
+      const snapshot = (event as CustomEvent<PracticePreparationSnapshot>).detail
+      if (!snapshot || snapshot.sourceType !== 'today') return
+      setPreparation((current) => current && (current.id === 'pending' || current.id === snapshot.id)
+        ? (snapshot.status === 'ready' || snapshot.status === 'failed' ? current : snapshot)
+        : current)
+    }
+    window.addEventListener(PRACTICE_PREPARATION_EVENT, update)
+    return () => window.removeEventListener(PRACTICE_PREPARATION_EVENT, update)
+  }, [])
   useEffect(() => {
     const refresh = () => {
       void refreshForecast(forecastRangeRef.current)
@@ -288,20 +353,21 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     if (!plan) return
     const sessionMode = plan.preferences.preferredMode
     const moduleIds = plan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
-    const budget = Math.max(3, moduleIds.length * 2)
     setError(null)
-    setPreparation({ phase: 'selecting', total: moduleIds.length })
+    const optimistic: PracticePreparationSnapshot = {
+      id: 'pending', sourceType: 'today', sourceRef: plan.id, sessionMode,
+      status: 'selecting', totalSlots: moduleIds.length, practiceSetId: null,
+      safeErrorCode: null, errorMessage: null, updatedAt: Date.now(), slots: [],
+    }
+    setPreparation(optimistic)
     window.requestAnimationFrame(() => void (async () => {
       try {
-        setPreparation({ phase: 'generating', total: moduleIds.length })
-        const next = todayPracticeSet?.sessionMode === sessionMode
-          ? todayPracticeSet
-          : await getOrCreatePracticeSetFromTodayPlan(plan.id, moduleIds, budget, sessionMode)
-        setPreparation({ phase: 'rendering', total: moduleIds.length })
-        const attempt = await getLatestPracticeAttempt(next.id)
-        setTodayPracticeSet(next); setTodayAttempt(attempt); setActiveAttempt(attempt); setActivePracticeSet(next)
-      } catch (reason) { setError(practiceErrorMessage(reason)) }
-      finally { setPreparation(null) }
+        const snapshot = await createOrResumePracticePreparation({
+          sourceType: 'today', sourceRef: plan.id, sessionMode, slotRefs: moduleIds,
+        })
+        setPreparation(snapshot)
+        await runPreparation(snapshot, plan, todayPracticeSet)
+      } catch (reason) { setPreparation(null); setError(practiceErrorMessage(reason)) }
     })())
   }
 
@@ -328,7 +394,7 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     ) ? 'results' : undefined}
     practiceSet={activePracticeSet}
   />
-  if (preparation) return <PracticePreparationView phase={preparation.phase} total={preparation.total} />
+  if (preparation) return <PracticePreparationView snapshot={preparation} />
 
   const actionableUnits = plan?.units.filter((unit) => unit.status !== 'deferred') ?? []
   const completed = actionableUnits.filter((unit) => unit.status === 'completed').length

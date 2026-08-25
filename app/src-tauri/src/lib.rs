@@ -405,6 +405,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0060_geometry_variant_freshness.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 61,
+            description: "review_v3_preparation",
+            sql: include_str!("../migrations/0061_review_v3_preparation.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

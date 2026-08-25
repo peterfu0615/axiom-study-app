@@ -144,6 +144,7 @@ describe('Horizon review scheduler', () => {
       .toBeLessThan(reviewRetrievability(state, now + 2 * 86_400_000))
     expect(reviewRetrievability(state, dueAt)).toBeCloseTo(.85, 5)
     expect(reviewDueAt(state, .9)).toBeLessThan(dueAt)
+    expect(initialReviewSkillState(.5).stability).toBe(initialReviewSkillState(.85).stability)
   })
 
   it('combines bundle retention as weakest 60% and weighted average 40%', () => {
@@ -272,8 +273,32 @@ describe('Horizon review scheduler', () => {
 
   it('shows only due content and honors a zero Planner review allocation', () => {
     const state = applyReviewRating(null, 'easy', 'intermediate', now)
-    const future = candidate('future', { skillStates: { future: state } })
+    const future = candidate('future', { skillStates: { 'knowledge-一元二次方程': state } })
     expect(buildTodayReviewUnits([future], { now, maxModules: 12, maxDailyMinutes: 90 })).toHaveLength(0)
     expect(buildTodayReviewUnits([candidate('due')], { now, maxDailyMinutes: 0 })).toHaveLength(0)
+  })
+
+  it('moves an uncaptured mistake monotonically as the 50/70/85 threshold changes', () => {
+    const fresh = candidate('threshold', { createdAt: now, mistakeCapturedAt: now })
+    const saving = candidateDueAt(fresh, now, .5)
+    const balanced = candidateDueAt(fresh, now, .7)
+    const intensive = candidateDueAt(fresh, now, .85)
+    expect(intensive).toBeLessThan(balanced)
+    expect(balanced).toBeLessThan(saving)
+    expect(balanced - now).not.toBe(86_400_000)
+  })
+
+  it('uses either the primary knowledge or bundle curve but not a secondary tag as the due gate', () => {
+    const primary = tag('knowledge', '函数', 'primary')
+    const secondary = tag('method', '数形结合', 'secondary')
+    const recent = { ...initialReviewSkillState(), stability: 30, lastPracticedAt: now }
+    const overdue = { ...initialReviewSkillState(), stability: 1, lastPracticedAt: now - 3 * 86_400_000 }
+    const base = candidate('gates', {
+      tags: [primary, secondary],
+      skillStates: { [primary.id!]: recent, [secondary.id!]: overdue },
+      bundleState: recent,
+    })
+    expect(candidateDueAt(base, now, .7)).toBeGreaterThan(now)
+    expect(candidateDueAt({ ...base, bundleState: overdue }, now, .7)).toBeLessThan(now)
   })
 })

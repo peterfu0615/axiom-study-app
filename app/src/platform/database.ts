@@ -2999,6 +2999,28 @@ export async function completeProblemAIModelRun(
       }
       if (taxonomyPlan) {
         await writeControlledProblemAnalysis(taxonomyPlan)
+        const controlledTags = await db.select<Array<{
+          tag_id: string
+          tag_type: string
+          role: string
+        }>>(`SELECT tag_id,tag_type,role FROM problem_tags
+          WHERE problem_id=$1 AND superseded_at IS NULL AND tag_id IS NOT NULL
+            AND mapping_status!='rejected' AND verification_status!='rejected'
+          ORDER BY tag_type,role,tag_id`, [run.problemId])
+        if (controlledTags.length) {
+          const source = (await db.select<Array<{ created_at: number }>>(
+            'SELECT created_at FROM problems WHERE id=$1 LIMIT 1', [run.problemId],
+          ))[0]
+          const tagsJson = JSON.stringify(controlledTags)
+          await db.execute(`INSERT INTO problem_mistake_evidences(
+            id,problem_id,captured_at,tags_revision_hash,tags_json,created_at,updated_at
+          ) VALUES($1,$2,$3,$4,$5,$6,$6)
+          ON CONFLICT(problem_id) DO UPDATE SET tags_revision_hash=excluded.tags_revision_hash,
+            tags_json=excluded.tags_json,updated_at=excluded.updated_at`, [
+            crypto.randomUUID(), run.problemId, Number(source?.created_at ?? now),
+            stableInputHash(controlledTags), tagsJson, now,
+          ])
+        }
       }
       await db.execute('COMMIT')
     } catch (error) {

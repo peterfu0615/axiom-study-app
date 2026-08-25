@@ -1,7 +1,7 @@
 import type { DifficultyLevel } from './models'
 import type { ReviewSessionMode, ReviewSessionSettings, ReviewSkillState, ReviewTag } from './review'
 
-export const PRACTICE_PLANNER_VERSION = 'deterministic-v1'
+export const PRACTICE_PLANNER_VERSION = 'deterministic-v2'
 
 export type PracticeSourceType = 'review_unit' | 'skill' | 'today' | 'practice_attempt'
 export type PracticeItemSourceType = 'existing_problem' | 'generated_variant'
@@ -53,6 +53,7 @@ export interface PracticeBlueprintItem {
   problem: PracticeProblemCandidate
   difficulty: DifficultyLevel
   requestedSourceType: PracticeItemSourceType
+  requestedVariationLevel: 'numeric' | 'condition' | 'rebuild'
 }
 
 export interface PracticeBlueprint {
@@ -159,6 +160,7 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
   const warnings: string[] = []
   if (candidates.length < budget) warnings.push(`仅找到 ${candidates.length} 道已验证且不重复的关联题，未用无效占位题补足。`)
   const plan = difficultyPlan[band]
+  const variationPlan = ['numeric', 'condition', 'rebuild'] as const
   return {
     plannerVersion: PRACTICE_PLANNER_VERSION,
     masteryBand: band,
@@ -170,6 +172,7 @@ export function buildPracticeBlueprint(input: PracticePlannerInput): PracticeBlu
       requestedSourceType: problem.lastConfirmedSourceType === 'generated_variant'
         ? 'existing_problem'
         : 'generated_variant',
+      requestedVariationLevel: variationPlan[(problem.confirmedPracticeCount ?? 0) % variationPlan.length],
     })),
     warnings,
   }

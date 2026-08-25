@@ -170,7 +170,11 @@ export async function createPracticeSet(
       planned,
       outcome: options.preparedVariants?.get(planned.problem.problemId) ?? (!options.forceVariant && planned.requestedSourceType === 'existing_problem'
         ? { planId: '', variant: null, fallbackCode: 'original_only' }
-        : await generateVerifiedPracticeVariant({ source: planned.problem, targetDifficulty: planned.difficulty })),
+        : await generateVerifiedPracticeVariant({
+          source: planned.problem,
+          targetDifficulty: planned.difficulty,
+          variationLevel: planned.requestedVariationLevel,
+        })),
     }))
     const renderedVariantDiagrams = new Map<string, {
       source: string; contract: DiagramValidationContract; render: TikzRenderResult
@@ -233,6 +237,7 @@ export async function createPracticeSet(
           const generationMetadata = variant ? {
             variantPlanId: variant.plan.id, sourceProblemId: problem.problemId,
             requestedSourceType: planned.requestedSourceType,
+            variationLevel: variant.plan.variationLevel,
             changes: variant.candidate.changes, verification: variant.verification,
             provider: variant.provider, model: variant.model,
             promptVersion: variant.plan.promptVersion, schemaVersion: variant.plan.schemaVersion,
@@ -243,6 +248,7 @@ export async function createPracticeSet(
           } : {
             variantFallbackPlanId: outcome.planId, variantFallbackCode: outcome.fallbackCode,
             requestedSourceType: planned.requestedSourceType,
+            requestedVariationLevel: planned.requestedVariationLevel,
             diagramIds: problem.diagramIds, questionImagePath: problem.questionImagePath,
             diagramImagePaths: problem.diagramImagePaths,
           }
@@ -403,20 +409,31 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
     WHERE link.skill_bundle_id=$2 ORDER BY link.similarity_score DESC, problem.id`, [context.subject, context.skill_bundle_id])
   const relatedIds = [...new Set(related.map((row) => row.problem_id))]
   const historyRows = relatedIds.length ? await select<ConfirmedPracticeHistoryRow[]>(`
-    WITH confirmed AS (
-      SELECT item.source_problem_id AS problem_id,item.source_type,evidence.created_at,
-        row_number() OVER (
-          PARTITION BY item.source_problem_id
-          ORDER BY evidence.created_at DESC,evidence.id DESC
-        ) AS recent_rank
+    WITH events AS (
+      SELECT item.id AS item_id,item.source_problem_id AS problem_id,item.source_type,evidence.created_at AS activity_at
       FROM practice_items item
       JOIN practice_responses response ON response.practice_item_id=item.id
       JOIN practice_evidences evidence ON evidence.practice_response_id=response.id
       WHERE item.source_problem_id IN (${relatedIds.map((_, index) => `$${index + 1}`).join(',')})
+      UNION ALL
+      SELECT item.id,item.source_problem_id,item.source_type,exposure.exposed_at
+      FROM practice_instance_exposures exposure
+      JOIN practice_items item ON item.id=exposure.practice_item_id
+      WHERE item.source_problem_id IN (${relatedIds.map((_, index) => `$${index + 1 + relatedIds.length}`).join(',')})
+    ), activity AS (
+      SELECT item_id,problem_id,source_type,max(activity_at) AS activity_at
+      FROM events GROUP BY item_id,problem_id,source_type
+    ), ranked AS (
+      SELECT problem_id,source_type,activity_at,
+        row_number() OVER (
+          PARTITION BY item.source_problem_id
+          ORDER BY activity_at DESC,item_id DESC
+        ) AS recent_rank
+      FROM activity item
     )
-    SELECT problem_id,count(*) AS confirmed_count,max(created_at) AS last_confirmed_at,
+    SELECT problem_id,count(*) AS confirmed_count,max(activity_at) AS last_confirmed_at,
       max(CASE WHEN recent_rank=1 THEN source_type END) AS last_source_type
-    FROM confirmed GROUP BY problem_id`, relatedIds) : []
+    FROM ranked GROUP BY problem_id`, [...relatedIds, ...relatedIds]) : []
   const history = new Map(historyRows.map((row) => [row.problem_id, row]))
   const candidates: PracticeProblemCandidate[] = related.map((row) => {
     const solutionJson = JSON.stringify({ contentMarkdown: row.solution_content ?? '', steps: parseJSON(row.solution_steps_json, []) })

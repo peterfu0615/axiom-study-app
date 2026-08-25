@@ -80,6 +80,21 @@ describe('practice planner', () => {
       ['after-variant', 'existing_problem'],
       ['after-original', 'generated_variant'],
     ])
+    expect(blueprint.items.map((item) => item.requestedVariationLevel)).toEqual([
+      'numeric', 'condition', 'condition',
+    ])
+  })
+
+  it('rotates variation levels deterministically from instance exposure count', () => {
+    const blueprint = buildPracticeBlueprint({
+      sourceType: 'today', sourceRef: 'rotation', subject: '数学', targetSkills: [],
+      relatedProblems: [0, 1, 2, 3].map((count) => ({
+        ...problem(`p-${count}`), confirmedPracticeCount: count, lastConfirmedAt: count || null,
+      })),
+      recentFailureCount: 0, desiredBudget: 4,
+    })
+    const levels = Object.fromEntries(blueprint.items.map((item) => [item.problem.problemId, item.requestedVariationLevel]))
+    expect(levels).toEqual({ 'p-0': 'numeric', 'p-1': 'condition', 'p-2': 'rebuild', 'p-3': 'numeric' })
   })
 
   it('prioritizes never-confirmed and least-recently confirmed sources', () => {

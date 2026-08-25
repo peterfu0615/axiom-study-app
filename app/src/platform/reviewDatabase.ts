@@ -87,6 +87,9 @@ interface HistoryRow {
   rating: ReviewRating | null
 }
 
+interface BundleStateRow extends SkillRow { problem_id: string }
+interface MistakeEvidenceRow { problem_id: string; captured_at: number }
+
 function skillFromRow(row: SkillRow): ReviewSkillState {
   return {
     masteryEstimate: number(row.mastery_estimate, .45),
@@ -104,7 +107,7 @@ function skillFromRow(row: SkillRow): ReviewSkillState {
 }
 
 export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
-  const [problems, tagRows, skillRows, historyRows] = await Promise.all([
+  const [problems, tagRows, skillRows, bundleStateRows, mistakeEvidenceRows, historyRows] = await Promise.all([
     select<ProblemRow[]>(`
       SELECT p.id AS problem_id,
         trim(COALESCE(NULLIF(p.user_subject, ''), NULLIF(p.ai_subject, ''), NULLIF(p.subject, ''))) AS subject,
@@ -148,6 +151,17 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
         last_practiced_at, next_review_at, uncertainty
       FROM skill_states
     `),
+    select<BundleStateRow[]>(`
+      SELECT link.problem_id,state.mastery_estimate,state.stability,state.retrievability,
+        state.evidence_count,0 AS success_count,0 AS failure_count,state.transfer_score,
+        NULL AS max_stable_difficulty,state.last_practiced_at,state.next_review_at,state.uncertainty
+      FROM skill_bundle_problems link
+      JOIN skill_bundle_states state ON state.skill_bundle_id=link.skill_bundle_id
+      ORDER BY CASE link.role WHEN 'primary' THEN 0 ELSE 1 END,state.updated_at DESC,link.skill_bundle_id
+    `),
+    select<MistakeEvidenceRow[]>(`
+      SELECT problem_id,captured_at FROM problem_mistake_evidences
+    `),
     select<HistoryRow[]>(`
       SELECT instance.source_problem_id AS problem_id, attempt.created_at AS reviewed_at,
         CASE WHEN attempt.evidence_source='practice_attempt' AND effective.effective_grading_json IS NOT NULL
@@ -169,6 +183,11 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
     tagsByProblem.set(row.problem_id, tags)
   })
   const skills = Object.fromEntries(skillRows.map((row) => [row.tag_id, skillFromRow(row)]))
+  const bundleStates = new Map<string, ReviewSkillState>()
+  bundleStateRows.forEach((row) => {
+    if (!bundleStates.has(row.problem_id)) bundleStates.set(row.problem_id, skillFromRow(row))
+  })
+  const mistakeEvidence = new Map(mistakeEvidenceRows.map((row) => [row.problem_id, number(row.captured_at)]))
   const history = new Map<string, { lastReviewedAt: number; reviewCount: number; lastRating: ReviewRating | null }>()
   historyRows.forEach((row) => {
     const current = history.get(row.problem_id)
@@ -200,6 +219,8 @@ export async function listReviewCandidates(): Promise<ReviewCandidate[]> {
       difficulty: row.difficulty,
       tags,
       skillStates,
+      bundleState: bundleStates.get(row.problem_id) ?? null,
+      mistakeCapturedAt: mistakeEvidence.get(row.problem_id) ?? null,
       lastReviewedAt: previous?.lastReviewedAt ?? null,
       reviewCount: previous?.reviewCount ?? 0,
       lastRating: previous?.lastRating ?? null,

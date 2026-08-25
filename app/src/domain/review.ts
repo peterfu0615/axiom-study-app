@@ -1,7 +1,8 @@
 import type { DifficultyLevel, HorizonTagRole, HorizonTagType } from './models'
 
-export const REVIEW_SCHEDULER_VERSION = 'ebbinghaus-v2'
-export const DEFAULT_TARGET_RETENTION = .85
+export const REVIEW_SCHEDULER_VERSION = 'ebbinghaus-v3'
+export const DEFAULT_TARGET_RETENTION = .7
+export const INITIAL_REVIEW_STABILITY_DAYS = 4
 
 export type ReviewRating = 'again' | 'hard' | 'good' | 'easy'
 export type ReviewUnitStatus = 'pending' | 'completed' | 'deferred'
@@ -89,6 +90,8 @@ export interface ReviewCandidate {
   difficulty: DifficultyLevel | null
   tags: ReviewTag[]
   skillStates: Record<string, ReviewSkillState>
+  bundleState?: ReviewSkillState | null
+  mistakeCapturedAt?: number | null
   lastReviewedAt: number | null
   reviewCount: number
   lastRating: ReviewRating | null
@@ -128,7 +131,7 @@ const clamp = (value: number, minimum = 0, maximum = 1) =>
   Math.min(maximum, Math.max(minimum, value))
 
 export function normalizeTargetRetention(value = DEFAULT_TARGET_RETENTION) {
-  return clamp(Number.isFinite(value) ? value : DEFAULT_TARGET_RETENTION, .75, .95)
+  return clamp(Number.isFinite(value) ? value : DEFAULT_TARGET_RETENTION, .4, .9)
 }
 
 export function reviewRetrievability(state: ReviewSkillState, now: number) {
@@ -380,37 +383,31 @@ export function buildTodayReviewUnits(candidates: ReviewCandidate[], options: Re
 }
 
 export function candidateDueAt(candidate: ReviewCandidate, now: number, targetRetention = DEFAULT_TARGET_RETENTION) {
-  const states = Object.values(candidate.skillStates)
-  if (states.length) {
-    const practicedAt = states
-      .map((state) => state.lastPracticedAt)
-      .filter((value): value is number => value != null)
-    if (practicedAt.length) {
-      const target = normalizeTargetRetention(targetRetention)
-      let low = Math.min(...practicedAt)
-      let high = Math.max(now, low) + 3650 * DAY_MS
-      for (let iteration = 0; iteration < 48; iteration += 1) {
-        const middle = (low + high) / 2
-        if (candidateRetention(candidate, middle) > target) low = middle
-        else high = middle
-      }
-      return Math.round(high)
-    }
+  const primaryKnowledge = candidate.tags.find((tag) => tag.type === 'knowledge' && tag.role === 'primary')
+    ?? candidate.tags.find((tag) => tag.type === 'knowledge')
+  const primaryState = primaryKnowledge?.id ? candidate.skillStates[primaryKnowledge.id] : null
+  const schedulingStates = [primaryState, candidate.bundleState]
+    .filter((state): state is ReviewSkillState => Boolean(state?.lastPracticedAt != null))
+  if (schedulingStates.length) {
+    return Math.min(...schedulingStates.map((state) => reviewDueAt(state, targetRetention) ?? Number.POSITIVE_INFINITY))
   }
   if (candidate.lastReviewedAt && candidate.lastRating) {
     return applyReviewRating(null, candidate.lastRating, candidate.difficulty ?? 'intermediate', candidate.lastReviewedAt, { targetRetention }).nextReviewAt ?? now
   }
-  const todayStart = startOfLocalReviewDay(now)
-  const createdStart = startOfLocalReviewDay(candidate.createdAt || now)
-  return createdStart < todayStart ? todayStart : addLocalReviewDays(createdStart, 1)
+  const capturedAt = candidate.mistakeCapturedAt ?? candidate.createdAt ?? now
+  return reviewDueAt({ ...initialReviewSkillState(), lastPracticedAt: capturedAt }, targetRetention) ?? capturedAt
 }
 
 export function candidateRetention(candidate: ReviewCandidate, at: number) {
-  const tagById = new Map(candidate.tags.filter((tag) => tag.id).map((tag) => [tag.id!, tag]))
-  return effectiveSkillRetention(Object.entries(candidate.skillStates).map(([tagId, state]) => ({
-    state,
-    weight: reviewTagEvidenceWeight(tagById.get(tagId) ?? { type: 'knowledge', role: 'primary' }),
-  })), at)
+  const primaryKnowledge = candidate.tags.find((tag) => tag.type === 'knowledge' && tag.role === 'primary')
+    ?? candidate.tags.find((tag) => tag.type === 'knowledge')
+  const states = [
+    primaryKnowledge?.id ? candidate.skillStates[primaryKnowledge.id] : null,
+    candidate.bundleState,
+  ].filter((state): state is ReviewSkillState => Boolean(state))
+  if (states.length) return Math.min(...states.map((state) => reviewRetrievability(state, at)))
+  const capturedAt = candidate.mistakeCapturedAt ?? candidate.createdAt
+  return reviewRetrievability({ ...initialReviewSkillState(), lastPracticedAt: capturedAt }, at)
 }
 
 export function estimateReviewProblemSeconds(candidate: Pick<ReviewCandidate, 'difficulty' | 'tags' | 'diagramImagePaths'>) {
@@ -421,10 +418,10 @@ export function estimateReviewProblemSeconds(candidate: Pick<ReviewCandidate, 'd
   return Math.max(3, Math.min(15, base + complexity + diagram)) * 60
 }
 
-export function initialReviewSkillState(targetRetention = DEFAULT_TARGET_RETENTION): ReviewSkillState {
+export function initialReviewSkillState(_targetRetention = DEFAULT_TARGET_RETENTION): ReviewSkillState {
   return {
     masteryEstimate: .45,
-    stability: 1 / -Math.log(normalizeTargetRetention(targetRetention)),
+    stability: INITIAL_REVIEW_STABILITY_DAYS,
     retrievability: 1,
     evidenceCount: 0,
     successCount: 0,
@@ -458,6 +455,22 @@ export function convertReviewStateV1ToV2(
     nextReviewAt: converted.lastPracticedAt == null
       ? converted.nextReviewAt
       : reviewDueAt(converted, target),
+  }
+}
+
+export function convertReviewStateToV3(
+  state: ReviewSkillState,
+  fromVersion: string,
+  now = Date.now(),
+  targetRetention = DEFAULT_TARGET_RETENTION,
+): ReviewSkillState {
+  if (fromVersion === 'horizon-v1' || fromVersion === '1' || fromVersion === 'foundation-v1') {
+    return convertReviewStateV1ToV2(state, now, targetRetention)
+  }
+  return {
+    ...state,
+    retrievability: state.lastPracticedAt == null ? state.retrievability : reviewRetrievability(state, now),
+    nextReviewAt: state.lastPracticedAt == null ? state.nextReviewAt : reviewDueAt(state, targetRetention),
   }
 }
 

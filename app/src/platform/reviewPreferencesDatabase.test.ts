@@ -14,12 +14,12 @@ describe('review preferences persistence', () => {
   beforeEach(() => invoke.mockReset())
 
   it('maps legacy targets to the nearest understandable pace', () => {
-    expect(reviewPaceFromTarget(.79)).toBe('relaxed')
-    expect(reviewPaceFromTarget(.86)).toBe('standard')
-    expect(reviewPaceFromTarget(.94)).toBe('intensive')
-    expect(targetRetentionForPace('relaxed')).toBe(.8)
-    expect(targetRetentionForPace('standard')).toBe(.85)
-    expect(targetRetentionForPace('intensive')).toBe(.9)
+    expect(reviewPaceFromTarget(.48)).toBe('relaxed')
+    expect(reviewPaceFromTarget(.68)).toBe('standard')
+    expect(reviewPaceFromTarget(.88)).toBe('intensive')
+    expect(targetRetentionForPace('relaxed')).toBe(.5)
+    expect(targetRetentionForPace('standard')).toBe(.7)
+    expect(targetRetentionForPace('intensive')).toBe(.85)
   })
 
   it('reads the durable Today scheduling inputs', async () => {
@@ -30,7 +30,7 @@ describe('review preferences persistence', () => {
   it('normalizes unsafe values before saving', async () => {
     invoke.mockResolvedValue({ rowsAffected: 1, lastInsertId: 0 })
     await expect(saveReviewPreferences({ maxDailyMinutes: 999, maxModules: 0, preferredMode: 'mock_test', targetRetention: 1 }))
-      .resolves.toEqual({ maxDailyMinutes: 180, maxModules: 1, preferredMode: 'mock_test', targetRetention: .95 })
-    expect(invoke).toHaveBeenCalledWith('db_execute', expect.objectContaining({ params: [180, 1, 'mock_test', .95, expect.any(Number)] }))
+      .resolves.toEqual({ maxDailyMinutes: 180, maxModules: 1, preferredMode: 'mock_test', targetRetention: .9 })
+    expect(invoke).toHaveBeenCalledWith('db_execute', expect.objectContaining({ params: [180, 1, 'mock_test', .9, expect.any(Number)] }))
   })
 })

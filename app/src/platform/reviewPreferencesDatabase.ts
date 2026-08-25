@@ -16,9 +16,9 @@ export interface ReviewPreferences {
 export type ReviewPace = 'relaxed' | 'standard' | 'intensive'
 
 export const REVIEW_PACE_TARGETS: Record<ReviewPace, number> = {
-  relaxed: .8,
-  standard: .85,
-  intensive: .9,
+  relaxed: .5,
+  standard: .7,
+  intensive: .85,
 }
 
 export function reviewPaceFromTarget(targetRetention: number): ReviewPace {
@@ -36,7 +36,7 @@ export const DEFAULT_REVIEW_PREFERENCES: ReviewPreferences = {
   maxDailyMinutes: 25,
   maxModules: 2,
   preferredMode: 'standard',
-  targetRetention: .85,
+  targetRetention: .7,
 }
 
 function normalize(value: Partial<ReviewPreferences>): ReviewPreferences {
@@ -49,7 +49,7 @@ function normalize(value: Partial<ReviewPreferences>): ReviewPreferences {
     maxModules: Math.max(1, Math.min(12, Math.round(Number.isFinite(Number(value.maxModules))
       ? Number(value.maxModules) : DEFAULT_REVIEW_PREFERENCES.maxModules))),
     preferredMode,
-    targetRetention: Math.max(.75, Math.min(.95, Number.isFinite(Number(value.targetRetention))
+    targetRetention: Math.max(.4, Math.min(.9, Number.isFinite(Number(value.targetRetention))
       ? Number(value.targetRetention) : DEFAULT_REVIEW_PREFERENCES.targetRetention)),
   }
 }
@@ -74,10 +74,11 @@ export async function saveReviewPreferences(value: ReviewPreferences) {
   const next = normalize(value)
   const now = Date.now()
   await execute(`INSERT INTO review_preferences(
-      id,max_daily_minutes,max_modules,preferred_mode,target_retention,variant_mode,created_at,updated_at
-    ) VALUES('default',$1,$2,$3,$4,'variant_preferred',$5,$5)
+      id,max_daily_minutes,max_modules,preferred_mode,target_retention,target_retention_customized,
+      variant_mode,created_at,updated_at
+    ) VALUES('default',$1,$2,$3,$4,1,'variant_preferred',$5,$5)
     ON CONFLICT(id) DO UPDATE SET max_daily_minutes=$1,max_modules=$2,
-      preferred_mode=$3,target_retention=$4,updated_at=$5`, [
+      preferred_mode=$3,target_retention=$4,target_retention_customized=1,updated_at=$5`, [
     next.maxDailyMinutes, next.maxModules, next.preferredMode, next.targetRetention, now,
   ])
   notifyLearningStateChanged('review_preferences_changed')

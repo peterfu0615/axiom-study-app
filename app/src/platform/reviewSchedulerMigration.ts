@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   REVIEW_SCHEDULER_VERSION,
-  convertReviewStateV1ToV2,
+  convertReviewStateToV3,
   initialReviewSkillStateV1,
   type ReviewSkillState,
 } from '../domain/review'
@@ -52,7 +52,8 @@ export async function migrateReviewSchedulerState(now = Date.now()) {
       for (const [kind, rows] of [['skill', skills], ['bundle', bundles]] as const) {
         for (const row of rows) {
           const previous = stateFromRow(row)
-          const next = convertReviewStateV1ToV2(previous, now, targetRetention)
+          const fromVersion = String(row.scheduler_version) === '1' ? 'horizon-v1' : String(row.scheduler_version)
+          const next = convertReviewStateToV3(previous, fromVersion, now, targetRetention)
           if (kind === 'skill') {
             await execute(`UPDATE skill_states SET stability=$1,retrievability=$2,next_review_at=$3,
               scheduler_version=$4,updated_at=$5 WHERE subject=$6 AND tag_id=$7`, [
@@ -66,7 +67,6 @@ export async function migrateReviewSchedulerState(now = Date.now()) {
               now, row.subject, row.entity_id,
             ])
           }
-          const fromVersion = String(row.scheduler_version) === '1' ? 'horizon-v1' : String(row.scheduler_version)
           await execute(`INSERT OR IGNORE INTO review_scheduler_migrations(
             id,state_kind,subject,entity_id,from_version,to_version,previous_state_json,new_state_json,migrated_at
           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
