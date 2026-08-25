@@ -38,10 +38,61 @@ function extend(from: Position, through: Position, bothDirections: boolean) {
   const length = Math.hypot(dx, dy) || 1
   const ux = dx / length
   const uy = dy / length
+  // A fixed extension used to dominate the SVG bounds and made the actual
+  // construction look like a tiny mark in the middle of a large canvas.
+  // Keep enough overhang to communicate a ray/line without changing the
+  // scale of the underlying figure.
+  const overhang = Math.max(.65, Math.min(1.8, length * .28))
   return {
-    from: bothDirections ? { x: from.x - ux * 12, y: from.y - uy * 12 } : from,
-    to: { x: through.x + ux * 12, y: through.y + uy * 12 },
+    from: bothDirections ? { x: from.x - ux * overhang, y: from.y - uy * overhang } : from,
+    to: { x: through.x + ux * overhang, y: through.y + uy * overhang },
   }
+}
+
+function fitPositions(scene: GeometryScene) {
+  const laidOut = [...layoutGeometryScene(scene)].map(([id, value]) => [id, {
+    x: value.x,
+    y: 1 - value.y,
+  }] as const)
+  if (!laidOut.length) return new Map<string, Position>()
+  const xs = laidOut.map(([, value]) => value.x)
+  const ys = laidOut.map(([, value]) => value.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  const spanX = Math.max(maxX - minX, .08)
+  const spanY = Math.max(maxY - minY, .08)
+  const scale = 8.6 / Math.max(spanX, spanY)
+  const width = spanX * scale
+  const height = spanY * scale
+  const offsetX = (10 - width) / 2
+  const offsetY = (10 - height) / 2
+  return new Map(laidOut.map(([id, value]) => [id, {
+    x: offsetX + (value.x - minX) * scale,
+    y: offsetY + (value.y - minY) * scale,
+  }]))
+}
+
+function edgeKey(from: string, to: string) {
+  return [from, to].sort().join('\u0000')
+}
+
+function labelPosition(
+  at: Position,
+  center: Position,
+  fallbackAngle: number,
+) {
+  let dx = at.x - center.x
+  let dy = at.y - center.y
+  let length = Math.hypot(dx, dy)
+  if (length < .08) {
+    dx = Math.cos(fallbackAngle)
+    dy = Math.sin(fallbackAngle)
+    length = 1
+  }
+  const distance = .38
+  return { x: at.x + dx / length * distance, y: at.y + dy / length * distance }
 }
 
 function relationStyles(scene: GeometryScene) {
@@ -82,18 +133,11 @@ function linearCommand(
  * environments, file access, or model-authored TeX.
  */
 export function compileGeometrySceneToTikz(scene: GeometryScene): CompiledGeometryTikz {
-  const normalized = layoutGeometryScene(scene)
-  const positions = new Map([...normalized].map(([id, value]) => [id, {
-    x: value.x * 10,
-    y: (1 - value.y) * 10,
-  }]))
+  const positions = fitPositions(scene)
   const styles = relationStyles(scene)
   const commands: string[] = []
+  const drawnEdges = new Set<string>()
 
-  scene.polygons.forEach((polygon) => {
-    const points = polygon.points.map((id) => positions.get(id)).filter((value): value is Position => Boolean(value))
-    if (points.length >= 3) commands.push(`\\draw[${options(polygon.id, styles, ['thick'])}] ${points.map(point).join(' -- ')} -- cycle;`)
-  })
   scene.lines.forEach((entity) => {
     const command = linearCommand(entity, positions, styles, 'line')
     if (command) commands.push(command)
@@ -104,7 +148,24 @@ export function compileGeometrySceneToTikz(scene: GeometryScene): CompiledGeomet
   })
   scene.segments.forEach((entity) => {
     const command = linearCommand(entity, positions, styles, 'segment')
-    if (command) commands.push(command)
+    if (command) {
+      commands.push(command)
+      drawnEdges.add(edgeKey(entity.from, entity.to))
+    }
+  })
+  // AI responses commonly describe a boundary both as a polygon and as
+  // individual segments. Draw every physical edge only once so the outline
+  // does not become unevenly bold.
+  scene.polygons.forEach((polygon) => {
+    polygon.points.forEach((fromId, index) => {
+      const toId = polygon.points[(index + 1) % polygon.points.length]
+      const key = edgeKey(fromId, toId)
+      const from = positions.get(fromId)
+      const to = positions.get(toId)
+      if (!from || !to || drawnEdges.has(key)) return
+      commands.push(`\\draw[${options(polygon.id, styles, ['thick'])}] ${point(from)} -- ${point(to)};`)
+      drawnEdges.add(key)
+    })
   })
   scene.circles.forEach((circle) => {
     const center = positions.get(circle.center)
@@ -124,18 +185,30 @@ export function compileGeometrySceneToTikz(scene: GeometryScene): CompiledGeomet
       const length = Math.hypot(dx, dy) || 1
       return { x: vertex.x + dx / length * scale, y: vertex.y + dy / length * scale }
     }
-    const first = toward(from, .38)
-    const second = toward(to, .38)
+    const markerScale = Math.max(.34, Math.min(
+      .62,
+      Math.min(
+        Math.hypot(from.x - vertex.x, from.y - vertex.y),
+        Math.hypot(to.x - vertex.x, to.y - vertex.y),
+      ) * .16,
+    ))
+    const first = toward(from, markerScale)
+    const second = toward(to, markerScale)
     const middle = { x: first.x + second.x - vertex.x, y: first.y + second.y - vertex.y }
     const style = marker.kind === 'right_angle' ? 'axiomRightAngle' : 'axiomAngle'
     commands.push(`\\draw[${style}] ${point(first)} -- ${point(middle)} -- ${point(second)};`)
   })
-  scene.points.forEach((item) => {
+  const center = [...positions.values()].reduce(
+    (sum, item) => ({ x: sum.x + item.x / Math.max(positions.size, 1), y: sum.y + item.y / Math.max(positions.size, 1) }),
+    { x: 0, y: 0 },
+  )
+  scene.points.forEach((item, index) => {
     const at = positions.get(item.id)
     if (!at) return
     commands.push(`\\fill[axiomPoint] ${point(at)} circle (0.075);`)
     const label = safeLabel(item.label)
-    if (label) commands.push(`\\node[axiomLabel] at (${number(at.x + .28)},${number(at.y + .28)}) {${label}};`)
+    const labelAt = labelPosition(at, center, (index / Math.max(scene.points.length, 1)) * Math.PI * 2)
+    if (label) commands.push(`\\node[axiomLabel] at ${point(labelAt)} {${label}};`)
   })
 
   const requiredRelations = [...new Set<DiagramValidationContract['requiredRelations'][number]>([

@@ -2287,37 +2287,40 @@
 }
 
 .problem-geometry-scene {
-  position: relative;
   display: grid;
   align-content: start;
   gap: 10px;
   min-width: 0;
 }
 
-.problem-geometry-scene__badge {
-  position: absolute;
-  z-index: 2;
-  top: 8px;
-  right: 8px;
-  padding: 5px 9px;
-  border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--border));
-  border-radius: 999px;
-  color: var(--brand-ink);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(8px);
-  cursor: pointer;
+.problem-geometry-scene__media {
+  min-width: 0;
+  border-radius: 12px;
+  cursor: zoom-in;
+}
+
+.problem-geometry-scene__media:focus-visible {
+  outline: 2px solid var(--ax-focus-ring);
+  outline-offset: 4px;
 }
 
 .geometry-generation-dialog { display: grid; gap: 16px; }
-.geometry-generation-dialog > p { margin: 0; color: var(--muted); line-height: 1.6; }
+.geometry-generation-dialog__status { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-muted) 72%, transparent); }
+.geometry-generation-dialog__status-icon { width: 40px; height: 40px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: var(--brand-ink); background: color-mix(in srgb, var(--brand-soft) 76%, transparent); }
+.geometry-generation-dialog__status.is-failed .geometry-generation-dialog__status-icon { color: var(--warning-ink, var(--ink)); background: color-mix(in srgb, var(--warning-soft, #f3e7c8) 76%, transparent); }
+.geometry-generation-dialog__status > div { display: grid; gap: 2px; }
+.geometry-generation-dialog__status strong { color: var(--ink); }
+.geometry-generation-dialog__status span:not(.geometry-generation-dialog__status-icon, .ax-spinner) { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .geometry-generation-dialog__compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .geometry-generation-dialog__compare section { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
 .geometry-generation-dialog__compare img,
 .geometry-generation-dialog__compare svg { max-width: 100%; max-height: 340px; object-fit: contain; }
+.geometry-generation-dialog__empty { min-height: 220px; display: grid; place-items: center; border-radius: 10px; color: color-mix(in srgb, var(--muted) 46%, transparent); background: color-mix(in srgb, var(--surface-muted) 44%, transparent); }
 
 .problem-geometry-scene__actions {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
 }
 
@@ -2325,9 +2328,19 @@
   justify-self: start;
 }
 
-.problem-geometry-scene__actions small {
-  color: var(--muted);
-  line-height: 1.45;
+.problem-geometry-scene__trigger {
+  margin-left: auto;
+  opacity: .62;
+  transition: opacity 140ms ease, background 140ms ease;
+}
+
+.problem-geometry-scene__trigger:hover,
+.problem-geometry-scene__trigger:focus-visible {
+  opacity: 1;
+}
+
+.problem-geometry-scene__trigger.is-generating {
+  opacity: .78;
 }
 
 .problem-choice-list {
@@ -4886,6 +4899,10 @@
    and full comparison modal become a vertical stack rather than forcing a
    cramped two-column layout; each pane keeps its own scroll boundary. */
 @media (max-width: 760px) {
+  .geometry-generation-dialog__compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .solution-comparison-preview,
   .solution-comparison-modal-body {
     grid-template-columns: minmax(0, 1fr);

@@ -22,6 +22,7 @@ describe('DiagramView', () => {
     expect(html).toContain('alt="三角形 ABC"')
     expect(html).toContain('/tmp/diagram.svg')
     expect(html).toContain('矢量图形')
+    expect(html).toContain('diagram-view--tikz')
   })
 
   it('keeps a failed diagram visible as a safe fallback', () => {
@@ -30,7 +31,8 @@ describe('DiagramView', () => {
       renderErrorCode: 'invalid_geometry', renderErrorMessage: '路径无效',
     })} />)
     expect(html).toContain('图形暂时无法生成')
-    expect(html).toContain('路径无效')
+    expect(html).toContain('原图仍可正常查看')
+    expect(html).not.toContain('路径无效')
     expect(html).not.toContain('<img')
   })
 
@@ -38,7 +40,17 @@ describe('DiagramView', () => {
     const html = renderToStaticMarkup(<DiagramView diagram={diagram({
       validationStatus: 'rejected', validationErrors: ['缺少点名 A'],
     })} />)
-    expect(html).toContain('缺少点名 A')
+    expect(html).not.toContain('缺少点名 A')
     expect(html).not.toContain('<img')
+  })
+
+  it('supports a caption-free interactive card presentation', () => {
+    const html = renderToStaticMarkup(
+      <DiagramView alt="四边形 ABCD" diagram={diagram()} onActivate={() => undefined} showCaption={false} />,
+    )
+    expect(html).toContain('role="button"')
+    expect(html).toContain('tabindex="0"')
+    expect(html).toContain('打开四边形 ABCD')
+    expect(html).not.toContain('<figcaption>')
   })
 })

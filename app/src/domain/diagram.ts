@@ -3,6 +3,10 @@ export type DiagramSourceType = 'tikz' | 'image'
 export type DiagramRenderStatus = 'pending' | 'rendered' | 'failed'
 export type DiagramValidationStatus = 'unvalidated' | 'validated' | 'rejected'
 
+// Keep this in lockstep with src-tauri/src/diagram.rs. It prevents assets
+// rendered by an older visual pipeline from silently remaining preferred.
+export const CURRENT_TIKZ_RENDERER_VERSION = 'axiom-restricted-svg-v4'
+
 export interface DiagramValidationContract {
   requiredLabels: string[]
   requiredRelations: Array<'parallel' | 'perpendicular' | 'equal_length' | 'tangent' | 'collinear' | 'right_angle'>

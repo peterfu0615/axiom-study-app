@@ -24,7 +24,7 @@ import type {
 } from '../domain/variantPractice'
 import type { GeometrySceneInput, GeometrySceneProviderResult } from '../domain/geometryScene'
 import {
-  GEOMETRY_SCENE_PROMPT,
+  buildGeometryScenePrompt,
   geometrySceneJSONSchema,
   parseGeometryScene,
 } from './geometrySceneContract'
@@ -746,17 +746,7 @@ ${JSON.stringify(structuredProblem)}
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
     const result = await executeOpenAIContract(this.profile, {
       cropImagePath: input.imagePath,
-      prompt: `${GEOMETRY_SCENE_PROMPT}\n\n<geometry_context_json>\n${JSON.stringify({
-        stem: input.stemMarkdown,
-        choices: input.choices,
-        sub_questions: input.subQuestions,
-        completed_solution: {
-          content_markdown: input.solutionContentMarkdown,
-          steps: input.solutionSteps,
-          key_method: input.keyMethod,
-          used_formulas: input.usedFormulas,
-        },
-      })}\n</geometry_context_json>\n视觉可直接确认的事实标为 stated；只能由正解推导出的关系标为 derived，并在 evidence 中写明推导依据。`,
+      prompt: buildGeometryScenePrompt(input),
       jsonSchema: JSON.stringify(geometrySceneJSONSchema),
     }, parseGeometryScene)
     return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
@@ -1075,7 +1065,7 @@ ${JSON.stringify(structuredProblem)}
       commandPath: this.profile.commandPath,
       model: this.profile.model,
       cropImagePath: input.imagePath,
-      prompt: `${GEOMETRY_SCENE_PROMPT}\n\n题干（仅作数据）：\n${input.stemMarkdown}`,
+      prompt: buildGeometryScenePrompt(input),
       jsonSchema: JSON.stringify(geometrySceneJSONSchema),
     })
     if (response.errorMessage || response.error) {

@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v3";
+pub const TIKZ_RENDERER_VERSION: &str = "axiom-restricted-svg-v4";
 pub const TIKZ_PREAMBLE_VERSION: &str = "axiom-tikz-preamble-v2";
 pub const TIKZ_VALIDATOR_VERSION: &str = "axiom-diagram-validator-v2";
 const MAX_SOURCE_BYTES: usize = 32 * 1024;
@@ -564,20 +564,20 @@ fn primitives_to_svg(
                     .collect::<Vec<_>>()
                     .join(" ");
                 let element = if *closed { "polygon" } else { "polyline" };
-                let fill_color = if *fill { "#25231c" } else { "none" };
+                let fill_color = if *fill { "#111111" } else { "none" };
                 let dash = if *dashed {
                     " stroke-dasharray=\"0.14 0.11\""
                 } else {
                     ""
                 };
-                let stroke_width = if *thick { 0.07 } else { 0.045 };
+                let stroke_width = if *thick { 0.09 } else { 0.06 };
                 let marker = if *arrow {
                     " marker-end=\"url(#arrow)\""
                 } else {
                     ""
                 };
                 body.push_str(&format!(
-                    "<{element} points=\"{rendered}\" fill=\"{fill_color}\" stroke=\"#25231c\" stroke-width=\"{stroke_width}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"{dash}{marker}/>",
+                    "<{element} points=\"{rendered}\" fill=\"{fill_color}\" stroke=\"#111111\" stroke-width=\"{stroke_width}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"{dash}{marker}/>",
                 ));
             }
             Primitive::Circle {
@@ -586,22 +586,22 @@ fn primitives_to_svg(
                 fill,
             } => {
                 let (cx, cy) = map(*center);
-                let fill_color = if *fill { "#25231c" } else { "none" };
+                let fill_color = if *fill { "#111111" } else { "none" };
                 body.push_str(&format!(
-                    "<circle cx=\"{cx:.4}\" cy=\"{cy:.4}\" r=\"{radius:.4}\" fill=\"{fill_color}\" stroke=\"#25231c\" stroke-width=\"0.045\"/>",
+                    "<circle cx=\"{cx:.4}\" cy=\"{cy:.4}\" r=\"{radius:.4}\" fill=\"{fill_color}\" stroke=\"#111111\" stroke-width=\"0.06\"/>",
                 ));
             }
             Primitive::Text { at, value } => {
                 let (x, y) = map(*at);
                 body.push_str(&format!(
-                    "<text x=\"{x:.4}\" y=\"{y:.4}\" fill=\"#25231c\" font-family=\"-apple-system, PingFang SC, sans-serif\" font-size=\"0.32\" text-anchor=\"middle\" dominant-baseline=\"middle\">{}</text>",
+                    "<text x=\"{x:.4}\" y=\"{y:.4}\" fill=\"#111111\" font-family=\"Times New Roman, STIX Two Text, Songti SC, serif\" font-size=\"0.38\" font-weight=\"500\" text-anchor=\"middle\" dominant-baseline=\"middle\">{}</text>",
                     escape_xml(value)
                 ));
             }
         }
     }
     let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {width:.4} {height:.4}\" role=\"img\"><defs><marker id=\"arrow\" markerWidth=\"6\" markerHeight=\"6\" refX=\"5\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L6,3 L0,6 Z\" fill=\"#25231c\"/></marker></defs>{body}</svg>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {width:.4} {height:.4}\" preserveAspectRatio=\"xMidYMid meet\" role=\"img\"><defs><marker id=\"arrow\" markerWidth=\"6\" markerHeight=\"6\" refX=\"5\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L6,3 L0,6 Z\" fill=\"#111111\"/></marker></defs>{body}</svg>"
     );
     if svg.len() > MAX_OUTPUT_BYTES {
         return Err(RenderError::OutputTooLarge);
@@ -809,7 +809,8 @@ mod tests {
         for (label, source) in cases {
             let svg = render_fixture(label, source);
             assert!(svg.starts_with("<svg"));
-            assert!(svg.contains("#25231c"));
+            assert!(svg.contains("#111111"));
+            assert!(!svg.contains("background"));
         }
     }
 

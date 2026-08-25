@@ -5,6 +5,7 @@ import { runWithAIBackoff } from '../ai/retryPolicy'
 import { AIExecutionError, classifyAIError, publicAIErrorMessage } from '../domain/aiError'
 import type { GeometrySceneInput, PersistedGeometryScene } from '../domain/geometryScene'
 import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
+import { CURRENT_TIKZ_RENDERER_VERSION } from '../domain/diagram'
 import { recordProcessingModelRunOutput } from './database'
 import { createTikzDiagram } from './diagramDatabase'
 import { withTransactionLock } from './transactionLock'
@@ -95,10 +96,11 @@ export async function queueGeometryScene(input: GeometrySceneInput, force = fals
            run.status='completed'
            AND EXISTS(SELECT 1 FROM geometry_scenes scene WHERE scene.model_run_id=run.id AND scene.validation_status='validated')
            AND EXISTS(SELECT 1 FROM diagrams diagram WHERE diagram.owner_type='problem' AND diagram.owner_id=run.problem_id
-             AND diagram.render_status='rendered' AND diagram.validation_status='validated')
+             AND diagram.render_status='rendered' AND diagram.validation_status='validated'
+             AND diagram.freshness_status='fresh' AND diagram.renderer_version=$3)
          ))
        ORDER BY run.created_at DESC LIMIT 1`,
-      [input.problemId, hash],
+      [input.problemId, hash, CURRENT_TIKZ_RENDERER_VERSION],
     ))[0]
     if (existing) return existing.id
   }

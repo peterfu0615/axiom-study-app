@@ -788,21 +788,29 @@ export function ProblemLibrary() {
         scene.validationStatus === 'validated' ? 'success' : 'info',
       )
     } catch (error) {
-      notify(`几何图重建失败，已保留原图：${String(error)}`, 'error')
+      console.warn('几何图重建失败', error)
+      notify('这次没有得到可靠的几何图，原图仍可正常使用。', 'info')
     } finally {
       setGeometrySceneBusy(false)
     }
   }
   const geometryRunBusy = modelRuns.some((run) => run.taskType === 'geometry_scene' && ['pending', 'processing'].includes(run.status))
-  const geometryBadge = geometrySceneBusy || geometryRunBusy
-    ? '生成中'
+  const geometryState = geometrySceneBusy || geometryRunBusy
+    ? 'generating'
     : generatedDiagram?.freshnessStatus === 'fresh'
-      ? '已生成'
+      ? 'ready'
       : geometryScene?.validationStatus === 'rejected'
-        ? '失败'
+        ? 'failed'
         : generatedDiagram || geometryScene?.inputHash
-          ? '需更新'
-          : '可生成'
+          ? 'stale'
+          : 'available'
+  const geometryStatus = {
+    generating: { icon: 'ai' as const, title: '正在绘制', detail: '可以关闭窗口，完成后会自动保存。' },
+    ready: { icon: 'check' as const, title: '图形已就绪', detail: '点击图形可对照原图或重新生成。' },
+    failed: { icon: 'alert' as const, title: '已保留原图', detail: '这次没有得到可靠图形，可以再次尝试。' },
+    stale: { icon: 'refresh' as const, title: '图形可以更新', detail: '题目内容有变化，建议重新生成。' },
+    available: { icon: 'ai' as const, title: '可以绘制图形', detail: '根据题图与正解重绘清晰的矢量图。' },
+  }[geometryState]
 
   const generateSingleVariant = async () => {
     if (!selected) return
@@ -1492,19 +1500,39 @@ export function ProblemLibrary() {
 
                           {selectedDiagramRect && selectedHasDisplayDiagram && (
                             <div className="problem-geometry-scene">
-                              {selected.aiDiagramKind === 'geometry' && <button
-                                className="problem-geometry-scene__badge"
-                                onClick={() => setGeometryDialogOpen(true)}
-                                type="button"
-                              >{geometryBadge} TikZ</button>}
                               {generatedDiagram && diagramView === 'generated'
-                                ? <DiagramView alt={`${selected.title}的 TikZ 几何图`} diagram={generatedDiagram} />
-                                : <ProblemDiagramImage
-                                    alt={`${selected.title}中的题目原图`}
-                                    croppedPath={selectedDiagramPath}
-                                    path={selected.cropImagePath}
-                                    rect={selectedDiagramRect}
-                                  />}
+                                ? <DiagramView
+                                    alt={`${selected.title}的 TikZ 几何图`}
+                                    diagram={generatedDiagram}
+                                    onActivate={selected.aiDiagramKind === 'geometry' ? () => setGeometryDialogOpen(true) : undefined}
+                                    showCaption={false}
+                                  />
+                                : selected.aiDiagramKind === 'geometry'
+                                  ? <div
+                                      aria-label="打开题目图形工具"
+                                      className="problem-geometry-scene__media"
+                                      onClick={() => setGeometryDialogOpen(true)}
+                                      onKeyDown={(event) => {
+                                        if (event.key !== 'Enter' && event.key !== ' ') return
+                                        event.preventDefault()
+                                        setGeometryDialogOpen(true)
+                                      }}
+                                      role="button"
+                                      tabIndex={0}
+                                    >
+                                      <ProblemDiagramImage
+                                        alt={`${selected.title}中的题目原图`}
+                                        croppedPath={selectedDiagramPath}
+                                        path={selected.cropImagePath}
+                                        rect={selectedDiagramRect}
+                                      />
+                                    </div>
+                                  : <ProblemDiagramImage
+                                      alt={`${selected.title}中的题目原图`}
+                                      croppedPath={selectedDiagramPath}
+                                      path={selected.cropImagePath}
+                                      rect={selectedDiagramRect}
+                                    />}
                               {selected.aiDiagramKind === 'geometry' && (
                                 <div className="problem-geometry-scene__actions">
                                   {generatedDiagram && <SegmentedControl
@@ -1513,9 +1541,17 @@ export function ProblemLibrary() {
                                     options={[{ value: 'generated', label: 'TikZ' }, { value: 'original', label: '原图' }]}
                                     value={diagramView}
                                   />}
-                                  {geometryScene?.validationStatus === 'rejected' && (
-                                    <small>{geometryScene.validationErrors[0]}</small>
-                                  )}
+                                  {geometryState !== 'ready' && <IconButton
+                                    appearance="plain"
+                                    className={`problem-geometry-scene__trigger is-${geometryState}`}
+                                    disabled={geometryState === 'generating'}
+                                    label={geometryStatus.title}
+                                    onClick={() => setGeometryDialogOpen(true)}
+                                  >
+                                    {geometryState === 'generating'
+                                      ? <span className="ax-spinner" />
+                                      : <Icon name={geometryStatus.icon} size={17} />}
+                                  </IconButton>}
                                 </div>
                               )}
                             </div>
@@ -1716,12 +1752,22 @@ export function ProblemLibrary() {
       </section>
 
       <Dialog
-        onClose={() => { if (!geometrySceneBusy) setGeometryDialogOpen(false) }}
+        onClose={() => setGeometryDialogOpen(false)}
         open={geometryDialogOpen}
         title="TikZ 几何图"
       >
         <div className="geometry-generation-dialog">
-          <p>状态：{geometryBadge}。TikZ 只会在题目解析和正解都完成后生成；失败不会替换原图。</p>
+          <div aria-live="polite" className={`geometry-generation-dialog__status is-${geometryState}`} role="status">
+            <span className="geometry-generation-dialog__status-icon" aria-hidden="true">
+              {geometryState === 'generating'
+                ? <span className="ax-spinner" />
+                : <Icon name={geometryStatus.icon} size={21} />}
+            </span>
+            <div>
+              <strong>{geometryStatus.title}</strong>
+              <span>{geometryStatus.detail}</span>
+            </div>
+          </div>
           <div className="geometry-generation-dialog__compare">
             <section>
               <strong>题目原图</strong>
@@ -1735,13 +1781,11 @@ export function ProblemLibrary() {
             <section>
               <strong>当前 TikZ</strong>
               {generatedDiagram
-                ? <DiagramView alt={`${selected?.title ?? '题目'}的 TikZ 几何图`} diagram={generatedDiagram} />
-                : <p>尚无通过编译和视觉校验的 TikZ，继续显示原图。</p>}
+                ? <DiagramView alt={`${selected?.title ?? '题目'}的 TikZ 几何图`} diagram={generatedDiagram} showCaption={false} />
+                : <div className="geometry-generation-dialog__empty" aria-hidden="true"><Icon name="image" size={30} /></div>}
             </section>
           </div>
-          {geometryScene?.validationErrors[0] && <small>{geometryScene.validationErrors[0]}</small>}
           <div className="curriculum-dialog-actions">
-            <Button disabled={geometrySceneBusy} onClick={() => setGeometryDialogOpen(false)} variant="ghost">关闭</Button>
             <Button disabled={geometryRunBusy} loading={geometrySceneBusy} onClick={() => void rebuildGeometryScene()} variant="primary">
               {generatedDiagram ? '重新生成' : '生成 TikZ'}
             </Button>

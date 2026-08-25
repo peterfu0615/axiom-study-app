@@ -1,6 +1,6 @@
-import { normalizeGeometryScene } from '../domain/geometryScene'
+import { normalizeGeometryScene, type GeometrySceneInput } from '../domain/geometryScene'
 
-export const GEOMETRY_SCENE_PROMPT_VERSION = 'geometry-scene-v1'
+export const GEOMETRY_SCENE_PROMPT_VERSION = 'geometry-scene-v2'
 export const GEOMETRY_SCENE_SCHEMA_VERSION = 'geometry-scene-schema-v1'
 
 export const geometrySceneJSONSchema = {
@@ -24,10 +24,26 @@ export const geometrySceneJSONSchema = {
   $defs: { linearEntities: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'from', 'to'], properties: { id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' } } } } },
 } as const
 
-export const GEOMETRY_SCENE_PROMPT = `你是 Axiom 的平面几何场景提取器。只根据题面明确条件和可可靠读取的标签输出 GeometryScene JSON。
+export const GEOMETRY_SCENE_PROMPT = `你是 Axiom 的平面几何场景提取器。结合题图、题干和已完成正解，输出忠实、可读的 GeometryScene JSON。
+题图是布局与拓扑的第一依据：保持原图的整体横纵比例、顶点相对位置、线段连接、交点、内外关系和标签所在方位。不要把宽图压成窄图，也不要为了对称或美观移动点。坐标覆盖 0..1 中尽可能大的有效区域，并为点名留出空间。
+逐条检查可见边，只描述真实存在的连接；同一条边不要同时重复为 polygon 边界和 segment。交叉但不相连的线不得虚构交点，已有交点必须建成共享 point。
 视觉比例不是数学条件：不得因为“看起来相等、平行、垂直或相切”创建约束。每个约束必须带 stated 或 derived 来源及简短题面证据。
-坐标只用于相对布局，归一化到 0..1；无法可靠判断时填 null。复杂手绘图、立体几何、标签不可读或整体置信度不足时，将 confidence 设为低于 0.70 并写入 warnings，让客户端回退原图。
+正解可以帮助确认题干蕴含的关系，但只能由正解推导出的点或约束必须标为 derived；题图或题干直接给出的标为 stated。坐标只用于相对布局，归一化到 0..1；无法可靠判断时填 null。复杂手绘图、立体几何、标签不可读或整体置信度不足时，将 confidence 设为低于 0.70 并写入 warnings，让客户端回退原图。
 禁止输出 SVG、TikZ、TeX、Markdown 或任何可执行内容。`
+
+export function buildGeometryScenePrompt(input: GeometrySceneInput) {
+  return `${GEOMETRY_SCENE_PROMPT}\n\n<geometry_context_json>\n${JSON.stringify({
+    stem: input.stemMarkdown,
+    choices: input.choices,
+    sub_questions: input.subQuestions,
+    completed_solution: {
+      content_markdown: input.solutionContentMarkdown,
+      steps: input.solutionSteps,
+      key_method: input.keyMethod,
+      used_formulas: input.usedFormulas,
+    },
+  })}\n</geometry_context_json>\n视觉可直接确认的事实标为 stated；只能由正解推导出的关系标为 derived，并在 evidence 中写明推导依据。`
+}
 
 export function parseGeometryScene(rawOutput: string) {
   const parsed = JSON.parse(rawOutput) as unknown
