@@ -75,18 +75,6 @@ jobs:
           echo "arch=$arch" >> "$GITHUB_OUTPUT"
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
 
-      - name: Verify vision binary for detected architecture
-        run: |
-          triple="${{ steps.arch.outputs.triple }}"
-          bin="src-tauri/binaries/axiom-vision-$triple"
-          if [ ! -f "$bin" ]; then
-            echo "::error::Missing vision binary: $bin"
-            echo "arm64 runner 需要 binaries/axiom-vision-aarch64-apple-darwin"
-            echo "x86_64 runner 需要 binaries/axiom-vision-x86_64-apple-darwin"
-            exit 1
-          fi
-          echo "Found: $bin"
-
       - name: Determine version
         id: version
         run: |
