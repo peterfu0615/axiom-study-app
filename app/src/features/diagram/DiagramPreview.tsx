@@ -25,6 +25,7 @@ function diagramFromRender(index: number, source: string, render: Awaited<Return
     validationStatus: render.validationStatus, validationErrors: render.validationErrors,
     contract: { requiredLabels: [], requiredRelations: [] }, width: render.width,
     height: render.height, repairAttempts: 0,
+    sourceModelRunId: null, inputHash: '', freshnessStatus: 'fresh',
     createdAt: now, updatedAt: now,
   }
 }

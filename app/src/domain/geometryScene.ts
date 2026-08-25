@@ -74,6 +74,14 @@ export interface GeometrySceneInput {
   problemId: string
   imagePath: string
   stemMarkdown: string
+  choices: Array<{ label: string; text: string }>
+  subQuestions: Array<{ index: number; content: string }>
+  solutionContentMarkdown: string
+  solutionSteps: Array<{ index: number; title: string; contentMarkdown: string }>
+  keyMethod: string | null
+  usedFormulas: string[]
+  problemRevisionHash: string
+  solutionRevisionHash: string
 }
 
 export interface GeometrySceneProviderResult extends GeometrySceneValidation {
@@ -90,6 +98,9 @@ export interface PersistedGeometryScene {
   validationStatus: 'validated' | 'rejected'
   validationErrors: string[]
   confidence: number
+  inputHash: string
+  problemRevisionHash: string
+  solutionRevisionHash: string
   createdAt: number
   updatedAt: number
 }

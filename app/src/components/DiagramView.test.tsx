@@ -11,6 +11,9 @@ const diagram = (overrides: Partial<Diagram> = {}): Diagram => ({
   renderErrorMessage: null, validationStatus: 'validated', validationErrors: [],
   contract: { requiredLabels: [], requiredRelations: [] }, width: 1, height: 1,
   repairAttempts: 0, createdAt: 1, updatedAt: 1, ...overrides,
+  sourceModelRunId: overrides.sourceModelRunId ?? null,
+  inputHash: overrides.inputHash ?? '',
+  freshnessStatus: overrides.freshnessStatus ?? 'fresh',
 })
 
 describe('DiagramView', () => {

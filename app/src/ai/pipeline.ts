@@ -34,7 +34,7 @@ import {
 import { runSolutionWorker } from './solutionPipeline'
 import { runIntelligenceWorker } from './intelligencePipeline'
 import { runWithAIBackoff } from './retryPolicy'
-import { queueGeometryScene, runGeometrySceneWorker } from '../platform/geometrySceneDatabase'
+import { coordinateGeometryScene, markGeometryDiagramsStale } from '../platform/geometrySceneDatabase'
 
 export const AI_STATUS_EVENT = 'axiom:problem-ai-status'
 
@@ -184,25 +184,25 @@ async function drainPendingProblemAI() {
       if (previousDiagramImagePath && previousDiagramImagePath !== diagramImagePath) {
         removeProblemDiagram(previousDiagramImagePath).catch(() => {})
       }
-      if (result.hasDiagram && result.diagramKind === 'geometry') {
-        try {
-          await queueGeometryScene({
-            problemId: activeRun.problemId,
-            imagePath: manualDiagram?.imagePath ?? diagramImagePath ?? activeRun.input.cropImagePath,
-            stemMarkdown: result.stemMarkdown,
-          })
-          void runGeometrySceneWorker()
-        } catch (error) {
-          // TikZ is an enhancement: a missing provider or render failure must
-          // never roll back the successfully persisted problem analysis.
-          console.error('[ProblemAI] 几何图任务排队失败，保留原图', error)
-        }
+      try {
+        await markGeometryDiagramsStale(activeRun.problemId)
+      } catch (error) {
+        console.error('[ProblemAI] 旧 TikZ 过期标记失败，保留原图', error)
       }
       try {
         await queueProblemSolution(activeRun.problemId)
         void runSolutionWorker()
       } catch (error) {
         await markProblemSolutionFailed(activeRun.problemId, error)
+      }
+      if (result.hasDiagram && result.diagramKind === 'geometry') {
+        try {
+          await coordinateGeometryScene(activeRun.problemId)
+        } catch (error) {
+          // The solution is pending here; this check deliberately waits. TikZ
+          // never rolls back the successfully persisted problem analysis.
+          console.error('[ProblemAI] 几何图协调检查失败，保留原图', error)
+        }
       }
       try {
         await queueStudentAttempt(activeRun.problemId)

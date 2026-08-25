@@ -293,6 +293,7 @@ export function ProblemLibrary() {
   const [generatedDiagram, setGeneratedDiagram] = useState<Diagram | null>(null)
   const [diagramView, setDiagramView] = useState<'generated' | 'original'>('generated')
   const [geometrySceneBusy, setGeometrySceneBusy] = useState(false)
+  const [geometryDialogOpen, setGeometryDialogOpen] = useState(false)
   const [variantBusy, setVariantBusy] = useState(false)
   const [variantDialogOpen, setVariantDialogOpen] = useState(false)
   const [variantPrerequisites, setVariantPrerequisites] = useState<SingleVariantPrerequisites | null>(null)
@@ -568,8 +569,8 @@ export function ProblemLibrary() {
     const refresh = (event: Event) => {
       const problemId = (event as CustomEvent<{ problemId?: string }>).detail?.problemId
       if (!problemId || problemId !== selectedIdRef.current) return
-      void Promise.all([getLatestGeometryScene(problemId), getPreferredDiagram('problem', problemId)])
-        .then(([scene, diagram]) => { setGeometryScene(scene); setGeneratedDiagram(diagram) })
+      void Promise.all([getLatestGeometryScene(problemId), getPreferredDiagram('problem', problemId), listProblemModelRuns(problemId)])
+        .then(([scene, diagram, runs]) => { setGeometryScene(scene); setGeneratedDiagram(diagram); setModelRuns(runs) })
         .catch(() => undefined)
     }
     window.addEventListener(GEOMETRY_SCENE_STATUS_EVENT, refresh)
@@ -753,11 +754,7 @@ export function ProblemLibrary() {
     if (!selected || !imagePath) return
     setGeometrySceneBusy(true)
     try {
-      const scene = await reconstructGeometryScene({
-        problemId: selected.id,
-        imagePath,
-        stemMarkdown: selected.stemMarkdown ?? '',
-      })
+      const scene = await reconstructGeometryScene(selected.id)
       setGeometryScene(scene)
       setGeneratedDiagram(await getPreferredDiagram('problem', selected.id))
       setDiagramView('generated')
@@ -773,6 +770,16 @@ export function ProblemLibrary() {
       setGeometrySceneBusy(false)
     }
   }
+  const geometryRunBusy = modelRuns.some((run) => run.taskType === 'geometry_scene' && ['pending', 'processing'].includes(run.status))
+  const geometryBadge = geometrySceneBusy || geometryRunBusy
+    ? '生成中'
+    : generatedDiagram?.freshnessStatus === 'fresh'
+      ? '已生成'
+      : geometryScene?.validationStatus === 'rejected'
+        ? '失败'
+        : generatedDiagram || geometryScene?.inputHash
+          ? '需更新'
+          : '可生成'
 
   const generateSingleVariant = async () => {
     if (!selected) return
@@ -1567,6 +1574,11 @@ export function ProblemLibrary() {
 
                           {selectedDiagramRect && selectedHasDisplayDiagram && (
                             <div className="problem-geometry-scene">
+                              {selected.aiDiagramKind === 'geometry' && <button
+                                className="problem-geometry-scene__badge"
+                                onClick={() => setGeometryDialogOpen(true)}
+                                type="button"
+                              >{geometryBadge} TikZ</button>}
                               {generatedDiagram && diagramView === 'generated'
                                 ? <DiagramView alt={`${selected.title}的 TikZ 几何图`} diagram={generatedDiagram} />
                                 : <ProblemDiagramImage
@@ -1583,17 +1595,6 @@ export function ProblemLibrary() {
                                     options={[{ value: 'generated', label: 'TikZ' }, { value: 'original', label: '原图' }]}
                                     value={diagramView}
                                   />}
-                                  <Button
-                                    disabled={geometrySceneBusy}
-                                    onClick={() => void rebuildGeometryScene()}
-                                    variant="secondary"
-                                  >
-                                    {geometrySceneBusy
-                                      ? '正在重建…'
-                                      : generatedDiagram
-                                        ? '重新生成 TikZ'
-                                        : '生成 TikZ 几何图'}
-                                  </Button>
                                   {geometryScene?.validationStatus === 'rejected' && (
                                     <small>{geometryScene.validationErrors[0]}</small>
                                   )}
@@ -1969,6 +1970,40 @@ export function ProblemLibrary() {
           )}
         </article>
       </section>
+
+      <Dialog
+        onClose={() => { if (!geometrySceneBusy) setGeometryDialogOpen(false) }}
+        open={geometryDialogOpen}
+        title="TikZ 几何图"
+      >
+        <div className="geometry-generation-dialog">
+          <p>状态：{geometryBadge}。TikZ 只会在题目解析和正解都完成后生成；失败不会替换原图。</p>
+          <div className="geometry-generation-dialog__compare">
+            <section>
+              <strong>题目原图</strong>
+              {selected && selectedDiagramRect && <ProblemDiagramImage
+                alt={`${selected.title}中的题目原图`}
+                croppedPath={selectedDiagramPath}
+                path={selected.cropImagePath}
+                rect={selectedDiagramRect}
+              />}
+            </section>
+            <section>
+              <strong>当前 TikZ</strong>
+              {generatedDiagram
+                ? <DiagramView alt={`${selected?.title ?? '题目'}的 TikZ 几何图`} diagram={generatedDiagram} />
+                : <p>尚无通过编译和视觉校验的 TikZ，继续显示原图。</p>}
+            </section>
+          </div>
+          {geometryScene?.validationErrors[0] && <small>{geometryScene.validationErrors[0]}</small>}
+          <div className="curriculum-dialog-actions">
+            <Button disabled={geometrySceneBusy} onClick={() => setGeometryDialogOpen(false)} variant="ghost">关闭</Button>
+            <Button disabled={geometryRunBusy} loading={geometrySceneBusy} onClick={() => void rebuildGeometryScene()} variant="primary">
+              {generatedDiagram ? '重新生成' : '生成 TikZ'}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       <Dialog
         onClose={() => { if (!variantBusy) { setVariantDialogOpen(false); setSingleVariantPreview(null) } }}

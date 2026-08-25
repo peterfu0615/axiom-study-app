@@ -27,6 +27,9 @@ export interface Diagram {
   width: number | null
   height: number | null
   repairAttempts: number
+  sourceModelRunId: string | null
+  inputHash: string
+  freshnessStatus: 'fresh' | 'stale'
   createdAt: number
   updatedAt: number
 }

@@ -36,9 +36,9 @@ const { resolveProblemTextbookContextBeforeAnalysis } = vi.hoisted(() => ({
   resolveProblemTextbookContextBeforeAnalysis: vi.fn(),
 }))
 
-const { queueGeometryScene, runGeometrySceneWorker } = vi.hoisted(() => ({
-  queueGeometryScene: vi.fn(),
-  runGeometrySceneWorker: vi.fn(),
+const { coordinateGeometryScene, markGeometryDiagramsStale } = vi.hoisted(() => ({
+  coordinateGeometryScene: vi.fn(),
+  markGeometryDiagramsStale: vi.fn(),
 }))
 
 vi.mock('../platform/database', () => ({
@@ -69,8 +69,8 @@ vi.mock('../platform/horizonDatabase', () => ({
 }))
 
 vi.mock('../platform/geometrySceneDatabase', () => ({
-  queueGeometryScene,
-  runGeometrySceneWorker,
+  coordinateGeometryScene,
+  markGeometryDiagramsStale,
 }))
 
 import { resumeProblemAIPipeline, runProblemAIWorker } from './pipeline'
@@ -123,8 +123,8 @@ describe('problem AI worker', () => {
     completeProblemAIModelRun.mockResolvedValue(null)
     queueProblemSolution.mockResolvedValue(undefined)
     queueStudentAttempt.mockResolvedValue(undefined)
-    queueGeometryScene.mockResolvedValue('geometry-run-1')
-    runGeometrySceneWorker.mockResolvedValue(undefined)
+    coordinateGeometryScene.mockResolvedValue({ status: 'queued', runId: 'geometry-run-1' })
+    markGeometryDiagramsStale.mockResolvedValue(undefined)
     getProblemRegions.mockResolvedValue([])
     cropProblemDiagram.mockResolvedValue({
       path: '/tmp/diagram.jpg',
@@ -227,11 +227,10 @@ describe('problem AI worker', () => {
     expect(removeProblemDiagram).toHaveBeenCalledWith(
       '/tmp/old-diagram.jpg',
     )
-    expect(queueGeometryScene).toHaveBeenCalledWith({
-      problemId: run.problemId,
-      imagePath: '/tmp/diagram.jpg',
-      stemMarkdown: '题干',
-    })
+    expect(markGeometryDiagramsStale).toHaveBeenCalledWith(run.problemId)
+    expect(coordinateGeometryScene).toHaveBeenCalledWith(run.problemId)
+    expect(queueProblemSolution.mock.invocationCallOrder[0])
+      .toBeLessThan(coordinateGeometryScene.mock.invocationCallOrder[0])
   })
 
   it('sends and preserves a manual diagram instead of recropping the AI box', async () => {

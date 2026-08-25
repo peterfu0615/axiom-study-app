@@ -8,6 +8,8 @@ import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
 import { recordProcessingModelRunOutput } from './database'
 import { createTikzDiagram } from './diagramDatabase'
 import { withTransactionLock } from './transactionLock'
+import { getProblemRegions, getProblemSolution, getSavedProblem } from './database'
+import { preferredRegions } from '../domain/problemRegions'
 
 interface ExecuteResult { rowsAffected: number; lastInsertId: number }
 const execute = (sql: string, params: unknown[] = []) => invoke<ExecuteResult>('db_execute', { sql, params })
@@ -19,6 +21,7 @@ interface GeometrySceneRow {
   id: string; problem_id: string; model_run_id: string; source_image_path: string
   scene_json: string; validation_status: 'validated' | 'rejected'; validation_errors_json: string
   confidence: number; created_at: number; updated_at: number
+  input_hash: string; problem_revision_hash: string; solution_revision_hash: string
 }
 
 interface GeometryRunRow {
@@ -30,6 +33,8 @@ const fromRow = (row: GeometrySceneRow): PersistedGeometryScene => ({
   sourceImagePath: row.source_image_path, scene: JSON.parse(row.scene_json),
   validationStatus: row.validation_status, validationErrors: JSON.parse(row.validation_errors_json),
   confidence: Number(row.confidence), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  inputHash: row.input_hash, problemRevisionHash: row.problem_revision_hash,
+  solutionRevisionHash: row.solution_revision_hash,
 })
 
 function notifyGeometrySceneStatus(problemId: string) {
@@ -38,7 +43,16 @@ function notifyGeometrySceneStatus(problemId: string) {
   }
 }
 
-function stableHash(input: unknown) {
+export async function markGeometryDiagramsStale(problemId: string) {
+  await execute(
+    `UPDATE diagrams SET freshness_status='stale',updated_at=$1
+     WHERE owner_type='problem' AND owner_id=$2 AND source_type='tikz' AND freshness_status='fresh'`,
+    [Date.now(), problemId],
+  )
+  notifyGeometrySceneStatus(problemId)
+}
+
+export function stableGeometryHash(input: unknown) {
   const value = JSON.stringify(input)
   let hash = 2166136261
   for (let index = 0; index < value.length; index += 1) {
@@ -66,7 +80,13 @@ async function getGeometrySceneForRun(runId: string) {
 export async function queueGeometryScene(input: GeometrySceneInput, force = false) {
   const providers = getGeometrySceneProviders()
   if (!providers.length) throw new Error('没有可用的几何场景 Provider')
-  const hash = stableHash(input)
+  const hash = stableGeometryHash(input)
+  await execute(
+    `UPDATE diagrams SET freshness_status='stale',updated_at=$1
+     WHERE owner_type='problem' AND owner_id=$2 AND source_type='tikz'
+       AND input_hash != '' AND input_hash != $3 AND freshness_status='fresh'`,
+    [Date.now(), input.problemId, hash],
+  )
   if (!force) {
     const existing = (await select<Array<{ id: string }>>(
       `SELECT run.id FROM model_runs run
@@ -144,7 +164,10 @@ async function processGeometryRun(run: GeometryRunRow) {
         )
         if (result.valid) {
           const compiled = compileGeometrySceneToTikz(result.scene)
-          await createTikzDiagram({ ownerType: 'problem', ownerId: input.problemId, ...compiled })
+          await createTikzDiagram({
+            ownerType: 'problem', ownerId: input.problemId, ...compiled,
+            sourceModelRunId: run.id, inputHash: stableGeometryHash(input),
+          })
         }
         const now = Date.now()
         const id = crypto.randomUUID()
@@ -154,10 +177,12 @@ async function processGeometryRun(run: GeometryRunRow) {
             await execute(
               `INSERT INTO geometry_scenes (
                  id,problem_id,model_run_id,source_image_path,scene_json,validation_status,
-                 validation_errors_json,confidence,created_at,updated_at
-               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+                 validation_errors_json,confidence,input_hash,problem_revision_hash,
+                 solution_revision_hash,created_at,updated_at
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
               [id, input.problemId, run.id, input.imagePath, JSON.stringify(result.scene),
-                result.valid ? 'validated' : 'rejected', JSON.stringify(result.errors), result.scene.confidence, now],
+                result.valid ? 'validated' : 'rejected', JSON.stringify(result.errors), result.scene.confidence,
+                stableGeometryHash(input), input.problemRevisionHash, input.solutionRevisionHash, now],
             )
             await execute(
               `UPDATE model_runs SET output_json=$1,status='completed',error_message=NULL,
@@ -209,10 +234,51 @@ export async function resumeGeometryScenePipeline() {
   await runGeometrySceneWorker()
 }
 
-export async function reconstructGeometryScene(input: GeometrySceneInput): Promise<PersistedGeometryScene> {
+export async function reconstructGeometryScene(problemId: string): Promise<PersistedGeometryScene> {
+  const input = await buildGeometrySceneInput(problemId)
+  if (!input) throw new Error('题目解析、几何题图和已完成正解尚未同时就绪')
   const runId = await queueGeometryScene(input, true)
   await runGeometrySceneWorker()
   const saved = await getGeometrySceneForRun(runId)
   if (!saved) throw new Error('几何场景生成失败，请检查 AI Provider 后重试')
   return saved
+}
+
+export async function buildGeometrySceneInput(problemId: string): Promise<GeometrySceneInput | null> {
+  const [problem, solution, regions] = await Promise.all([
+    getSavedProblem(problemId), getProblemSolution(problemId), getProblemRegions(problemId),
+  ])
+  if (!problem || problem.aiDiagramKind !== 'geometry' || !problem.aiHasDiagram || solution.status !== 'completed') {
+    return null
+  }
+  const diagramRegion = preferredRegions(regions, 'diagram').find((region) => Boolean(region.imagePath))
+  const imagePath = diagramRegion?.imagePath ?? problem.aiDiagramImagePath ?? problem.cropImagePath
+  if (!imagePath) return null
+  return {
+    problemId,
+    imagePath,
+    stemMarkdown: problem.stemMarkdown ?? '',
+    choices: problem.aiChoices,
+    subQuestions: problem.aiSubQuestions,
+    solutionContentMarkdown: solution.contentMarkdown,
+    solutionSteps: solution.steps,
+    keyMethod: solution.keyMethod,
+    usedFormulas: solution.usedFormulas,
+    problemRevisionHash: stableGeometryHash({
+      updatedAt: problem.updatedAt, stem: problem.stemMarkdown,
+      choices: problem.aiChoices, subQuestions: problem.aiSubQuestions, imagePath,
+    }),
+    solutionRevisionHash: stableGeometryHash({
+      updatedAt: solution.updatedAt, content: solution.contentMarkdown,
+      steps: solution.steps, keyMethod: solution.keyMethod, formulas: solution.usedFormulas,
+    }),
+  }
+}
+
+export async function coordinateGeometryScene(problemId: string, force = false) {
+  const input = await buildGeometrySceneInput(problemId)
+  if (!input) return { status: 'waiting' as const, runId: null }
+  const runId = await queueGeometryScene(input, force)
+  void runGeometrySceneWorker()
+  return { status: 'queued' as const, runId }
 }

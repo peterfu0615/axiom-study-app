@@ -16,6 +16,7 @@ const {
   recoverSolutionTasks: vi.fn(),
   updateProcessingModelRunProvider: vi.fn(),
 }))
+const coordinateGeometryScene = vi.hoisted(() => vi.fn())
 
 vi.mock('../platform/database', () => ({
   claimNextSolutionModelRun,
@@ -30,6 +31,7 @@ vi.mock('../platform/native', () => ({
   analyzeProblemWithAntigravityCLI: vi.fn(),
   analyzeProblemWithOpenAICompatible: vi.fn(),
 }))
+vi.mock('../platform/geometrySceneDatabase', () => ({ coordinateGeometryScene }))
 
 import {
   resumeSolutionPipeline,
@@ -107,6 +109,9 @@ describe('solution worker', () => {
       null,
     )
     expect(completeSolutionModelRun).toHaveBeenCalledWith(run, generated)
+    expect(coordinateGeometryScene).toHaveBeenCalledWith(run.problemId)
+    expect(completeSolutionModelRun.mock.invocationCallOrder[0])
+      .toBeLessThan(coordinateGeometryScene.mock.invocationCallOrder[0])
     expect(failSolutionModelRun).not.toHaveBeenCalled()
   })
 

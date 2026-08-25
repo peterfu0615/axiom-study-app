@@ -11,6 +11,7 @@ import {
   getSolutionProvidersForRun,
 } from './provider'
 import { runWithAIBackoff } from './retryPolicy'
+import { coordinateGeometryScene } from '../platform/geometrySceneDatabase'
 
 export const SOLUTION_STATUS_EVENT = 'axiom:solution-status'
 /** 流式输出事件：正解生成过程中实时推送累积文本 */
@@ -96,6 +97,11 @@ async function drainPendingSolutions() {
             activeRun,
             providerResult.solution,
           )
+          try {
+            await coordinateGeometryScene(activeRun.problemId)
+          } catch (error) {
+            console.error('[Solution] 几何图任务排队失败，正解仍保持完成', error)
+          }
           errors.length = 0
           break
         } catch (error) {

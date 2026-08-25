@@ -399,6 +399,12 @@ pub fn axiom_migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0059_ai_endpoint_capabilities.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 60,
+            description: "geometry_variant_freshness",
+            sql: include_str!("../migrations/0060_geometry_variant_freshness.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

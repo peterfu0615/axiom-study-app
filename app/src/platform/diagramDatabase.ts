@@ -26,6 +26,9 @@ interface DiagramRow {
   width_units: number | null
   height_units: number | null
   repair_attempts: number
+  source_model_run_id: string | null
+  input_hash: string
+  freshness_status: 'fresh' | 'stale'
   created_at: number
   updated_at: number
 }
@@ -50,26 +53,31 @@ function fromRow(row: DiagramRow): Diagram {
     width: row.width_units,
     height: row.height_units,
     repairAttempts: Number(row.repair_attempts),
+    sourceModelRunId: row.source_model_run_id,
+    inputHash: row.input_hash,
+    freshnessStatus: row.freshness_status,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   }
 }
 
 async function persistRender(
-  input: { id: string; ownerType: DiagramOwnerType; ownerId: string; source: string; createdAt: number; contract: DiagramValidationContract; repairAttempts: number },
+  input: { id: string; ownerType: DiagramOwnerType; ownerId: string; source: string; createdAt: number; contract: DiagramValidationContract; repairAttempts: number; sourceModelRunId?: string | null; inputHash?: string },
   render: TikzRenderResult,
 ) {
   await execute(`INSERT INTO diagrams (
     id, owner_type, owner_id, source_type, source, render_status,
     rendered_asset_path, rendered_mime_type, render_hash, renderer_version,
     render_error_code, render_error_message, validation_status, validation_json,
-    contract_json, width_units, height_units, repair_attempts, created_at, updated_at
-  ) VALUES ($1,$2,$3,'tikz',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`, [
+    contract_json, width_units, height_units, repair_attempts, source_model_run_id,
+    input_hash, freshness_status, created_at, updated_at
+  ) VALUES ($1,$2,$3,'tikz',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'fresh',$20,$20)`, [
     input.id, input.ownerType, input.ownerId, input.source, render.renderStatus,
     render.renderedAssetPath, render.renderedMimeType, render.renderHash,
     render.rendererVersion, render.errorCode, render.errorMessage, render.validationStatus,
     JSON.stringify({ errors: render.validationErrors, aspectRatio: render.aspectRatio, inkCoverage: render.inkCoverage }),
-    JSON.stringify(input.contract), render.width, render.height, input.repairAttempts, input.createdAt,
+    JSON.stringify(input.contract), render.width, render.height, input.repairAttempts,
+    input.sourceModelRunId ?? null, input.inputHash ?? '', input.createdAt,
   ])
 }
 
@@ -97,6 +105,8 @@ export async function createTikzDiagram(input: {
   source: string
   contract?: DiagramValidationContract
   repair?: (source: string, errors: string[], attempt: number) => Promise<string>
+  sourceModelRunId?: string | null
+  inputHash?: string
 }): Promise<Diagram> {
   const id = crypto.randomUUID()
   const createdAt = Date.now()
@@ -135,6 +145,7 @@ export async function getPreferredDiagram(ownerType: DiagramOwnerType, ownerId: 
     `SELECT * FROM diagrams
      WHERE owner_type=$1 AND owner_id=$2
        AND render_status='rendered' AND validation_status='validated'
+       AND freshness_status='fresh'
        AND rendered_asset_path IS NOT NULL
      ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1`,
     [ownerType, ownerId],
