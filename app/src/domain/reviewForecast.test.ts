@@ -17,6 +17,17 @@ const candidate = (id: string, dueAt?: number | null, tags: ReviewTag[] = [tag('
   } }, lastReviewedAt: null, reviewCount: 0, lastRating: null,
 })
 
+function withBundle(current: ReviewCandidate, dueAt: number) {
+  return {
+    ...current,
+    bundleState: {
+      ...Object.values(current.skillStates)[0],
+      lastPracticedAt: dueAt - day,
+      nextReviewAt: dueAt,
+    },
+  }
+}
+
 describe('seven-day review forecast', () => {
   it('returns seven deterministic empty local days', () => {
     const result = buildReviewForecast([], now)
@@ -77,6 +88,26 @@ describe('seven-day review forecast', () => {
     expect(forecast.reduce((sum, item) => sum + item.estimatedProblemCount, 0)).toBeGreaterThan(2)
     expect(forecast.filter((item) => item.estimatedProblemCount > 0).length).toBeGreaterThan(1)
     expect(JSON.stringify(current)).toBe(snapshot)
+  })
+
+  it('advances an overdue bundle state and never repeats one problem on the same day', () => {
+    const current = withBundle(candidate('stale-bundle', now + day), now - 30 * day)
+    const snapshot = JSON.stringify(current)
+    const forecast = buildReviewForecast([current], now, 30)
+    expect(forecast[0].estimatedProblemCount).toBe(1)
+    expect(forecast.every((item) => item.estimatedProblemCount <= 1)).toBe(true)
+    expect(forecast.reduce((sum, item) => sum + item.estimatedProblemCount, 0)).toBeLessThanOrEqual(30)
+    expect(JSON.stringify(current)).toBe(snapshot)
+  })
+
+  it('keeps a five-problem daily forecast within the available problem count', () => {
+    const items = Array.from({ length: 5 }, (_, index) => withBundle(
+      candidate(`small-${index}`, now - day, [tag('knowledge', `知识${index}`)]),
+      now - day,
+    ))
+    const today = buildReviewForecast(items, now, 30)[0]
+    expect(today.estimatedProblemCount).toBe(5)
+    expect(today.estimatedMinutes).toBeLessThanOrEqual(75)
   })
 
   it('increases projected frequency from relaxed to intensive pace', () => {

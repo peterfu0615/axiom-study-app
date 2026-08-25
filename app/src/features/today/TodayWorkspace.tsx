@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { MathMarkdown } from '../../components/MathMarkdown'
 import { AsyncState, Button, EmptyState, IconButton, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
@@ -24,6 +25,7 @@ import { PracticeSetView } from '../practice/PracticeSetView'
 import { getLatestPracticeAttempt, getPracticeAttempt } from '../../platform/practiceAttemptDatabase'
 import { practiceErrorMessage } from '../practice/productLanguage'
 import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
+import { mediaAssetUrl } from '../../platform/native'
 import {
   completePracticePreparation,
   claimPracticePreparation,
@@ -178,9 +180,11 @@ function LearningTopicRow({ unit }: {
   unit: TodayReviewUnit
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
   const supporting = supportTags(unit).map((tag) => tag.name)
   const primaryKnowledge = unit.tags.find((tag) => tag.type === 'knowledge' && tag.role === 'primary')?.name
     ?? unit.title.split(' · ')[0]
+  const imagePath = unit.question.questionImagePath ?? unit.question.diagramImagePaths[0] ?? null
   return <article className={`today-unit today-unit--${unit.status}`}>
     <div className="today-unit__order" aria-hidden="true">{unit.status === 'completed' ? <Icon name="check" size={16} /> : String(unit.orderIndex + 1).padStart(2, '0')}</div>
     <button className="today-unit__body today-unit__expand" onClick={() => setExpanded((value) => !value)} type="button" aria-expanded={expanded}>
@@ -190,9 +194,19 @@ function LearningTopicRow({ unit }: {
         <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={14} />
       </div>
       {expanded && <div className="today-unit__details">
-        <strong>{unit.question.title}</strong>
-        <span>{unit.subject} · {difficultyLabels[unit.difficulty]}</span>
-        <p>{unit.question.stemMarkdown}</p>
+        <div className="today-unit__detail-copy">
+          <strong>{unit.question.title}</strong>
+          <span>{unit.subject} · {difficultyLabels[unit.difficulty]}</span>
+          <MathMarkdown className="today-unit__stem">{unit.question.stemMarkdown}</MathMarkdown>
+        </div>
+        {imagePath && !imageFailed && <img
+          alt={`${unit.question.title}的题目图片`}
+          className="today-unit__image"
+          decoding="async"
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+          src={mediaAssetUrl(imagePath)}
+        />}
         {supporting.length > 0 && <small>{supporting.join(' · ')}</small>}
       </div>}
     </button>

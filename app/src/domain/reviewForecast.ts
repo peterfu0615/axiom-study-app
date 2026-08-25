@@ -64,36 +64,42 @@ export function buildReviewForecast(
       tags: sourceCandidate.tags.map((tag) => ({ ...tag })),
       skillStates: Object.fromEntries(Object.entries(sourceCandidate.skillStates)
         .map(([key, state]) => [key, { ...state }])),
+      bundleState: sourceCandidate.bundleState ? { ...sourceCandidate.bundleState } : null,
     }
     if (!candidate.subject.trim() || !candidate.stemMarkdown.trim()) return
-    for (let occurrence = 0; occurrence < 128; occurrence += 1) {
+    let previousDayIndex = -1
+    for (let occurrence = 0; occurrence < horizon.length; occurrence += 1) {
       const dueAt = candidateDueAt(candidate, now, targetRetention)
-      if (dueAt > horizonEnd) break
-      const index = dueAt < todayStart
+      if (!Number.isFinite(dueAt) || dueAt > horizonEnd) break
+      const dueDayIndex = dueAt < todayStart
         ? 0
         : horizon.findIndex((day) => dueAt <= endOfLocalReviewDay(day))
+      // A daily plan cannot expose the same problem more than once on one
+      // local day. Very short initial intervals are therefore projected onto
+      // the next available day instead of being counted dozens of times today.
+      const index = Math.max(dueDayIndex, previousDayIndex + 1)
       if (index < 0) break
+      if (index >= horizon.length) break
       buckets[index].push(candidate)
       if (occurrence === 0 && dueAt < todayStart) overdue[index] += 1
 
       const reviewedAt = index === 0 && dueAt < now ? now : Math.max(dueAt, horizon[index])
       const difficulty = candidate.difficulty ?? 'intermediate'
       const stateEntries = Object.entries(candidate.skillStates)
-      candidate = stateEntries.length ? {
+      candidate = {
         ...candidate,
         skillStates: Object.fromEntries(stateEntries.map(([key, state]) => [
           key,
           applyReviewRating(state, 'good', difficulty, reviewedAt, { targetRetention }),
         ])),
-        lastReviewedAt: reviewedAt,
-        lastRating: 'good',
-        reviewCount: candidate.reviewCount + 1,
-      } : {
-        ...candidate,
+        bundleState: candidate.bundleState
+          ? applyReviewRating(candidate.bundleState, 'good', difficulty, reviewedAt, { targetRetention })
+          : null,
         lastReviewedAt: reviewedAt,
         lastRating: 'good',
         reviewCount: candidate.reviewCount + 1,
       }
+      previousDayIndex = index
     }
   })
 
