@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   ModelRun,
   NormalizedRect,
@@ -86,6 +86,7 @@ import {
   type StoredVariantCandidate,
 } from '../../platform/variantPracticeDatabase'
 import type { VariantLevel } from '../../domain/variantPractice'
+import { problemTypeLabel } from './problemType'
 
 type LibraryView = 'active' | 'archived' | 'trash'
 
@@ -112,10 +113,11 @@ function variantSolutionMarkdown(value: string) {
 }
 
 function variantStatusLabel(item: StoredVariantCandidate) {
-  if (item.candidateStatus === 'verified') return '可使用'
-  if (item.planStatus === 'generating' || item.candidateStatus === 'generated') return '生成中'
-  if (item.planStatus === 'failed' || item.planStatus === 'rejected') return '生成失败'
-  return '等待生成'
+  if (item.candidateStatus === 'verified') return '已保存'
+  if (item.candidate) return '已生成'
+  if (item.planStatus === 'generating') return '生成中'
+  if (item.planStatus === 'failed' || item.planStatus === 'rejected') return '未生成'
+  return '待生成'
 }
 
 function variantProductError(error: unknown) {
@@ -342,6 +344,28 @@ export function ProblemLibrary() {
   useEffect(() => {
     viewRef.current = view
   }, [view])
+
+  // Detail data is loaded from several independent tables. Clear every
+  // selection-scoped snapshot before paint so a fast switch can never show
+  // the previous problem's tags, solution, diagram, or variant state.
+  useLayoutEffect(() => {
+    setModelRuns([])
+    setSolution(null)
+    setStudentAttempt(null)
+    setReasoning(null)
+    setSelectedRegions([])
+    setReviewHistory([])
+    setGeometryScene(null)
+    setGeneratedDiagram(null)
+    setDiagramView('generated')
+    setStoredVariants([])
+    setActiveVariantKey('')
+    setSingleVariantPreview(null)
+    setVariantDialogError(null)
+    setDuplicateDecisionIds(new Set())
+    setGeometryDialogOpen(false)
+    setVariantDialogOpen(false)
+  }, [selectedId])
 
   const refresh = useCallback(async (
     nextView: LibraryView,
@@ -1602,7 +1626,7 @@ export function ProblemLibrary() {
                           <div>
                             <span>题型</span>
                             <strong>
-                              {selected.aiProblemType || '待识别'}
+                              {problemTypeLabel(selected.aiProblemType)}
                             </strong>
                           </div>
                           <div>
@@ -1635,6 +1659,7 @@ export function ProblemLibrary() {
                       </section>
 
                       <ProblemTags
+                        key={selected.id}
                         problemId={selected.id}
                         subjectId={selected.subjectId}
                         subject={selected.subject}

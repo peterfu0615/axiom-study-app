@@ -106,6 +106,16 @@ function restoreEscapedLineBreaks(value: string) {
     .replace(/\\n(?![A-Za-z])/g, '\n')
 }
 
+// OCR and some OpenAI-compatible models occasionally drop the first letter
+// or slash from very common commands. Repair only shapes whose intended
+// meaning is unambiguous; broader guessing could silently change mathematics.
+function repairMalformedMathContent(value: string) {
+  return value
+    .replace(/\\±/gu, '\\pm')
+    .replace(/\\ext(?=\{)/gu, '\\text')
+    .replace(/(^|[^A-Za-z\\])ext(?=\{)/gu, (_match, prefix: string) => `${prefix}\\text`)
+}
+
 function normalizePlainTextSegment(value: string, leadingChar = '') {
   const text = wrapBareEquationLines(
     restoreEscapedLineBreaks(
@@ -213,11 +223,14 @@ export function normalizeMathMarkdown(markdown: string) {
       }
 
       const mathSpan = markdown.slice(index, end)
+      const repairedInner = repairMalformedMathContent(
+        mathSpan.slice(delimiter.length, -delimiter.length),
+      )
       if (isDisplayMode) {
-        output += mathSpan
+        output += `$$${repairedInner}$$`
       } else {
         // 对于单 $ 的行内公式，去除内部紧贴 $ 的首尾空格（避免 remark-math 校验失败导致无法渲染）
-        const inner = mathSpan.slice(1, -1).trim()
+        const inner = repairedInner.trim()
         if (!inner) {
           output += mathSpan
         } else if (INLINE_BLOCK_ENV_PATTERN.test(inner)) {

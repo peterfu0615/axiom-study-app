@@ -9,6 +9,13 @@ $$\sqrt{x^2+1}$$`
     expect(normalizeMathMarkdown(markdown)).toBe(markdown)
   })
 
+  it('repairs high-confidence OCR damage inside delimited formulas', () => {
+    const input = String.raw`密度 $22.42ext{克/厘米}^3$，熔点 $2410\±40^\circ C$。`
+    const expected = String.raw`密度 $22.42\text{克/厘米}^3$，熔点 $2410\pm40^\circ C$。`
+    expect(normalizeMathMarkdown(input)).toBe(expected)
+    expect(normalizeMathMarkdown(expected)).toBe(expected)
+  })
+
   it('wraps a parenthesized fraction that is missing math delimiters', () => {
     expect(normalizeMathMarkdown(String.raw`A. (\frac{2x+1}{2+5x})`)).toBe(
       String.raw`A. $\frac{2x+1}{2+5x}$`,

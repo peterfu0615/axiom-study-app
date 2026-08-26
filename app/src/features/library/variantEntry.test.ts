@@ -15,6 +15,8 @@ describe('visible variant entry contract', () => {
     expect(library).toContain('listProblemVariantCandidates')
     expect(library).not.toContain('最后一项完成后会自动开始生成')
     expect(library).not.toContain('AI 题型：')
+    expect(library).toContain('key={selected.id}')
+    expect(library).toContain("if (item.candidate) return '已生成'")
   })
 
   it('saves manual variants without starting a one-question practice route', () => {
