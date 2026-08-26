@@ -562,14 +562,18 @@ export function ProblemLibrary() {
       : [],
     [duplicateDecisionIds, problems, selected],
   )
-  const activeStoredVariant = storedVariants.find((item) => (item.id ?? item.planId) === activeVariantKey) ?? storedVariants[0] ?? null
+  const savedVariantCount = storedVariants.filter((item) => Boolean(item.candidate)).length
+  const preferredStoredVariant = storedVariants.find((item) => Boolean(item.candidate)) ?? storedVariants[0] ?? null
+  const activeStoredVariant = storedVariants.find((item) => (item.id ?? item.planId) === activeVariantKey) ?? preferredStoredVariant
   const refreshStoredVariants = useCallback(async (problemId: string) => {
     const candidates = await listProblemVariantCandidates(problemId)
     if (selectedIdRef.current !== problemId) return
     setStoredVariants(candidates)
-    setActiveVariantKey((current) => candidates.some((item) => (item.id ?? item.planId) === current)
-      ? current
-      : (candidates[0]?.id ?? candidates[0]?.planId ?? ''))
+    setActiveVariantKey((current) => {
+      if (candidates.some((item) => (item.id ?? item.planId) === current)) return current
+      const preferred = candidates.find((item) => Boolean(item.candidate)) ?? candidates[0]
+      return preferred?.id ?? preferred?.planId ?? ''
+    })
   }, [])
 
   useEffect(() => {
@@ -1751,10 +1755,12 @@ export function ProblemLibrary() {
                         <button onClick={openVariantDialog} type="button">
                           <div>
                             <p className="eyebrow">变式题</p>
-                            <h3>{storedVariants.length ? `已保存 ${storedVariants.length} 道变式` : '创建第一道变式'}</h3>
-                            <p>{storedVariants.length
+                            <h3>{savedVariantCount ? `已保存 ${savedVariantCount} 道变式` : '创建第一道变式'}</h3>
+                            <p>{savedVariantCount
                               ? '查看不同难度和变化方式的题目，或继续生成。'
-                              : '选择难度与变化方式，生成后保存到本题。'}</p>
+                              : storedVariants.length
+                                ? '上次没有生成可用题目，可以重新选择难度与变化方式。'
+                                : '选择难度与变化方式，生成后保存到本题。'}</p>
                           </div>
                           <span className="problem-variant-summary-card__status">
                             {activeStoredVariant ? variantStatusLabel(activeStoredVariant) : '尚未生成'}

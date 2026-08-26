@@ -17,6 +17,8 @@ describe('visible variant entry contract', () => {
     expect(library).not.toContain('AI 题型：')
     expect(library).toContain('key={selected.id}')
     expect(library).toContain("if (item.candidate) return '已生成'")
+    expect(library).toContain('savedVariantCount')
+    expect(library).toContain('candidates.find((item) => Boolean(item.candidate))')
   })
 
   it('saves manual variants without starting a one-question practice route', () => {
