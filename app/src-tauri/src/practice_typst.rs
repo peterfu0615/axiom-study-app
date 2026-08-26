@@ -801,11 +801,22 @@ fn typst_binary() -> Result<PathBuf, String> {
             }
         }
     }
-    ["/opt/homebrew/bin/typst", "/usr/local/bin/typst"]
+    if let Some(path) = ["/opt/homebrew/bin/typst", "/usr/local/bin/typst"]
         .into_iter()
         .map(PathBuf::from)
         .find(|path| path.is_file())
-        .ok_or_else(|| "Axiom 缺少离线 Typst 排版引擎，请重新安装应用".to_string())
+    {
+        return Ok(path);
+    }
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join("typst"))
+            .find(|candidate| candidate.is_file())
+    }) {
+        return Ok(path);
+    }
+    Err("Axiom 缺少离线 Typst 排版引擎，请重新安装应用".to_string())
 }
 
 fn run_typst(binary: &Path, arguments: &[String], directory: &Path) -> Result<String, String> {
