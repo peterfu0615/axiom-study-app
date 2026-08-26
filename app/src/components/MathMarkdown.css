@@ -1,0 +1,162 @@
+/* KaTeX defaults to `font-display: block`, leaving formulas blank during a
+   WebView's first font load. These later declarations keep the same bundled
+   faces but show readable fallback glyphs until each local woff2 is ready. */
+@font-face {
+  font-family: KaTeX_AMS;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Caligraphic;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Caligraphic;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Fraktur;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Fraktur;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Main;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Main;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Main;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Main;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Math;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Math;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_SansSerif;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_SansSerif;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_SansSerif;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Script;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Size1;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Size2;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Size3;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Size3-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Size4;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: KaTeX_Typewriter;
+  src: url("../../node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}

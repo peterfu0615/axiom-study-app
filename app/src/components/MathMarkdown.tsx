@@ -6,6 +6,7 @@ import remarkBreaks from 'remark-breaks'
 import type { PluggableList } from 'unified'
 import { normalizeMathMarkdown } from '../domain/mathMarkdown'
 import 'katex/dist/katex.min.css'
+import './MathMarkdown.css'
 
 // 非法公式降级为可读的错误文本而不是抛错（throwOnError），
 // 也不因严格模式拒绝常见 LaTeX 写法（strict），避免原文直接泄露。

@@ -27,6 +27,8 @@ describe('today practice preparation contract', () => {
   it('renders expanded questions with math, media, and the reading typeface', () => {
     expect(source).toContain('<MathMarkdown className="today-unit__stem">')
     expect(source).toContain('mediaAssetUrl(imagePath)')
+    expect(source).not.toContain('loading="lazy"')
+    expect(source).not.toContain('decoding="async"')
     const styles = readFileSync(new URL('./Today.css', import.meta.url), 'utf8')
     expect(styles).toContain('.today-unit__stem { font-family: var(--ax-font-reading);')
   })

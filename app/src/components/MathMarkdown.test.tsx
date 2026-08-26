@@ -1,8 +1,18 @@
+// @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { MathMarkdown } from './MathMarkdown'
 
 describe('MathMarkdown', () => {
+  it('shows fallback glyphs while bundled KaTeX fonts load', () => {
+    const styles = readFileSync(new URL('./MathMarkdown.css', import.meta.url), 'utf8')
+    expect(styles).toContain('font-family: KaTeX_Main')
+    expect(styles).toContain('font-family: KaTeX_Math')
+    expect(styles.match(/font-display: swap/gu)?.length).toBeGreaterThanOrEqual(20)
+    expect(styles).not.toMatch(/font-display:\s*block\s*;/u)
+  })
+
   it('renders inline and block LaTeX as KaTeX instead of source text', () => {
     const html = renderToStaticMarkup(
       <MathMarkdown>

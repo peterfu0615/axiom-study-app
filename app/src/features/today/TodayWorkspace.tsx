@@ -202,8 +202,6 @@ function LearningTopicRow({ unit }: {
         {imagePath && !imageFailed && <img
           alt={`${unit.question.title}的题目图片`}
           className="today-unit__image"
-          decoding="async"
-          loading="lazy"
           onError={() => setImageFailed(true)}
           src={mediaAssetUrl(imagePath)}
         />}
