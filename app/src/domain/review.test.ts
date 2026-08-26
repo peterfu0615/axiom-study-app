@@ -207,8 +207,8 @@ describe('Horizon review scheduler', () => {
   })
 
   it('uses the local calendar date across day boundaries', () => {
-    expect(localReviewDate(new Date('2026-08-10T23:59:59+08:00').getTime())).toBe('2026-08-10')
-    expect(localReviewDate(new Date('2026-08-11T00:00:01+08:00').getTime())).toBe('2026-08-11')
+    expect(localReviewDate(new Date(2026, 7, 10, 23, 59, 59).getTime())).toBe('2026-08-10')
+    expect(localReviewDate(new Date(2026, 7, 11, 0, 0, 1).getTime())).toBe('2026-08-11')
   })
 
   it('advances local review dates across a daylight-saving boundary', () => {
