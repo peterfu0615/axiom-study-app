@@ -217,6 +217,16 @@ function LearningTopicRow({ unit }: {
 type PreparationPhase = 'selecting' | 'generating' | 'verifying' | 'rendering'
 const activePreparationRuns = new Map<string, Promise<{ practiceSet: PracticeSet; attempt: PracticeAttempt | null }>>()
 
+function withOperationDeadline<T>(operation: Promise<T>, milliseconds: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(`${label}超时，请重试`)), milliseconds)
+    operation.then(
+      (value) => { window.clearTimeout(timeout); resolve(value) },
+      (error) => { window.clearTimeout(timeout); reject(error) },
+    )
+  })
+}
+
 function PracticePreparationView({ snapshot }: { snapshot: PracticePreparationSnapshot }) {
   const labels: Record<PreparationPhase, string> = {
     selecting: '正在选择题目', generating: '正在生成所需变式', verifying: '正在检查题目', rendering: '正在准备图形与练习页',
@@ -268,9 +278,13 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         if (!generating) throw new Error('练习准备作业已由另一个窗口恢复')
         const moduleIds = nextPlan.units.filter((unit) => unit.status === 'pending').map((unit) => unit.id)
         const budget = Math.max(3, moduleIds.length * 2)
-        const practiceSet = existingPracticeSet?.sessionMode === snapshot.sessionMode
-          ? existingPracticeSet
-          : await getOrCreatePracticeSetFromTodayPlan(nextPlan.id, moduleIds, budget, snapshot.sessionMode)
+        const practiceSet = await withOperationDeadline(
+          existingPracticeSet?.sessionMode === snapshot.sessionMode
+            ? Promise.resolve(existingPracticeSet)
+            : getOrCreatePracticeSetFromTodayPlan(nextPlan.id, moduleIds, budget, snapshot.sessionMode),
+          180_000,
+          '练习准备',
+        )
         await updatePracticePreparationPhase(snapshot.id, 'verifying')
         await updatePracticePreparationPhase(snapshot.id, 'rendering')
         const attempt = await getLatestPracticeAttempt(practiceSet.id)
@@ -298,17 +312,33 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     try {
       // The forward forecast is independent of today's plan; overlap it with
       // the practice-set lookup instead of waiting for both sequentially.
-      const nextPlan = await getOrCreateTodayPlan()
-      const [nextForecast, existingPracticeSet, nextCorrections, activePreparation] = await Promise.all([
-        getReviewForecast(forecastRangeRef.current),
-        findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode),
-        listTodayCorrectionTasks(),
-        getActivePracticePreparation('today', nextPlan.id, nextPlan.preferences.preferredMode),
+      const nextPlan = await withOperationDeadline(getOrCreateTodayPlan(), 12_000, '今日计划加载')
+      if (isCancelled()) return
+      setPlan(nextPlan)
+      setLoading(false)
+      const [forecastResult, practiceSetResult, correctionsResult, preparationResult] = await Promise.allSettled([
+        withOperationDeadline(getReviewForecast(forecastRangeRef.current), 12_000, '复习预测加载'),
+        withOperationDeadline(findPracticeSetForSource('today', nextPlan.id, nextPlan.preferences.preferredMode), 12_000, '练习记录加载'),
+        withOperationDeadline(listTodayCorrectionTasks(), 12_000, '订正任务加载'),
+        withOperationDeadline(getActivePracticePreparation('today', nextPlan.id, nextPlan.preferences.preferredMode), 12_000, '练习准备状态加载'),
       ])
       if (isCancelled()) return
-      setPlan(nextPlan); setForecast(nextForecast); setCorrections(nextCorrections)
+      if (forecastResult.status === 'fulfilled') setForecast(forecastResult.value)
+      else console.warn('复习预测加载失败：', forecastResult.reason)
+      if (correctionsResult.status === 'fulfilled') setCorrections(correctionsResult.value)
+      else console.warn('订正任务加载失败：', correctionsResult.reason)
+      const existingPracticeSet = practiceSetResult.status === 'fulfilled' ? practiceSetResult.value : null
+      if (practiceSetResult.status === 'rejected') console.warn('练习记录加载失败：', practiceSetResult.reason)
       setTodayPracticeSet(existingPracticeSet)
-      setTodayAttempt(existingPracticeSet ? await getLatestPracticeAttempt(existingPracticeSet.id) : null)
+      if (existingPracticeSet) {
+        void withOperationDeadline(getLatestPracticeAttempt(existingPracticeSet.id), 12_000, '练习进度加载')
+          .then(setTodayAttempt)
+          .catch((reason) => console.warn('练习进度加载失败：', reason))
+      } else {
+        setTodayAttempt(null)
+      }
+      const activePreparation = preparationResult.status === 'fulfilled' ? preparationResult.value : null
+      if (preparationResult.status === 'rejected') console.warn('练习准备状态加载失败：', preparationResult.reason)
       if (activePreparation) {
         setPreparation(activePreparation)
         window.requestAnimationFrame(() => void runPreparation(activePreparation, nextPlan, existingPracticeSet))

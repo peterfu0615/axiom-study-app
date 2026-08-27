@@ -16,5 +16,7 @@ describe('practice database snapshots', () => {
     expect(source).toContain('lastConfirmedSourceType')
     expect(source).toContain('findReusablePracticeSetForSource')
     expect(source).toContain("sourcePolicy: options.forceVariant ? 'explicit-variant-v1' : 'alternating-v1'")
+    expect(source).toContain('PARTITION BY item.problem_id')
+    expect(source).not.toContain('PARTITION BY item.source_problem_id')
   })
 })

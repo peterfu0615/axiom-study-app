@@ -426,7 +426,7 @@ async function plannerInputForReviewModule(moduleId: string, sourceType: 'review
     ), ranked AS (
       SELECT problem_id,source_type,activity_at,
         row_number() OVER (
-          PARTITION BY item.source_problem_id
+          PARTITION BY item.problem_id
           ORDER BY activity_at DESC,item_id DESC
         ) AS recent_rank
       FROM activity item
