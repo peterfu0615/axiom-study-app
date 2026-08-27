@@ -3,6 +3,7 @@ import {
   getPracticeVariantGenerationProviders,
   getPracticeVariantVerificationProviders,
 } from '../ai/provider'
+import { runWithAIBackoff } from '../ai/retryPolicy'
 import { classifyAIError } from '../domain/aiError'
 import type { DifficultyLevel } from '../domain/models'
 import type { PracticeProblemCandidate } from '../domain/practice'
@@ -52,6 +53,13 @@ export interface StoredVariantCandidate {
 }
 
 export async function listProblemVariantCandidates(problemId: string): Promise<StoredVariantCandidate[]> {
+  const staleBefore = Date.now() - 10 * 60 * 1000
+  await execute(`UPDATE variant_plans SET status='failed',failure_code='interrupted',updated_at=$1
+    WHERE source_problem_id=$2 AND status='generating' AND updated_at<$3`, [Date.now(), problemId, staleBefore])
+  await execute(`UPDATE variant_model_runs SET status='failed',safe_error_code='CANCELLED',finished_at=$1
+    WHERE status='processing' AND variant_plan_id IN (
+      SELECT id FROM variant_plans WHERE source_problem_id=$2 AND status='failed' AND failure_code='interrupted'
+    )`, [Date.now(), problemId])
   const rows = await select<Array<{
     id: string | null; plan_id: string; plan_status: StoredVariantCandidate['planStatus']
     candidate_status: StoredVariantCandidate['candidateStatus']; target_difficulty: DifficultyLevel
@@ -65,7 +73,7 @@ export async function listProblemVariantCandidates(problemId: string): Promise<S
        COALESCE(candidate.created_at,plan.created_at) AS created_at
      FROM variant_plans plan
      LEFT JOIN variant_candidates candidate ON candidate.variant_plan_id=plan.id
-     WHERE plan.source_problem_id=$1
+     WHERE plan.source_problem_id=$1 AND plan.status='verified' AND candidate.status='verified'
      ORDER BY COALESCE(candidate.created_at,plan.created_at) DESC,plan.id,candidate.id`,
     [problemId],
   )
@@ -203,10 +211,10 @@ async function failRun(run: { id: string; createdAt: number }, reason: unknown) 
 async function insertCandidate(planId: string, generationRunId: string, candidate: PracticeVariantCandidate) {
   const id = uuid()
   const fingerprint = stableVariantFingerprint(candidate)
-  await execute(`INSERT INTO variant_candidates(
+  const inserted = await execute(`INSERT OR IGNORE INTO variant_candidates(
     id,variant_plan_id,generation_model_run_id,candidate_json,instance_fingerprint,status,created_at
   ) VALUES($1,$2,$3,$4,$5,'generated',$6)`, [id, planId, generationRunId, JSON.stringify(candidate), fingerprint, Date.now()])
-  return id
+  return inserted.rowsAffected === 1 ? id : null
 }
 
 async function rejectCandidate(candidateId: string, verificationRunId: string | null, verification: PracticeVariantVerification | null, errors: string[]) {
@@ -256,16 +264,20 @@ export async function generateVerifiedPracticeVariant(input: {
     const generationRun = await beginRun(plan, 'generation', provider.id, provider.model)
     let candidate: PracticeVariantCandidate
     try {
-      const generated = await provider.generatePracticeVariant({
-        plan,
-        source: {
-          statementMarkdown: input.source.statementMarkdown,
-          options: input.source.options,
-          canonicalAnswer: input.source.canonicalAnswer,
-          solutionJson: input.source.solutionJson,
-          questionImagePath: input.source.questionImagePath ?? null,
-          diagramImagePaths: input.source.diagramImagePaths,
-        },
+      const generated = await runWithAIBackoff({
+        context: { providerId: provider.id, model: provider.model, runId: generationRun.id },
+        operation: () => provider.generatePracticeVariant({
+          plan,
+          source: {
+            statementMarkdown: input.source.statementMarkdown,
+            options: input.source.options,
+            canonicalAnswer: input.source.canonicalAnswer,
+            solutionJson: input.source.solutionJson,
+            questionImagePath: input.source.questionImagePath ?? null,
+            diagramImagePaths: input.source.diagramImagePaths,
+          },
+        }),
+        onFailure: async () => undefined,
       })
       candidate = generated.candidate
       await completeRun(generationRun, candidate, generated.rawOutput)
@@ -274,6 +286,10 @@ export async function generateVerifiedPracticeVariant(input: {
       continue
     }
     const candidateId = await insertCandidate(plan.id, generationRun.id, candidate)
+    if (!candidateId) {
+      lastFailureCode = 'duplicate_variant'
+      continue
+    }
     const verifiers = [
       ...verificationProviders.filter((candidateProvider) => candidateProvider.id !== provider.id),
       ...verificationProviders.filter((candidateProvider) => candidateProvider.id === provider.id),
@@ -282,7 +298,11 @@ export async function generateVerifiedPracticeVariant(input: {
     for (const verifier of verifiers) {
       const verificationRun = await beginRun(plan, 'verification', verifier.id, verifier.model)
       try {
-        const verified = await verifier.verifyPracticeVariant({ plan, candidate })
+        const verified = await runWithAIBackoff({
+          context: { providerId: verifier.id, model: verifier.model, runId: verificationRun.id },
+          operation: () => verifier.verifyPracticeVariant({ plan, candidate }),
+          onFailure: async () => undefined,
+        })
         await completeRun(verificationRun, verified.verification, verified.rawOutput)
         const errors = validatePracticeVariant(plan, input.source, candidate, verified.verification)
         if (errors.length) {

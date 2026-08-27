@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
 import { readFileSync } from 'node:fs'
 import { Badge, Button, DiscreteSlider, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag, Tabs } from './index'
+import { discreteSliderIndexFromPointer } from './discreteSlider'
 import { Icon } from '../Icon'
 
 describe('design system foundations', () => {
@@ -110,6 +111,9 @@ describe('design system foundations', () => {
     expect(html).toContain('aria-valuetext="中档"')
     expect(html).toContain('ax-discrete-slider__stop is-reached')
     expect(html).toContain('is-current')
+    expect(discreteSliderIndexFromPointer(10, 10, 300, 3)).toBe(0)
+    expect(discreteSliderIndexFromPointer(165, 10, 300, 3)).toBe(1)
+    expect(discreteSliderIndexFromPointer(310, 10, 300, 3)).toBe(2)
   })
 
   it('supports icon-bearing rail tabs for settings navigation', () => {

@@ -51,16 +51,22 @@
   color: var(--ax-accent);
   background: transparent;
   cursor: pointer;
+  touch-action: none;
+  user-select: none;
 }
 .ax-discrete-slider:focus-visible { outline: none; border-radius: var(--ax-radius-pill); box-shadow: var(--focus-ring); }
 .ax-discrete-slider:disabled { opacity: .48; cursor: not-allowed; }
-.ax-discrete-slider__track { position: absolute; top: 50%; right: 0; left: 0; height: var(--ax-space-3); overflow: hidden; border-radius: var(--ax-radius-pill); background: var(--ax-color-inset); transform: translateY(-50%); }
-.ax-discrete-slider__fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: currentColor; }
+.ax-discrete-slider.is-dragging { cursor: grabbing; }
+.ax-discrete-slider__track { position: absolute; top: 50%; right: 0; left: 0; height: 10px; overflow: hidden; border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-pill); background: var(--ax-color-inset); transform: translateY(-50%); }
+.ax-discrete-slider__fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: currentColor; transition: width var(--ax-duration-fast) var(--ax-ease-standard); }
 .ax-discrete-slider__stop { position: absolute; top: 50%; width: var(--ax-space-3); height: var(--ax-space-3); border: 2px solid var(--ax-color-surface); border-radius: var(--ax-radius-pill); background: var(--ax-text-tertiary); transform: translate(-50%, -50%); box-shadow: 0 0 0 1px var(--ax-border-subtle); }
 .ax-discrete-slider__stop.is-first { transform: translate(0, -50%); }
 .ax-discrete-slider__stop.is-last { transform: translate(-100%, -50%); }
 .ax-discrete-slider__stop.is-reached { background: currentColor; }
-.ax-discrete-slider__stop.is-current { width: var(--ax-space-6); height: var(--ax-space-6); border-width: 3px; background: var(--ax-color-surface); box-shadow: 0 0 0 2px currentColor, var(--ax-shadow-card); }
+.ax-discrete-slider__stop.is-current { width: 28px; height: 28px; border-width: 3px; background: var(--ax-color-surface); box-shadow: 0 0 0 2px currentColor, var(--ax-shadow-card); transition: left var(--ax-duration-fast) var(--ax-ease-standard), transform var(--ax-duration-fast) var(--ax-ease-standard); }
+.ax-discrete-slider.is-dragging .ax-discrete-slider__stop.is-current { transform: translate(-50%, -50%) scale(1.08); }
+.ax-discrete-slider.is-dragging .ax-discrete-slider__stop.is-current.is-first { transform: translate(0, -50%) scale(1.08); }
+.ax-discrete-slider.is-dragging .ax-discrete-slider__stop.is-current.is-last { transform: translate(-100%, -50%) scale(1.08); }
 .ax-discrete-slider__labels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); color: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
 .ax-discrete-slider__labels span { text-align: center; }
 .ax-discrete-slider__labels span:first-child { text-align: left; }

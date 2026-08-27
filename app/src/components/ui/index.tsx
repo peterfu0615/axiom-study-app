@@ -8,13 +8,14 @@ import {
   type HTMLAttributes,
   type InputHTMLAttributes,
   type KeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type Ref,
   type TextareaHTMLAttributes,
 } from 'react'
 import type { AIErrorEnvelope } from '../../domain/aiError'
 import { Icon, type IconName } from '../Icon'
+import { discreteSliderIndexFromPointer } from './discreteSlider'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 export { ListboxSelect } from './ListboxSelect'
@@ -188,6 +189,7 @@ export function DiscreteSlider<T extends string>({
   options: Array<{ value: T; label: string }>
   value: T
 }) {
+  const [dragging, setDragging] = useState(false)
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value))
   const selectIndex = (index: number) => {
     const option = options[Math.max(0, Math.min(options.length - 1, index))]
@@ -204,11 +206,10 @@ export function DiscreteSlider<T extends string>({
       event.preventDefault(); selectIndex(options.length - 1)
     }
   }
-  const selectFromPointer = (event: ReactMouseEvent<HTMLButtonElement>) => {
+  const selectFromPointer = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (disabled || options.length < 2) return
     const bounds = event.currentTarget.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)))
-    selectIndex(Math.round(ratio * (options.length - 1)))
+    selectIndex(discreteSliderIndexFromPointer(event.clientX, bounds.left, bounds.width, options.length))
   }
   const progress = options.length > 1 ? selectedIndex / (options.length - 1) * 100 : 0
   return (
@@ -220,10 +221,29 @@ export function DiscreteSlider<T extends string>({
         aria-valuemin={0}
         aria-valuenow={selectedIndex}
         aria-valuetext={options[selectedIndex]?.label}
-        className="ax-discrete-slider"
+        className={`ax-discrete-slider${dragging ? ' is-dragging' : ''}`}
         disabled={disabled}
-        onClick={selectFromPointer}
         onKeyDown={onKeyDown}
+        onPointerCancel={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+          setDragging(false)
+        }}
+        onPointerDown={(event) => {
+          if (disabled) return
+          event.preventDefault()
+          event.currentTarget.setPointerCapture(event.pointerId)
+          setDragging(true)
+          selectFromPointer(event)
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) selectFromPointer(event)
+        }}
+        onPointerUp={(event) => {
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+          selectFromPointer(event)
+          event.currentTarget.releasePointerCapture(event.pointerId)
+          setDragging(false)
+        }}
         role="slider"
         type="button"
       >

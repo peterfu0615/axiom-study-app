@@ -71,8 +71,10 @@ describe('variant practice persistence pipeline', () => {
     expect(stableVariantFingerprint(left)).toBe(stableVariantFingerprint(right))
   })
 
-  it('lists every saved status with difficulty, variation level and provenance', async () => {
-    mockedInvoke.mockResolvedValueOnce([{ id: 'candidate-1', plan_id: 'plan-1', plan_status: 'verified',
+  it('lists only verified candidates with difficulty and variation level', async () => {
+    mockedInvoke.mockResolvedValueOnce({ rowsAffected: 0, lastInsertId: 0 })
+      .mockResolvedValueOnce({ rowsAffected: 0, lastInsertId: 0 })
+      .mockResolvedValueOnce([{ id: 'candidate-1', plan_id: 'plan-1', plan_status: 'verified',
       candidate_status: 'verified', target_difficulty: 'advanced', variation_level: 'rebuild',
       candidate_json: JSON.stringify({ subject: '数学', statementMarkdown: '新题', options: null, canonicalAnswer: '1', solutionJson: '{}', difficulty: 'advanced', targetTagIds: [], changes: [], diagramPolicy: 'none' }),
       verification_json: null, validation_errors_json: '[]', instance_fingerprint: 'fingerprint-1',
@@ -80,6 +82,9 @@ describe('variant practice persistence pipeline', () => {
     await expect(listProblemVariantCandidates('problem-1')).resolves.toMatchObject([
       { id: 'candidate-1', targetDifficulty: 'advanced', variationLevel: 'rebuild', instanceFingerprint: 'fingerprint-1' },
     ])
+    expect(mockedInvoke.mock.calls.at(-1)?.[1]).toMatchObject({
+      sql: expect.stringContaining("plan.status='verified' AND candidate.status='verified'"),
+    })
   })
 
   it('rejects an independently inconsistent answer and returns the original-question fallback', async () => {
