@@ -967,19 +967,77 @@ fn build_chat_completion_body(
     body
 }
 
+fn schema_allows_null(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    match object.get("type") {
+        Some(Value::String(kind)) if kind == "null" => return true,
+        Some(Value::Array(kinds)) if kinds.iter().any(|kind| kind.as_str() == Some("null")) => {
+            return true;
+        }
+        _ => {}
+    }
+    ["anyOf", "oneOf"].iter().any(|keyword| {
+        object
+            .get(*keyword)
+            .and_then(Value::as_array)
+            .is_some_and(|variants| variants.iter().any(schema_allows_null))
+    })
+}
+
+fn make_schema_nullable(schema: &mut Value) {
+    if schema_allows_null(schema) {
+        return;
+    }
+    if let Some(object) = schema.as_object_mut() {
+        match object.get_mut("type") {
+            Some(Value::String(kind)) => {
+                let kind = kind.clone();
+                object.insert(
+                    "type".to_string(),
+                    Value::Array(vec![Value::String(kind), Value::String("null".to_string())]),
+                );
+                return;
+            }
+            Some(Value::Array(kinds)) => {
+                kinds.push(Value::String("null".to_string()));
+                return;
+            }
+            _ => {}
+        }
+    }
+    let original = std::mem::take(schema);
+    *schema = json!({ "anyOf": [original, { "type": "null" }] });
+}
+
+/// Canonicalize an application JSON Schema into the strict subset required by
+/// OpenAI-compatible structured output gateways.  Application schemas remain
+/// the source of truth; optional properties are transported as required but
+/// nullable, which preserves their semantics while preventing a local
+/// contract failure before provider fallback can even begin.
 fn normalize_strict_schema_contract(schema: &mut Value, path: &str) -> Result<(), String> {
     if let Some(object) = schema.as_object_mut() {
-        if object.get("type").and_then(Value::as_str) == Some("object") {
-            if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+        let is_object = match object.get("type") {
+            Some(Value::String(kind)) => kind == "object",
+            Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some("object")),
+            _ => false,
+        };
+        if is_object {
+            if object.get("additionalProperties") == Some(&Value::Bool(true)) {
                 return Err(format!(
-                    "STRUCTURED_OUTPUT_CONTRACT_ERROR：{path} 必须声明 additionalProperties=false"
+                    "STRUCTURED_OUTPUT_CONTRACT_ERROR：{path} 不允许 additionalProperties=true"
                 ));
             }
+            object.insert("additionalProperties".to_string(), Value::Bool(false));
             let property_names = object
                 .get("properties")
                 .and_then(Value::as_object)
                 .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
+            if !object.contains_key("required") {
+                object.insert("required".to_string(), Value::Array(Vec::new()));
+            }
             let existing_required = object
                 .get("required")
                 .and_then(Value::as_array)
@@ -990,24 +1048,19 @@ fn normalize_strict_schema_contract(schema: &mut Value, path: &str) -> Result<()
                 .filter_map(Value::as_str)
                 .map(str::to_string)
                 .collect::<std::collections::HashSet<_>>();
-            let mut missing_nullable = Vec::new();
+            let mut missing_required = Vec::new();
             for name in property_names {
                 if existing_required.contains(&name) {
                     continue;
                 }
-                let nullable = object
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .and_then(|properties| properties.get(&name))
-                    .and_then(|property| property.get("type"))
-                    .and_then(Value::as_array)
-                    .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some("null")));
-                if !nullable {
-                    return Err(format!(
-                        "STRUCTURED_OUTPUT_CONTRACT_ERROR：{path}.{name} 未列入 required 且不允许 null"
-                    ));
+                if let Some(property) = object
+                    .get_mut("properties")
+                    .and_then(Value::as_object_mut)
+                    .and_then(|properties| properties.get_mut(&name))
+                {
+                    make_schema_nullable(property);
                 }
-                missing_nullable.push(Value::String(name));
+                missing_required.push(Value::String(name));
             }
             let required = object
                 .get_mut("required")
@@ -1015,7 +1068,7 @@ fn normalize_strict_schema_contract(schema: &mut Value, path: &str) -> Result<()
                 .ok_or_else(|| {
                     format!("STRUCTURED_OUTPUT_CONTRACT_ERROR：{path}.required 必须是数组")
                 })?;
-            required.extend(missing_nullable);
+            required.extend(missing_required);
         }
         for (key, child) in object.iter_mut() {
             normalize_strict_schema_contract(child, &format!("{path}.{key}"))?;
@@ -1532,9 +1585,6 @@ fn analyze_problem_with_antigravity_cli_blocking(
         requested_paths.insert(0, crop_image_path);
     }
     requested_paths.retain(|path| !path.trim().is_empty());
-    if requested_paths.is_empty() {
-        return Err("至少需要一张题目图片".to_string());
-    }
     if requested_paths.len() > MAX_IMAGE_COUNT * 4 {
         return Err("单次 AI 请求包含过多重复图片路径".to_string());
     }
@@ -1569,8 +1619,11 @@ fn analyze_problem_with_antigravity_cli_blocking(
         .map(|path| format!("@{}", path.to_string_lossy()))
         .collect::<Vec<_>>()
         .join(" ");
-    let full_prompt =
-        format!("{prompt}\n\n请使用视觉能力直接读取并分析这些本地题目图片：{image_prompt}");
+    let full_prompt = if image_prompt.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{prompt}\n\n请使用视觉能力直接读取并分析这些本地题目图片：{image_prompt}")
+    };
 
     let mut command = Command::new(&command_path);
     command
@@ -1592,13 +1645,15 @@ fn analyze_problem_with_antigravity_cli_blocking(
     if captured.oversized {
         return Ok(json!({
             "rawOutput": String::from_utf8_lossy(&captured.stdout),
-            "errorMessage": "Antigravity CLI 输出或日志超过 2 MB，已终止"
+            "errorMessage": "Antigravity CLI 输出或日志超过 2 MB，已终止",
+            "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容过长", "模型返回内容超过安全限制，可以更换模型后重试。", false, true, None, "stage=cli_output_limit".to_string())
         }));
     }
     if captured.timed_out {
         return Ok(json!({
             "rawOutput": String::from_utf8_lossy(&captured.stdout),
-            "errorMessage": "Antigravity CLI 超过 120 秒，已终止"
+            "errorMessage": "Antigravity CLI 超过 120 秒，已终止",
+            "error": native_ai_error("TIMEOUT_ERROR", "AI 分析超时", "本地模型服务响应超时，可以重新尝试。", true, true, None, "stage=cli_timeout".to_string())
         }));
     }
     let status = captured
@@ -1623,7 +1678,8 @@ fn analyze_problem_with_antigravity_cli_blocking(
                 status.code().map_or_else(|| "未知".to_string(), |code| code.to_string()),
                 cli_error,
                 details_suffix
-            )
+            ),
+            "error": native_ai_error("PROVIDER_ERROR", "本地模型服务暂时不可用", "本地模型服务未能完成任务，将尝试其他可用模型。", true, true, None, format!("stage=cli_exit; exit={}", status.code().map_or_else(|| "unknown".to_string(), |code| code.to_string())))
         }));
     }
     let raw_output = match antigravity_response(&envelope_output) {
@@ -1631,7 +1687,8 @@ fn analyze_problem_with_antigravity_cli_blocking(
         Err(error) => {
             return Ok(json!({
                 "rawOutput": envelope_output,
-                "errorMessage": format!("无法解析 Antigravity CLI 输出：{error}")
+                "errorMessage": format!("无法解析 Antigravity CLI 输出：{error}"),
+                "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型返回内容无法解析", "本地模型服务没有返回可读取的结果，将尝试其他可用模型。", true, true, None, "stage=cli_envelope".to_string())
             }));
         }
     };
@@ -1648,13 +1705,15 @@ fn analyze_problem_with_antigravity_cli_blocking(
         };
         return Ok(json!({
             "rawOutput": "",
-            "errorMessage": format!("Antigravity CLI 未返回内容{diagnostic}")
+            "errorMessage": format!("Antigravity CLI 未返回内容{diagnostic}"),
+            "error": native_ai_error("MODEL_OUTPUT_ERROR", "模型未返回结果", "本地模型服务没有返回内容，将尝试其他可用模型。", true, true, None, "stage=cli_empty".to_string())
         }));
     }
     if is_vision_unsupported(&raw_output) {
         return Ok(json!({
             "rawOutput": raw_output,
-            "errorMessage": "当前 Antigravity 模型不支持图片输入，请选择视觉模型。"
+            "errorMessage": "当前 Antigravity 模型不支持图片输入，请选择视觉模型。",
+            "error": native_ai_error("MODEL_CAPABILITY_ERROR", "当前模型不支持此任务", "请选择支持图片输入的模型后重新运行。", false, true, None, "stage=cli_vision".to_string())
         }));
     }
     Ok(json!({
@@ -1776,7 +1835,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_nullable_optional_fields_and_rejects_unsafe_schema_contracts() {
+    fn canonicalizes_optional_fields_and_rejects_open_object_contracts() {
         let mut schema = serde_json::json!({
             "type": "object",
             "additionalProperties": false,
@@ -1792,16 +1851,31 @@ mod tests {
             .unwrap()
             .contains(&serde_json::json!("note")));
 
-        let mut unsafe_schema = serde_json::json!({
+        let mut incomplete_schema = serde_json::json!({
             "type": "object",
-            "additionalProperties": false,
             "required": [],
             "properties": { "invented": { "type": "string" } }
+        });
+        normalize_strict_schema_contract(&mut incomplete_schema, "$schema").unwrap();
+        assert_eq!(incomplete_schema["additionalProperties"], false);
+        assert_eq!(
+            incomplete_schema["properties"]["invented"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert_eq!(
+            incomplete_schema["required"],
+            serde_json::json!(["invented"])
+        );
+
+        let mut unsafe_schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {}
         });
         assert!(
             normalize_strict_schema_contract(&mut unsafe_schema, "$schema")
                 .unwrap_err()
-                .contains("STRUCTURED_OUTPUT_CONTRACT_ERROR")
+                .contains("additionalProperties=true")
         );
     }
 

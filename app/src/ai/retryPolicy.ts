@@ -43,3 +43,44 @@ export async function runWithAIBackoff<T>(options: {
   }
   throw new AIExecutionError(classifyAIError('AI retry policy exhausted', options.context))
 }
+
+export async function runWithAIProviderFallback<
+  TProvider extends { id: string; model: string },
+  TResult,
+>(options: {
+  providers: TProvider[]
+  runId: string
+  operation: (provider: TProvider) => Promise<TResult>
+  onFailure?: (
+    provider: TProvider,
+    error: unknown,
+    envelope: AIErrorEnvelope,
+    attemptNumber: number,
+  ) => Promise<void>
+  maxAttemptsPerProvider?: number
+  wait?: (milliseconds: number) => Promise<void>
+}): Promise<{ provider: TProvider; value: TResult }> {
+  let lastError: AIErrorEnvelope | null = null
+  for (const provider of options.providers) {
+    try {
+      const value = await runWithAIBackoff({
+        context: { providerId: provider.id, model: provider.model, runId: options.runId },
+        operation: () => options.operation(provider),
+        maxAttempts: options.maxAttemptsPerProvider,
+        wait: options.wait,
+        onFailure: async (error, envelope, attemptNumber) => {
+          lastError = envelope
+          await options.onFailure?.(provider, error, envelope, attemptNumber)
+        },
+      })
+      return { provider, value }
+    } catch (error) {
+      const envelope = error instanceof AIExecutionError
+        ? error.envelope
+        : classifyAIError(error, { providerId: provider.id, model: provider.model, runId: options.runId })
+      lastError = envelope
+      if (!envelope.fallbackAllowed) throw new AIExecutionError(envelope)
+    }
+  }
+  throw new AIExecutionError(lastError ?? classifyAIError('没有可用的模型服务', { runId: options.runId }))
+}

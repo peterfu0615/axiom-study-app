@@ -64,6 +64,7 @@ function buildProblemTextbookPromptSection(input: ProblemAnalysisInput) {
 import {
   SOLUTION_PROMPT,
   solutionAntigravityJSONSchema,
+  solutionJSONSchema,
 } from './solutionContract'
 import {
   parseSolution,
@@ -73,8 +74,11 @@ import {
   buildExplainSelectionPrompt,
   buildReasoningAnalysisPrompt,
   buildStudentAttemptPrompt,
+  explainSelectionJSONSchema,
   explainSelectionAntigravityJSONSchema,
+  reasoningAnalysisJSONSchema,
   reasoningAnalysisAntigravityJSONSchema,
+  studentAttemptJSONSchema,
   studentAttemptAntigravityJSONSchema,
 } from './intelligenceContract'
 import {
@@ -90,6 +94,7 @@ import {
 import {
   buildTextbookRecognitionPrompt,
   textbookRecognitionAntigravityJSONSchema,
+  textbookRecognitionJSONSchema,
 } from './textbookRecognitionContract'
 import {
   parseTextbookRecognition,
@@ -557,44 +562,22 @@ export class OpenAICompatibleProvider implements AIProvider {
   ): Promise<StudentAttemptProviderResult> {
     if (!this.supportsVision) throw new Error(VISION_MODEL_REQUIRED)
     if (!input.answerImagePaths.length) throw new Error('未提供用户作答区域')
-    const { baseUrl, model } = this.profile
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       cropImagePath: input.answerImagePaths[0],
       imagePaths: input.answerImagePaths,
       prompt: buildStudentAttemptPrompt(input),
-      jsonSchema: JSON.stringify(studentAttemptAntigravityJSONSchema),
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseStudentAttempt(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof IntelligenceParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+      jsonSchema: JSON.stringify(studentAttemptJSONSchema),
+    }, parseStudentAttempt)
+    return { ...result.value, rawOutput: result.rawOutput, repairStrategy: result.repairStrategy, usage: result.usage }
   }
 
   async gradeSubjectivePractice(input: SubjectivePracticeGradingInput): Promise<SubjectivePracticeGradingProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl: this.profile.baseUrl, model: this.profile.model, providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       prompt: buildSubjectivePracticeGradingPrompt(input),
       jsonSchema: JSON.stringify(subjectivePracticeGradingJSONSchema),
-    })
-    if (response.errorMessage || response.error) throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput)
-    return { grading: parseSubjectivePracticeGrading(response.rawOutput, input), rawOutput: response.rawOutput }
+    }, (rawOutput) => parseSubjectivePracticeGrading(rawOutput, input))
+    return { grading: result.value, rawOutput: result.rawOutput }
   }
 
   async generatePracticeVariant(input: PracticeVariantGenerationInput): Promise<PracticeVariantGenerationProviderResult> {
@@ -623,37 +606,17 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<ReasoningProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
     // 文本任务：仅当 Provider 支持视觉时附带题目图片，纯 LLM 只发文本
     const imagePaths = this.supportsVision && input.cropImagePath
       ? [input.cropImagePath]
       : []
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       imagePaths,
       prompt: buildReasoningAnalysisPrompt(input),
-      jsonSchema: JSON.stringify(reasoningAnalysisAntigravityJSONSchema),
+      jsonSchema: JSON.stringify(reasoningAnalysisJSONSchema),
       onChunk,
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseReasoningAnalysis(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof IntelligenceParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+    }, parseReasoningAnalysis)
+    return { ...result.value, rawOutput: result.rawOutput, repairStrategy: result.repairStrategy, usage: result.usage }
   }
 
   async explainSelection(
@@ -661,36 +624,16 @@ export class OpenAICompatibleProvider implements AIProvider {
     onChunk?: StreamCallback,
   ): Promise<ExplainProviderResult> {
     if (!this.supportsText) throw new Error(TEXT_MODEL_REQUIRED)
-    const { baseUrl, model } = this.profile
     const imagePaths = this.supportsVision && input.cropImagePath
       ? [input.cropImagePath]
       : []
-    const response = await analyzeProblemWithOpenAICompatible({
-      baseUrl,
-      model,
-      providerId: this.profile.id,
+    const result = await executeOpenAIContract(this.profile, {
       imagePaths,
       prompt: buildExplainSelectionPrompt(input),
-      jsonSchema: JSON.stringify(explainSelectionAntigravityJSONSchema),
+      jsonSchema: JSON.stringify(explainSelectionJSONSchema),
       onChunk,
-    })
-    if (response.errorMessage || response.error) {
-      throw new AIProviderFailure(response.error ?? response.errorMessage!, response.rawOutput, null, response.usage ?? null)
-    }
-    try {
-      const parsed = parseExplainSelection(response.rawOutput)
-      return { ...parsed, rawOutput: response.rawOutput, usage: response.usage }
-    } catch (error) {
-      if (error instanceof IntelligenceParseError) {
-        throw new AIProviderFailure(
-          error.message,
-          response.rawOutput,
-          error.repairStrategy,
-          response.usage ?? null,
-        )
-      }
-      throw error
-    }
+    }, parseExplainSelection)
+    return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 
   async generateSolution(
@@ -712,7 +655,7 @@ ${JSON.stringify(structuredProblem)}
     const result = await executeOpenAIContract(this.profile, {
       imagePaths,
       prompt,
-      jsonSchema: JSON.stringify(solutionAntigravityJSONSchema),
+      jsonSchema: JSON.stringify(solutionJSONSchema),
       onChunk,
     }, parseSolution)
     return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
@@ -726,7 +669,7 @@ ${JSON.stringify(structuredProblem)}
     const result = await executeOpenAIContract(this.profile, {
       prompt,
       userText: `教材文件：${input.sourceName}；共 ${input.pageCount} 页。`,
-      jsonSchema: JSON.stringify(textbookRecognitionAntigravityJSONSchema),
+      jsonSchema: JSON.stringify(textbookRecognitionJSONSchema),
     }, parseTextbookRecognition)
     return { recognition: result.value, rawOutput: result.rawOutput, repairStrategy: result.repairStrategy }
   }
@@ -1161,15 +1104,19 @@ export function getSolutionProvider() {
 }
 
 export function getTextbookRecognitionProvider() {
-  const provider = activeProviders.find(
+  const provider = getTextbookRecognitionProviders()[0]
+  if (!provider) throw new Error(TEXT_MODEL_REQUIRED)
+  return provider
+}
+
+export function getTextbookRecognitionProviders() {
+  return activeProviders.filter(
     (candidate): candidate is AIProvider & {
       recognizeTextbook: NonNullable<AIProvider['recognizeTextbook']>
     } => candidate.supportsText
       && providerSupportsTask(candidate, 'textbook_recognition')
       && typeof candidate.recognizeTextbook === 'function',
   )
-  if (!provider) throw new Error(TEXT_MODEL_REQUIRED)
-  return provider
 }
 
 export function getCurriculumAnalysisProvider(
@@ -1177,16 +1124,22 @@ export function getCurriculumAnalysisProvider(
   model?: string,
   taskType: 'curriculum_analysis' | 'tag_mapping' = 'curriculum_analysis',
 ) {
-  const providers = activeProviders.filter(
+  const providers = getCurriculumAnalysisProviders(taskType)
+  if (!providers.length) throw new Error(TEXT_MODEL_REQUIRED)
+  if (!providerId || !model) return providers[0]
+  return orderMatchingProviders(providers, providerId, model)[0]
+}
+
+export function getCurriculumAnalysisProviders(
+  taskType: 'curriculum_analysis' | 'tag_mapping' = 'curriculum_analysis',
+) {
+  return activeProviders.filter(
     (candidate): candidate is AIProvider & {
       analyzeCurriculumStage: NonNullable<AIProvider['analyzeCurriculumStage']>
     } => candidate.supportsText
       && providerSupportsTask(candidate, taskType)
       && typeof candidate.analyzeCurriculumStage === 'function',
   )
-  if (!providers.length) throw new Error(TEXT_MODEL_REQUIRED)
-  if (!providerId || !model) return providers[0]
-  return orderMatchingProviders(providers, providerId, model)[0]
 }
 
 function orderMatchingProviders<T extends AIProvider>(

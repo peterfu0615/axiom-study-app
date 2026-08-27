@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "title",
     "subject",
@@ -28,6 +29,7 @@
   "$defs": {
     "field": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["value", "evidence"],
       "properties": {
         "value": { "type": ["string", "null"] },
@@ -36,6 +38,7 @@
     },
     "chapter": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["title", "page_start", "page_end", "knowledge_points"],
       "properties": {
         "title": { "type": "string", "minLength": 1 },
@@ -50,6 +53,7 @@
     },
     "knowledge_point": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["name", "page_numbers", "evidence"],
       "properties": {
         "name": { "type": "string", "minLength": 1 },

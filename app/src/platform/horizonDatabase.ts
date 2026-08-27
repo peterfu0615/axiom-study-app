@@ -20,8 +20,11 @@ import {
 import {
   AIProviderFailure,
   getTextbookRecognitionProvider,
+  getTextbookRecognitionProviders,
   getCurriculumAnalysisProvider,
+  getCurriculumAnalysisProviders,
 } from '../ai/provider'
+import { runWithAIProviderFallback } from '../ai/retryPolicy'
 import {
   classifyAIError,
   isAIErrorEnvelope,
@@ -1177,8 +1180,13 @@ async function runStructureStage(
       outline: initial.extraction?.outline ?? [],
       pages: initial.extraction?.pages ?? [],
     }
-    const provider = getTextbookRecognitionProvider()
-    const result = await provider.recognizeTextbook(recognitionInput)
+    const providers = getTextbookRecognitionProviders()
+    if (!providers.length) throw new Error('没有可用的模型服务，请在设置中启用至少一个文字模型。')
+    const { value: result } = await runWithAIProviderFallback({
+      providers,
+      runId: lease.attemptId,
+      operation: (provider) => provider.recognizeTextbook(recognitionInput),
+    })
     const recognition = inferMissingTextbookRecognition(result.recognition, recognitionInput)
     if (!recognition.subject.value) {
       throw new Error('AI 未能识别教材科目，请在重试前检查 PDF 文字提取结果。')
@@ -1219,11 +1227,16 @@ async function runTagStage(
     const subject = job.recognition.subject.value?.trim()
     if (!subject) throw new Error('请先识别并确认教材科目')
     const existing = await listTagDefinitions(subject)
-    const provider = getCurriculumAnalysisProvider(
+    const primaryProvider = getCurriculumAnalysisProvider(
       job.provider ?? undefined,
       job.model ?? undefined,
       'tag_mapping',
     )
+    const providers = [
+      primaryProvider,
+      ...getCurriculumAnalysisProviders('tag_mapping')
+        .filter((provider) => provider.id !== primaryProvider.id || provider.model !== primaryProvider.model),
+    ]
     const existingTags = existing.map((tag) => ({
       id: tag.id, tagType: tag.tagType, canonicalName: tag.canonicalName, aliases: tag.aliases,
     }))
@@ -1235,11 +1248,14 @@ async function runTagStage(
     const results = []
     const parsedChunks = []
     for (const [index, pages] of chunks.entries()) {
-      const result = await provider.analyzeCurriculumStage({
-        prompt: buildCurriculumTagPrompt({
-          recognition: job.recognition, outline: job.structure, pages, existingTags,
-        }),
+      const request = {
+        prompt: buildCurriculumTagPrompt({ recognition: job.recognition, outline: job.structure, pages, existingTags }),
         jsonSchema: curriculumTagsJSONSchema,
+      }
+      const { value: result } = await runWithAIProviderFallback({
+        providers,
+        runId: `${lease.attemptId}:chunk:${index + 1}`,
+        operation: (provider) => provider.analyzeCurriculumStage(request),
       })
       results.push(result)
       parsedChunks.push(parseCurriculumTags(result.rawOutput, subject))
@@ -1294,13 +1310,23 @@ async function runAuditStage(
     const tags = job.tags as CurriculumTagAnalysis | null
     const subject = job.recognition?.subject.value?.trim()
     if (!tags || !subject) throw new Error('标签生成阶段结果不完整')
-    const provider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
-    const result = await provider.analyzeCurriculumStage({
+    const primaryProvider = getCurriculumAnalysisProvider(job.provider ?? undefined, job.model ?? undefined)
+    const providers = [
+      primaryProvider,
+      ...getCurriculumAnalysisProviders()
+        .filter((provider) => provider.id !== primaryProvider.id || provider.model !== primaryProvider.model),
+    ]
+    const request = {
       prompt: buildCurriculumAuditPrompt({
         subject, candidates: tags.candidates,
         knowledgeNames: tags.candidates.filter((tag) => tag.tagType === 'knowledge').map((tag) => tag.canonicalName),
       }),
       jsonSchema: curriculumAuditJSONSchema,
+    }
+    const { value: result } = await runWithAIProviderFallback({
+      providers,
+      runId: lease.attemptId,
+      operation: (provider) => provider.analyzeCurriculumStage(request),
     })
     const audit = parseCurriculumAudit(result.rawOutput)
     const applied = await completeCurriculumImportAttempt({

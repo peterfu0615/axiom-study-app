@@ -81,12 +81,12 @@ export function chunkTextbookPages(
 }
 
 export const curriculumTagsJSONSchema = {
-  type: 'object', required: ['subject', 'tags', 'warnings'],
+  type: 'object', additionalProperties: false, required: ['subject', 'tags', 'warnings'],
   properties: {
     subject: { type: 'string' },
-    tags: { type: 'array', maxItems: 320, items: { type: 'object', required: [
+    tags: { type: 'array', maxItems: 320, items: { type: 'object', additionalProperties: false, required: [
       'tag_type', 'canonical_name', 'aliases', 'description', 'origin',
-      'knowledge_names', 'page_numbers', 'evidence_text',
+      'knowledge_names', 'chapter_name', 'page_numbers', 'evidence_text',
     ], properties: {
       tag_type: { type: 'string', enum: ['knowledge', 'method', 'model'] },
       canonical_name: { type: 'string' }, aliases: { type: 'array', items: { type: 'string' } },
@@ -101,7 +101,7 @@ export const curriculumTagsJSONSchema = {
 } as const
 
 export const curriculumAuditJSONSchema = {
-  type: 'object', required: ['accepted_names', 'rejected_names', 'warnings'],
+  type: 'object', additionalProperties: false, required: ['accepted_names', 'rejected_names', 'warnings'],
   properties: {
     accepted_names: { type: 'array', items: { type: 'string' } },
     rejected_names: { type: 'array', items: { type: 'string' } },

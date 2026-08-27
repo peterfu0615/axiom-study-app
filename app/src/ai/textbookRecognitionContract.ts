@@ -6,6 +6,7 @@ export const textbookRecognitionJSONSchema = textbookRecognitionSchema
 
 const textbookChapterSchema = {
   type: 'object',
+  additionalProperties: false,
   required: ['title', 'page_start', 'page_end', 'knowledge_points'],
   properties: {
     title: { type: 'string', minLength: 1 },
@@ -13,7 +14,7 @@ const textbookChapterSchema = {
     page_end: { type: ['integer', 'null'], minimum: 1 },
     knowledge_points: {
       type: 'array', maxItems: 180, items: {
-        type: 'object', required: ['name', 'page_numbers', 'evidence'], properties: {
+        type: 'object', additionalProperties: false, required: ['name', 'page_numbers', 'evidence'], properties: {
           name: { type: 'string', minLength: 1 },
           page_numbers: { type: 'array', items: { type: 'integer', minimum: 1 } },
           evidence: { type: 'string' },
@@ -26,6 +27,7 @@ const textbookChapterSchema = {
 
 export const textbookRecognitionAntigravityJSONSchema = {
   type: 'object',
+  additionalProperties: false,
   required: [
     'title', 'subject', 'grade', 'volume', 'publisher', 'edition',
     'chapters', 'warnings',
@@ -38,32 +40,32 @@ export const textbookRecognitionAntigravityJSONSchema = {
     // OpenAI-compatible gateways do not resolve `$ref` or `$defs` in a
     // response_format schema.
     title: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },
     subject: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },
     grade: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },
     volume: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },
     publisher: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },
     edition: {
-      type: 'object', required: ['value', 'evidence'], properties: {
+      type: 'object', additionalProperties: false, required: ['value', 'evidence'], properties: {
         value: { type: ['string', 'null'] }, evidence: { type: 'string' },
       },
     },

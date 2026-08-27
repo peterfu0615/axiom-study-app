@@ -110,6 +110,14 @@ export function isAIErrorEnvelope(value: unknown): value is AIErrorEnvelope {
 export function classifyAIError(error: unknown, context: ErrorContext = {}): AIErrorEnvelope {
   if (isAIErrorEnvelope(error)) return { ...error, ...context }
   if (error instanceof AIExecutionError) return { ...error.envelope, ...context }
+  // Provider adapters deliberately wrap the safe native envelope together
+  // with raw output and repair metadata.  Preserve that envelope instead of
+  // reclassifying the wrapper's user-facing message as a generic provider
+  // failure.  Keep this structural to avoid a domain -> provider import cycle.
+  if (error && typeof error === 'object' && 'error' in error) {
+    const carried = (error as { error?: unknown }).error
+    if (isAIErrorEnvelope(carried)) return { ...carried, ...context }
+  }
   const message = error instanceof Error ? error.message : String(error)
   const lower = message.toLocaleLowerCase('en-US')
   let code: AIErrorCode = 'PROVIDER_ERROR'

@@ -70,6 +70,51 @@ function optionalPage(value: unknown) {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null
 }
 
+function sanitizeForSchema(value: Record<string, unknown>) {
+  const result: Record<string, unknown> = {}
+  const metadata = ['title', 'subject', 'grade', 'volume', 'publisher', 'edition'] as const
+  for (const key of metadata) {
+    if (!Object.hasOwn(value, key)) continue
+    const raw = value[key]
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      result[key] = raw
+      continue
+    }
+    const source = raw as Record<string, unknown>
+    result[key] = {
+      ...(Object.hasOwn(source, 'value') ? { value: source.value } : {}),
+      ...(Object.hasOwn(source, 'evidence') ? { evidence: source.evidence } : {}),
+    }
+  }
+  if (Object.hasOwn(value, 'chapters')) {
+    result.chapters = Array.isArray(value.chapters) ? value.chapters.map((rawChapter) => {
+      if (!rawChapter || typeof rawChapter !== 'object' || Array.isArray(rawChapter)) return rawChapter
+      const chapter = rawChapter as Record<string, unknown>
+      return {
+        ...(Object.hasOwn(chapter, 'title') ? { title: chapter.title } : {}),
+        ...(Object.hasOwn(chapter, 'page_start') ? { page_start: chapter.page_start } : {}),
+        ...(Object.hasOwn(chapter, 'page_end') ? { page_end: chapter.page_end } : {}),
+        ...(Object.hasOwn(chapter, 'knowledge_points') ? {
+          knowledge_points: Array.isArray(chapter.knowledge_points)
+            ? chapter.knowledge_points.map((rawPoint) => {
+                if (!rawPoint || typeof rawPoint !== 'object' || Array.isArray(rawPoint)) return rawPoint
+                const point = rawPoint as Record<string, unknown>
+                return {
+                  ...(Object.hasOwn(point, 'name') ? { name: point.name } : {}),
+                  ...(Object.hasOwn(point, 'page_numbers') ? { page_numbers: point.page_numbers } : {}),
+                  ...(Object.hasOwn(point, 'evidence') ? { evidence: point.evidence } : {}),
+                  ...(Object.hasOwn(point, 'chapter_name') ? { chapter_name: point.chapter_name } : {}),
+                }
+              })
+            : chapter.knowledge_points,
+        } : {}),
+      }
+    }) : value.chapters
+  }
+  if (Object.hasOwn(value, 'warnings')) result.warnings = value.warnings
+  return result
+}
+
 function knowledgePoint(value: unknown): TextbookKnowledgePointRecognition | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
@@ -245,12 +290,12 @@ export function parseTextbookRecognition(rawOutput: string): TextbookRecognition
   // Enforce the same schema the provider was asked to follow. Invalid output
   // must surface as an explicit parse failure (entering the retry path)
   // instead of being silently degraded into dirty checkpoint data.
-  if (!validateTextbookRecognition(parsed)) {
+  const value = sanitizeForSchema(parsed as Record<string, unknown>)
+  if (!validateTextbookRecognition(value)) {
     throw new TextbookRecognitionParseError(
       `教材识别 JSON 不符合 Schema：${schemaErrorMessage(validateTextbookRecognition.errors)}`,
     )
   }
-  const value = parsed as Record<string, unknown>
   return {
     title: field(value.title),
     subject: field(value.subject),
