@@ -27,8 +27,7 @@ import {
 } from '../../platform/database'
 import { runProblemAIWorker } from '../../ai/pipeline'
 import { processDocument } from '../../platform/native'
-import { getProblemUnderstandingUploadDisclosure } from '../../ai/provider'
-import { Button, Dialog, SegmentedControl } from '../../components/ui'
+import { SegmentedControl } from '../../components/ui'
 
 type EnhancementMode = 'color' | 'grayscale'
 type PreviewMode = 'corrected' | 'original'
@@ -98,7 +97,6 @@ export function DocumentEditor({
   >({})
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
-  const [uploadConfirmationOpen, setUploadConfirmationOpen] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [pageDetected, setPageDetected] = useState<boolean | null>(null)
   const [durationMs, setDurationMs] = useState<number | null>(null)
@@ -476,9 +474,8 @@ export function DocumentEditor({
     setDeleteArmed(false)
   }
 
-  const saveBlocks = async (queueAI: boolean) => {
+  const saveBlocks = async () => {
     setSaving(true)
-    setUploadConfirmationOpen(false)
     dismiss()
     try {
       const problems = await saveProblems(
@@ -488,11 +485,11 @@ export function DocumentEditor({
         saveSelectedBlocks.map((block) => block.id),
         regionSelections,
         {
-          queueAI,
+          queueAI: true,
           redactions: [],
         },
       )
-      if (queueAI) void runProblemAIWorker()
+      void runProblemAIWorker()
       const savedIds = new Set(problems.map((problem) => problem.id))
       const remainingBlocks = blocks.filter(
         (block) => !savedIds.has(block.id),
@@ -526,9 +523,7 @@ export function DocumentEditor({
         return
       }
       notify(
-        queueAI
-          ? `保存成功：${problems.length} 道错题已写入本地错题库，正在发送题块到 Provider`
-          : `保存成功：${problems.length} 道错题仅保存在本地，可稍后从错题详情开始整理`,
+        `保存成功：${problems.length} 道错题已写入本地错题库，正在自动整理`,
         'success',
         // Close the loop of the capture→library flow: offer the next step
         // directly instead of leaving users to find the library themselves.
@@ -543,17 +538,11 @@ export function DocumentEditor({
     }
   }
 
-  const uploadDisclosure = getProblemUnderstandingUploadDisclosure()
   const requestSave = () => {
-    if (uploadDisclosure.sendsImagesExternally) {
-      setUploadConfirmationOpen(true)
-      return
-    }
-    void saveBlocks(true)
+    void saveBlocks()
   }
 
-  // Cmd/Ctrl+S mirrors the primary save button; the external-upload
-  // disclosure dialog still applies.
+  // Cmd/Ctrl+S mirrors the primary save button without an interrupting modal.
   const canSave =
     !saving && !processing && Boolean(correctedPath) && saveSelectedBlocks.length > 0
   useEffect(() => {
@@ -836,35 +825,6 @@ export function DocumentEditor({
           )}
         </aside>
       </section>
-
-      <Dialog
-        onClose={() => setUploadConfirmationOpen(false)}
-        open={uploadConfirmationOpen}
-        title="确认发送题目图片"
-      >
-        <div className="image-upload-confirmation">
-          <p>
-            Axiom 将只发送所选题块和作答/图形区域到 Provider
-            <strong>{uploadDisclosure.providerId}</strong>（模型 {uploadDisclosure.model}），
-            不会发送完整原始页面。
-          </p>
-          <p>
-            已添加的姓名、学校、考号遮挡会先写入导出题块的实际像素，再交给 Provider。
-          </p>
-          <div className="image-upload-confirmation__actions">
-            <Button disabled={saving} onClick={() => void saveBlocks(false)}>
-              仅保存本地
-            </Button>
-            <Button
-              disabled={saving}
-              onClick={() => void saveBlocks(true)}
-              variant="primary"
-            >
-              保存并发送
-            </Button>
-          </div>
-        </div>
-      </Dialog>
 
       <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
     </main>
