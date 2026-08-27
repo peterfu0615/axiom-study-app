@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { GEOMETRY_SCENE_PROMPT_VERSION, GEOMETRY_SCENE_SCHEMA_VERSION } from '../ai/geometrySceneContract'
 import { AIProviderFailure, getGeometrySceneProviders } from '../ai/provider'
 import { runWithAIBackoff } from '../ai/retryPolicy'
-import { AIExecutionError, classifyAIError, publicAIErrorMessage } from '../domain/aiError'
+import { AIExecutionError, classifyAIError, createAIError, publicAIErrorMessage } from '../domain/aiError'
 import type { GeometrySceneInput, PersistedGeometryScene } from '../domain/geometryScene'
 import { compileGeometrySceneToTikz } from '../domain/geometryTikz'
 import { CURRENT_TIKZ_RENDERER_VERSION } from '../domain/diagram'
@@ -161,16 +161,38 @@ async function processGeometryRun(run: GeometryRunRow) {
             error instanceof AIProviderFailure ? error.usage : null,
           ),
         })
+        if (!result.valid) {
+          const rejected = new AIProviderFailure(createAIError('SCHEMA_VALIDATION_ERROR', {
+            providerId, model, runId: run.id,
+            detailSafe: `geometry_scene=${result.errors.join('; ')}`,
+          }), result.rawOutput, 'geometry-scene-validation')
+          await recordProcessingModelRunOutput(
+            { id: run.id, provider: providerId, model }, result.rawOutput,
+            rejected.repairStrategy, rejected.error, result.usage ?? null,
+          )
+          lastError = rejected
+          continue
+        }
+        const compiled = compileGeometrySceneToTikz(result.scene)
+        const diagram = await createTikzDiagram({
+          ownerType: 'problem', ownerId: input.problemId, ...compiled,
+          sourceModelRunId: run.id, inputHash: stableGeometryHash(input),
+        })
+        if (diagram.renderStatus !== 'rendered' || diagram.validationStatus !== 'validated') {
+          const rejected = new AIProviderFailure(createAIError('MODEL_OUTPUT_ERROR', {
+            providerId, model, runId: run.id,
+            detailSafe: `diagram=${diagram.validationErrors.join('; ') || diagram.renderErrorCode || 'render_failed'}`,
+          }), result.rawOutput, 'geometry-render-validation')
+          await recordProcessingModelRunOutput(
+            { id: run.id, provider: providerId, model }, result.rawOutput,
+            rejected.repairStrategy, rejected.error, result.usage ?? null,
+          )
+          lastError = rejected
+          continue
+        }
         await recordProcessingModelRunOutput(
           { id: run.id, provider: providerId, model }, result.rawOutput, null, null, result.usage ?? null,
         )
-        if (result.valid) {
-          const compiled = compileGeometrySceneToTikz(result.scene)
-          await createTikzDiagram({
-            ownerType: 'problem', ownerId: input.problemId, ...compiled,
-            sourceModelRunId: run.id, inputHash: stableGeometryHash(input),
-          })
-        }
         const now = Date.now()
         const id = crypto.randomUUID()
         await withTransactionLock(async () => {

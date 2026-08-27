@@ -691,7 +691,11 @@ ${JSON.stringify(structuredProblem)}
       cropImagePath: input.imagePath,
       prompt: buildGeometryScenePrompt(input),
       jsonSchema: JSON.stringify(geometrySceneJSONSchema),
-    }, parseGeometryScene)
+    }, (rawOutput) => {
+      const parsed = parseGeometryScene(rawOutput)
+      if (!parsed.valid) throw new Error(`几何场景引用或约束无效：${parsed.errors.join('；')}`)
+      return parsed
+    })
     return { ...result.value, rawOutput: result.rawOutput, usage: result.usage }
   }
 

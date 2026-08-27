@@ -1,7 +1,8 @@
 .diagram-view { display: grid; gap: var(--ax-space-3); width: fit-content; max-width: 100%; margin: 0; }
 .diagram-view img { display: block; width: auto; max-width: 100%; max-height: 440px; padding: var(--ax-space-4); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-md); background: var(--ax-document-paper); object-fit: contain; }
 .diagram-view--tikz { width: 100%; }
-.diagram-view--tikz img { width: 100%; min-height: 180px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.diagram-view--tikz img { width: 100%; height: clamp(220px, 32vw, 360px); min-height: 220px; padding: 0; border: 0; border-radius: 0; background: transparent; object-fit: contain; }
+:root[data-theme='dark'] .diagram-view--tikz img { filter: invert(.92) hue-rotate(180deg); }
 .diagram-view--interactive { cursor: zoom-in; border-radius: var(--ax-radius-md); }
 .diagram-view--interactive:focus-visible { outline: 2px solid var(--ax-focus-ring); outline-offset: 4px; }
 .diagram-view figcaption { color: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }

@@ -146,9 +146,9 @@ export async function getPreferredDiagram(ownerType: DiagramOwnerType, ownerId: 
      WHERE owner_type=$1 AND owner_id=$2
        AND render_status='rendered' AND validation_status='validated'
        AND freshness_status='fresh'
-       AND renderer_version=$3
        AND rendered_asset_path IS NOT NULL
-     ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1`,
+     ORDER BY CASE WHEN renderer_version=$3 THEN 0 ELSE 1 END,
+       updated_at DESC, created_at DESC, id DESC LIMIT 1`,
     [ownerType, ownerId, CURRENT_TIKZ_RENDERER_VERSION],
   ))[0]
   return row ? fromRow(row) : null
