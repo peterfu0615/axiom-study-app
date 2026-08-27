@@ -1,6 +1,6 @@
 .geometry-scene-view {
   display: grid;
-  gap: 8px;
+  gap: var(--ax-space-4);
   margin: 0;
 }
 
@@ -8,7 +8,7 @@
   width: 100%;
   aspect-ratio: 1;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--ax-radius-md);
   background: var(--surface);
   color: var(--ink);
 }
@@ -28,11 +28,12 @@
 
 .geometry-scene-view text {
   fill: currentColor;
-  font-size: 18px;
+  font-size: var(--ax-type-section-size);
   font-weight: 650;
 }
 
 .geometry-scene-view figcaption {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--ax-type-meta-size);
+  line-height: var(--ax-type-meta-line);
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
 import { Icon } from '../../components/Icon'
-import { Badge, Button, Dialog, IconButton, ListboxSelect, StatusBadge } from '../../components/ui'
+import { Badge, Button, Dialog, IconButton, Input, ListboxSelect, StatusBadge } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import {
   type ProblemTag,
@@ -199,7 +199,7 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
         <p>选择一个已有的{picker ? labels[picker.type] : '标签'}。</p>
         <ListboxSelect label="选择标签" onValueChange={setSelectedDefinitionId} options={[{ value: '', label: '请选择' }, ...pickerOptions.map((item) => ({ value: item.id, label: item.canonicalName }))]} value={selectedDefinitionId} />
         {!pickerOptions.length && <p className="problem-tag-picker__empty">{emptyPickerMessage}</p>}
-        {picker && picker.type !== 'knowledge' && <label><span>或创建新的{labels[picker.type]}</span><input onChange={(event) => setNewTagName(event.target.value)} placeholder={`输入${labels[picker.type]}名称`} value={newTagName} /></label>}
+        {picker && picker.type !== 'knowledge' && <Input label={`或创建新的${labels[picker.type]}`} onChange={(event) => setNewTagName(event.target.value)} placeholder={`输入${labels[picker.type]}名称`} value={newTagName} />}
         <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button>{newTagName.trim() && picker?.type !== 'knowledge' ? <Button onClick={() => void createAndApplyTag()} variant="primary">创建并使用</Button> : <Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button>}</div>
       </div>
     </Dialog>

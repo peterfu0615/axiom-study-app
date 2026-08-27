@@ -1,4 +1,5 @@
 import {
+  createElement,
   useEffect,
   useId,
   useRef,
@@ -331,6 +332,47 @@ export function Badge({ children }: { children: ReactNode }) {
   return <span className="ax-badge">{children}</span>
 }
 
+export type TextRole = 'eyebrow' | 'body' | 'secondary' | 'label' | 'meta' | 'caption'
+export type HeadingRole = 'page' | 'section' | 'card'
+
+export function Text({
+  as = 'p',
+  children,
+  className = '',
+  reading = false,
+  role = 'body',
+  tone = 'primary',
+  ...props
+}: HTMLAttributes<HTMLElement> & {
+  as?: 'p' | 'span' | 'small' | 'strong' | 'div'
+  reading?: boolean
+  role?: TextRole
+  tone?: 'primary' | 'secondary' | 'tertiary' | 'danger'
+}) {
+  return createElement(as, {
+    ...props,
+    className: `ax-text ax-text--${role} ax-text-tone--${tone}${reading ? ' ax-text--reading' : ''} ${className}`.trim(),
+  }, children)
+}
+
+export function Heading({
+  as = 'h2',
+  children,
+  className = '',
+  reading = false,
+  role = 'section',
+  ...props
+}: HTMLAttributes<HTMLHeadingElement> & {
+  as?: 'h1' | 'h2' | 'h3' | 'h4'
+  reading?: boolean
+  role?: HeadingRole
+}) {
+  return createElement(as, {
+    ...props,
+    className: `ax-heading ax-heading--${role}${reading ? ' ax-heading--reading' : ''} ${className}`.trim(),
+  }, children)
+}
+
 export function Input({
   label,
   hint,
@@ -339,7 +381,7 @@ export function Input({
   id,
   ...props
 }: InputHTMLAttributes<HTMLInputElement> & {
-  label?: string
+  label?: ReactNode
   hint?: string
   error?: string
 }) {
@@ -355,6 +397,36 @@ export function Input({
   )
 }
 
+export function SearchField({
+  className = '',
+  label,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
+  const generatedId = useId()
+  const fieldId = props.id ?? generatedId
+  return (
+    <label className={`ax-search-field ${className}`.trim()} htmlFor={fieldId}>
+      <span aria-hidden="true" className="ax-search-field__icon"><Icon name="search" size={16} /></span>
+      <span className="sr-only">{label}</span>
+      <input {...props} aria-label={props['aria-label'] ?? label} id={fieldId} type="search" />
+    </label>
+  )
+}
+
+export function Checkbox({
+  className = '',
+  label,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & { label: ReactNode }) {
+  return (
+    <label className={`ax-checkbox ${className}`.trim()}>
+      <input {...props} type="checkbox" />
+      <span aria-hidden="true" className="ax-checkbox__box"><Icon name="check" size={12} /></span>
+      <span className="ax-checkbox__label">{label}</span>
+    </label>
+  )
+}
+
 export function Textarea({
   label,
   hint,
@@ -363,7 +435,7 @@ export function Textarea({
   id,
   ...props
 }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  label?: string
+  label?: ReactNode
   hint?: string
   error?: string
 }) {
@@ -444,12 +516,6 @@ export function ErrorState({
       <div className="ax-error-state__copy">
         <strong>{error.title}</strong>
         <p>{error.userMessage}</p>
-        {error.detailSafe && (
-          <details>
-            <summary>详情</summary>
-            <code>{error.code} · {error.detailSafe}</code>
-          </details>
-        )}
       </div>
       {(onRetry || secondaryAction) && (
         <div className="ax-error-state__actions">
@@ -677,6 +743,20 @@ export function FileDropzone({
   )
 }
 
-export function Surface({ className = '', children, ...props }: HTMLAttributes<HTMLElement>) {
-  return <section {...props} className={`ax-surface ${className}`.trim()}>{children}</section>
+export function Surface({
+  as = 'section',
+  className = '',
+  children,
+  padding = 'none',
+  variant = 'default',
+  ...props
+}: HTMLAttributes<HTMLElement> & {
+  as?: 'section' | 'article' | 'div' | 'aside'
+  padding?: 'none' | 'compact' | 'standard' | 'spacious'
+  variant?: 'default' | 'raised' | 'inset'
+}) {
+  return createElement(as, {
+    ...props,
+    className: `ax-surface ax-surface--${variant} ax-surface--padding-${padding} ${className}`.trim(),
+  }, children)
 }

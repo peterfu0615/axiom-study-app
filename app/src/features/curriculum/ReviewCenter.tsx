@@ -6,6 +6,7 @@ import {
   IconButton,
   InlineNotice,
   ListboxSelect,
+  SearchField,
   StatusBadge,
   Tabs,
 } from '../../components/ui'
@@ -269,7 +270,7 @@ export function ReviewCenter({
 
       <div className="curriculum-review-center__body">
         <div className="curriculum-review-toolbar">
-          <label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或依据" value={query} /></label>
+          <SearchField className="curriculum-search" label="搜索审核项目" onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或依据" value={query} />
           <ListboxSelect ariaLabel="审核项目类型" onValueChange={(value) => setProjectFilter(value as ReviewProjectFilter)} options={projectFilters} value={projectFilter} />
           <ListboxSelect ariaLabel="审核状态" onValueChange={(value) => setStatusFilter(value as ReviewStatusFilter)} options={[{ value: 'pending', label: '待处理' }, { value: 'all', label: '全部状态' }, { value: 'rejected', label: '已驳回' }]} value={statusFilter} />
           <div className="curriculum-review-bulk-actions">

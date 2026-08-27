@@ -13,7 +13,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { ListboxSelect, Button, Dialog, PageHeader, Tabs } from '../../components/ui'
+import { Button, Checkbox, Dialog, IconButton, Input, ListboxSelect, PageHeader, Tabs } from '../../components/ui'
 import { registerUnsavedGuard, unregisterUnsavedGuard } from '../../platform/unsavedGuard'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
@@ -318,14 +318,14 @@ export function AISettings() {
               <aside className="provider-nav">
                 <div className="provider-nav-heading">
                   <strong>回退顺序</strong>
-                  <button
+                  <Button
                     className="secondary-action"
                     disabled={loading || saving}
                     onClick={addProvider}
-                    type="button"
+                    variant="ghost"
                   >
                     添加
-                  </button>
+                  </Button>
                 </div>
                 <div className="provider-nav-list">
                   {profiles.length ? (
@@ -358,32 +358,28 @@ export function AISettings() {
                           </span>
                         </span>
                         <span className="provider-nav-reorder" role="group" aria-label="调整顺序">
-                          <button
+                          <IconButton
                             className="provider-nav-arrow"
                             disabled={index === 0}
+                            label="上移"
                             onClick={(event) => {
                               event.stopPropagation()
                               moveBy(profile.id, -1)
                             }}
-                            title="上移（提高优先级）"
-                            type="button"
-                            aria-label="上移"
                           >
                             <Icon name="arrow-up" size={14} />
-                          </button>
-                          <button
+                          </IconButton>
+                          <IconButton
                             className="provider-nav-arrow"
                             disabled={index === profiles.length - 1}
+                            label="下移"
                             onClick={(event) => {
                               event.stopPropagation()
                               moveBy(profile.id, 1)
                             }}
-                            title="下移（降低优先级）"
-                            type="button"
-                            aria-label="下移"
                           >
                             <Icon name="arrow-down" size={14} />
-                          </button>
+                          </IconButton>
                         </span>
                       </div>
                     ))
@@ -409,38 +405,28 @@ export function AISettings() {
                         </p>
                       </div>
                       <div className="provider-detail-actions">
-                        {selectedProfile.provider === 'openai_compatible' && <button
+                        {selectedProfile.provider === 'openai_compatible' && <Button
                           className="secondary-action"
                           disabled={testingProviderId === selectedProfile.id || !selectedProfile.hasApiKey || isDirty}
+                          loading={testingProviderId === selectedProfile.id}
                           onClick={() => void testProvider(selectedProfile)}
                           title="测试 AI 服务"
-                          type="button"
                         >
                           {testingProviderId === selectedProfile.id ? '测试中…' : '测试'}
-                        </button>}
-                        <button
+                        </Button>}
+                        <Button
                           className="secondary-action"
                           onClick={() => setProviderRemoveConfirming(true)}
-                          type="button"
+                          variant="danger"
                         >
                           移除
-                        </button>
+                        </Button>
                       </div>
                     </header>
 
                     <div className="provider-detail-body">
                       <div className="settings-form">
-                        <label>
-                          <span>名称</span>
-                          <input
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                name: event.target.value,
-                              })
-                            }
-                            value={selectedProfile.name}
-                          />
-                        </label>
+                        <Input label="名称" onChange={(event) => update(selectedProfile.id, { name: event.target.value })} value={selectedProfile.name} />
                         <ListboxSelect
                           disabled={selectedProfile.provider === 'mock'}
                           label="服务类型"
@@ -454,70 +440,29 @@ export function AISettings() {
                         />
                         {selectedProfile.provider === 'openai_compatible' && (
                           <>
-                            <label className="provider-endpoint-field">
-                              <span>API 地址</span>
-                              <input
-                                onChange={(event) =>
-                                update(selectedProfile.id, {
-                                  baseUrl: event.target.value,
-                                })
-                              }
-                              placeholder="https://api.example.com/v1"
-                              value={selectedProfile.baseUrl}
-                              />
-                            </label>
-                            <label className="provider-full-url-option">
-                              <input
-                                checked={selectedProfile.endpointMode === 'full_endpoint'}
-                                onChange={(event) => update(selectedProfile.id, {
-                                  endpointMode: event.target.checked ? 'full_endpoint' : 'auto',
-                                })}
-                                type="checkbox"
-                              />
-                              <span>
+                            <Input className="provider-endpoint-field" label="API 地址" onChange={(event) => update(selectedProfile.id, { baseUrl: event.target.value })} placeholder="https://api.example.com/v1" value={selectedProfile.baseUrl} />
+                            <Checkbox
+                              checked={selectedProfile.endpointMode === 'full_endpoint'}
+                              className="provider-full-url-option"
+                              label={<span>
                                 <strong>完整 URL</strong>
                                 <small>已包含 /chat/completions</small>
-                              </span>
-                            </label>
+                              </span>}
+                              onChange={(event) => update(selectedProfile.id, {
+                                endpointMode: event.target.checked ? 'full_endpoint' : 'auto',
+                              })}
+                            />
                           </>
                         )}
                         {selectedProfile.provider === 'antigravity_cli' && (
-                          <label>
-                            <span>Antigravity CLI 路径</span>
-                            <input
-                              onChange={(event) =>
-                                update(selectedProfile.id, {
-                                  commandPath: event.target.value,
-                                })
-                              }
-                              placeholder="agy 或 /Users/you/.local/bin/agy"
-                              value={selectedProfile.commandPath}
-                            />
-                          </label>
+                          <Input label="Antigravity CLI 路径" onChange={(event) => update(selectedProfile.id, { commandPath: event.target.value })} placeholder="agy 或 /Users/you/.local/bin/agy" value={selectedProfile.commandPath} />
                         )}
-                        <label className="provider-model-field">
-                          <span>模型</span>
-                          <input
-                            disabled={selectedProfile.provider === 'mock'}
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                model: event.target.value,
-                              })
-                            }
-                            placeholder={
-                              selectedProfile.provider === 'antigravity_cli'
-                                ? '例如 gemini-3.6-flash-high'
-                                : '例如 qwen-vl-max'
-                            }
-                            value={selectedProfile.model}
-                          />
-                        </label>
+                        <Input className="provider-model-field" disabled={selectedProfile.provider === 'mock'} label="模型" onChange={(event) => update(selectedProfile.id, { model: event.target.value })} placeholder={selectedProfile.provider === 'antigravity_cli' ? '例如 gemini-3.6-flash-high' : '例如 qwen-vl-max'} value={selectedProfile.model} />
                         {selectedProfile.provider === 'openai_compatible' && (
                           <div className="provider-pricing-fields">
-                            <label>
-                              <span>输入价格 <small>USD / 百万 tokens</small></span>
-                              <input
+                            <Input
                                 inputMode="decimal"
+                                label={<>输入价格 <small>USD / 百万 tokens</small></>}
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   inputCostPerMillionUsd: event.target.value === ''
@@ -528,12 +473,10 @@ export function AISettings() {
                                 step="0.000001"
                                 type="number"
                                 value={selectedProfile.inputCostPerMillionUsd ?? ''}
-                              />
-                            </label>
-                            <label>
-                              <span>输出价格 <small>USD / 百万 tokens</small></span>
-                              <input
+                            />
+                            <Input
                                 inputMode="decimal"
+                                label={<>输出价格 <small>USD / 百万 tokens</small></>}
                                 min="0"
                                 onChange={(event) => update(selectedProfile.id, {
                                   outputCostPerMillionUsd: event.target.value === ''
@@ -544,64 +487,46 @@ export function AISettings() {
                                 step="0.000001"
                                 type="number"
                                 value={selectedProfile.outputCostPerMillionUsd ?? ''}
-                              />
-                            </label>
+                            />
                           </div>
                         )}
                         {selectedProfile.provider === 'openai_compatible' && (
                           <>
-                            <label className="provider-api-key-field">
-                              <span>
+                            <Input
+                              autoComplete="off"
+                              className="provider-api-key-field"
+                              label={<>
                                 API Key
                                 <small>
                                   {selectedProfile.hasApiKey
                                     ? `已保存 · ••••${selectedProfile.apiKeySuffix}`
                                     : '未保存'}
                                 </small>
-                              </span>
-                              <input
-                                autoComplete="off"
-                                onChange={(event) =>
-                                  update(selectedProfile.id, {
-                                    apiKey: event.target.value,
-                                  })
-                                }
-                                placeholder={
+                              </>}
+                              onChange={(event) => update(selectedProfile.id, { apiKey: event.target.value })}
+                              placeholder={
                                   selectedProfile.hasApiKey
                                     ? '不填写则保留已保存 Key'
                                     : '输入 API Key'
-                                }
-                                type="password"
-                                value={selectedProfile.apiKey}
-                              />
-                            </label>
+                              }
+                              type="password"
+                              value={selectedProfile.apiKey}
+                            />
                             {selectedProfile.hasApiKey && (
-                              <button
+                              <Button
                                 className="secondary-action"
                                 onClick={() => setApiKeyDeleteTarget(selectedProfile)}
-                                type="button"
+                                variant="danger"
                               >
                                 删除 API Key
-                              </button>
+                              </Button>
                             )}
                           </>
                         )}
                       </div>
 
                       <div className="provider-capabilities">
-                        <label>
-                          <input
-                            checked={selectedProfile.supportsVision}
-                            disabled={selectedProfile.provider === 'mock'}
-                            onChange={(event) =>
-                              update(selectedProfile.id, {
-                                supportsVision: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          多模态（支持图片识别）
-                        </label>
+                        <Checkbox checked={selectedProfile.supportsVision} disabled={selectedProfile.provider === 'mock'} label="多模态（支持图片识别）" onChange={(event) => update(selectedProfile.id, { supportsVision: event.target.checked })} />
                       </div>
                     </div>
                   </>

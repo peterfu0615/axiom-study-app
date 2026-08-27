@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { Button, InlineNotice } from '../../components/ui'
+import { Button, Checkbox, InlineNotice } from '../../components/ui'
 import type { PracticeScanPreview } from '../../domain/practiceAttempt'
 import {
   captureVideoFrame,
@@ -200,7 +200,7 @@ export function PracticeSubmissionScanner({ practiceSetId, onCancel, onSubmit }:
       {submissions.map((submission, index) => <span key={submission.submissionGroupId}><Icon name="check" size={14} />第 {index + 1} 张</span>)}
       {!submissions.length && <span>尚未拍摄页面</span>}
     </div>
-    <label className="practice-live-scanner__auto"><input checked={autoCapture} onChange={(event) => setAutoCapture(event.target.checked)} type="checkbox" />页面稳定后自动拍摄</label>
+    <Checkbox checked={autoCapture} className="practice-live-scanner__auto" label="页面稳定后自动拍摄" onChange={(event) => setAutoCapture(event.target.checked)} />
     <div className="practice-live-scanner__actions">
       <Button disabled={busy} onClick={onCancel} variant="ghost">取消</Button>
       <Button disabled={busy} onClick={() => { setManualRotation(true); setRotation((value) => normalizeQuarterTurn(value + 90)) }} variant="ghost"><Icon name="rotate" size={16} />旋转</Button>

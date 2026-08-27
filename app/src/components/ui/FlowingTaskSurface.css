@@ -7,7 +7,7 @@
      container.  The is-full-width stretch variant resolves margins to 0. */
   margin-inline: auto;
   display: grid;
-  gap: 16px;
+  gap: var(--ax-space-5);
   overflow: hidden;
   padding: clamp(20px, 4vw, 28px);
   border: 1px solid color-mix(in srgb, var(--ax-ai-flow-strong) 22%, var(--border));
@@ -20,9 +20,9 @@
 
 .flowing-task-surface.is-compact {
   width: min(100%, 520px);
-  gap: 10px;
-  padding: 14px 16px;
-  border-radius: 12px;
+  gap: var(--ax-space-3);
+  padding: var(--ax-space-4) var(--ax-space-5);
+  border-radius: var(--ax-radius-md);
 }
 .flowing-task-surface.is-full-width {
   width: 100%;
@@ -50,7 +50,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--ax-space-4);
 }
 
 .flowing-task-surface__heading { min-width: 0; }
@@ -59,33 +59,35 @@
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 18px;
+  font-size: var(--ax-type-section-size);
+  line-height: var(--ax-type-section-line);
   letter-spacing: -.025em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.flowing-task-surface.is-compact h2 { font-size: 13px; }
+.flowing-task-surface.is-compact h2 { font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
+.flowing-task-surface__spinner { width: 1em; height: 1em; margin-right: var(--ax-space-2); vertical-align: -.12em; }
 .flowing-task-surface p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--ax-type-body-small-size);
+  line-height: var(--ax-type-body-small-line);
 }
 .flowing-task-surface__state {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--ax-type-caption-size);
   white-space: nowrap;
 }
 .flowing-task-surface--completed { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); }
 .flowing-task-surface--failed { border-color: color-mix(in srgb, var(--danger) 34%, var(--border)); }
-.flowing-task-surface--paused { border-color: color-mix(in srgb, #d79824 38%, var(--border)); }
+.flowing-task-surface--paused { border-color: color-mix(in srgb, var(--ax-warning-fg) 38%, var(--border)); }
 
 .flowing-task-surface__progress {
   position: relative;
   height: 9px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--ax-radius-pill);
   background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ax-ai-flow-strong) 20%, var(--border));
 }
@@ -93,26 +95,15 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--ax-ai-flow-strong), var(--brand), var(--ax-ai-flow-highlight), var(--brand));
-  background-size: 220% 100%;
-  animation: flowing-task-surface-flow 2.8s linear infinite;
+  background: var(--ax-accent);
   transition: width 260ms ease;
-}
-.flowing-task-surface__progress.is-indeterminate::after {
-  position: absolute;
-  inset: 0 auto 0 -35%;
-  width: 42%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, var(--ax-ai-flow-highlight), transparent);
-  content: '';
-  animation: flowing-task-surface-indeterminate 2.2s ease-in-out infinite;
 }
 .flowing-task-surface__meta {
   display: flex;
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--ax-type-caption-size);
   font-variant-numeric: tabular-nums;
 }
 .flowing-task-surface__meta span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -122,15 +113,9 @@
   from { background-position: 110% 0; }
   to { background-position: -110% 0; }
 }
-@keyframes flowing-task-surface-indeterminate {
-  from { transform: translateX(0); }
-  to { transform: translateX(320%); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .flowing-task-surface__glow,
-  .flowing-task-surface__progress > span,
-  .flowing-task-surface__progress.is-indeterminate::after {
+  .flowing-task-surface__progress > span {
     animation: none;
     background-position: 50% 0;
   }

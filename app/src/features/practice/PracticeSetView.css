@@ -41,13 +41,13 @@
 .practice-submit__dropzone span { color: var(--ax-text-secondary); }
 .practice-submit__actions { display: flex; justify-content: center; }
 .practice-live-scanner { display: grid; gap: var(--ax-space-4); max-width: 920px; margin: 0 auto; }
-.practice-live-scanner__stage { position: relative; display: grid; place-items: center; min-height: 480px; overflow: hidden; border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-lg); background: #080807; }
+.practice-live-scanner__stage { position: relative; display: grid; place-items: center; min-height: 480px; overflow: hidden; border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-lg); background: var(--ax-media-stage-bg); }
 .practice-live-scanner__source { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .practice-live-scanner__viewport { position: relative; display: grid; place-items: center; width: fit-content; height: fit-content; max-width: 100%; max-height: 68vh; }
 .practice-live-scanner__viewport canvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 68vh; }
 .practice-live-scanner__viewport svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .practice-live-scanner__stage polygon { fill: color-mix(in srgb, var(--ax-accent-solid) 14%, transparent); stroke: var(--ax-accent-solid); stroke-width: .004; vector-effect: non-scaling-stroke; }
-.practice-live-scanner__status { position: absolute; left: 50%; bottom: var(--ax-space-4); translate: -50% 0; max-width: calc(100% - 32px); padding: var(--ax-space-2) var(--ax-space-4); border-radius: 99px; color: #fff; background: rgb(0 0 0 / .7); font-size: var(--ax-type-caption-size); backdrop-filter: blur(12px); }
+.practice-live-scanner__status { position: absolute; left: 50%; bottom: var(--ax-space-4); translate: -50% 0; max-width: calc(100% - 32px); padding: var(--ax-space-2) var(--ax-space-4); border-radius: var(--ax-radius-pill); color: var(--ax-media-overlay-fg); background: var(--ax-media-overlay-bg); font-size: var(--ax-type-caption-size); backdrop-filter: blur(12px); }
 .practice-live-scanner__status.is-ready { color: var(--ax-accent-on-solid); background: var(--ax-accent-solid); }
 .practice-live-scanner__pages { display: flex; flex-wrap: wrap; gap: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
 .practice-live-scanner__pages span { display: inline-flex; align-items: center; gap: var(--ax-space-1); }

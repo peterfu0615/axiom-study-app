@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "npm run generate:schema && tsc -b && vite build",
     "generate:schema": "node scripts/generate-problem-analysis-validator.mjs",
-    "lint": "oxlint src",
+    "lint": "oxlint src && node scripts/audit-ui-system.mjs",
     "test": "vitest run",
     "test:fixtures": "cargo check --manifest-path src-tauri/Cargo.toml && node scripts/test-document-fixtures.mjs",
     "tauri": "tauri",

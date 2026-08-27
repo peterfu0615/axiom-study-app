@@ -6,10 +6,12 @@ import {
   Dialog,
   EmptyState,
   IconButton,
+  Input,
   ListboxSelect,
   Menu,
   MenuItem,
   PageHeader,
+  SearchField,
   StatusBadge,
   Surface,
   Tabs,
@@ -475,7 +477,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               <Surface className="curriculum-structure-shell">
                 <aside className="curriculum-tree-panel">
                   <div className="curriculum-panel-heading"><div><h2>课程目录</h2><span>{nodes.length} 个节点</span></div><div className="curriculum-panel-heading__actions">{reviewCount > 0 && <Button disabled={busy} onClick={() => setBatchConfirmOpen(true)} variant="secondary">批量确认（{reviewCount}）</Button>}<Button onClick={() => openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null)}>新增节点</Button></div></div>
-                  <label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} /></label>
+                  <SearchField className="curriculum-search" label="搜索课程目录" onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节或知识点" value={query} />
                   <div className="curriculum-tree-scroll"><KnowledgeTree expanded={expanded} items={tree} onSelect={(node) => setSelectedNodeId(node.id)} onToggle={(nodeId) => setExpanded((current) => { const next = new Set(current); if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId); return next })} selectedId={selectedNodeId} visibleIds={visibleNodeIds} /></div>
                 </aside>
                 <section className="curriculum-node-detail">
@@ -494,7 +496,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </div>
 
       <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
-        <div className="curriculum-dialog-form"><label>科目<input onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /></label><label>教材或课程名称<input onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /></label><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
+        <div className="curriculum-dialog-form"><Input label="科目" onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /><Input label="教材或课程名称" onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => { if (!busy) setDeleteSubjectOpen(false) }} open={deleteSubjectOpen} title={`删除「${subject}」？`}>
@@ -505,7 +507,7 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
-        <div className="curriculum-dialog-form"><label>节点名称<input onChange={(event) => setNodeName(event.target.value)} value={nodeName} /></label><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><Textarea label="备注" onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+        <div className="curriculum-dialog-form"><Input label="节点名称" onChange={(event) => setNodeName(event.target.value)} value={nodeName} /><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><Textarea label="备注" onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
       </Dialog>
 
       <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">

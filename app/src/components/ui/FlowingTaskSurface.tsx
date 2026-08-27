@@ -53,7 +53,7 @@ export function FlowingTaskSurface({
       {state === 'running' && <span aria-hidden="true" className="flowing-task-surface__glow" />}
       <div className="flowing-task-surface__header">
         <div className="flowing-task-surface__heading">
-          <h2>{title}</h2>
+          <h2>{state === 'running' && <span aria-hidden="true" className="ax-spinner flowing-task-surface__spinner" />}{title}</h2>
           {detail && <p>{detail}</p>}
         </div>
         {state === 'paused' && <span className="flowing-task-surface__state">已暂停</span>}
@@ -61,16 +61,16 @@ export function FlowingTaskSurface({
         {state === 'failed' && <span className="flowing-task-surface__state">失败</span>}
       </div>
 
-      {(determinate || state === 'running') && (
+      {determinate && (
         <div
           aria-label={progressLabel || title}
-          aria-valuemax={determinate ? 1 : undefined}
-          aria-valuemin={determinate ? 0 : undefined}
-          aria-valuenow={determinate ? fraction : undefined}
-          className={`flowing-task-surface__progress${determinate ? '' : ' is-indeterminate'}`}
+          aria-valuemax={1}
+          aria-valuemin={0}
+          aria-valuenow={fraction}
+          className="flowing-task-surface__progress"
           role="progressbar"
         >
-          {determinate && <span style={{ width: `${fraction * 100}%` }} />}
+          <span style={{ width: `${fraction * 100}%` }} />
         </div>
       )}
 

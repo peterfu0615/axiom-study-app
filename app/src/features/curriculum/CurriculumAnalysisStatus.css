@@ -10,7 +10,7 @@
   overflow: hidden;
   padding: 5px 10px;
   border: 1px solid color-mix(in srgb, var(--ax-ai-flow-strong) 24%, var(--border));
-  border-radius: 999px;
+  border-radius: var(--ax-radius-pill);
   color: var(--ink);
   background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface));
   box-shadow: inset 0 0 0 1px var(--ax-ai-flow-soft);
@@ -57,13 +57,15 @@
 }
 
 .curriculum-analysis-status-pill__copy strong {
-  font-size: 12px;
+  font-size: var(--ax-type-body-small-size);
+  line-height: var(--ax-type-body-small-line);
   font-weight: 680;
 }
 
 .curriculum-analysis-status-pill__copy small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--ax-type-caption-size);
+  line-height: var(--ax-type-caption-line);
 }
 
 .curriculum-analysis-status-pill.is-completed {
@@ -83,7 +85,8 @@
   color: var(--muted);
   background: transparent;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--ax-type-meta-size);
+  line-height: var(--ax-type-meta-line);
   cursor: pointer;
 }
 

@@ -9,6 +9,7 @@ import {
   FlowingTaskSurface,
   FileDropzone,
   IconButton,
+  Input,
   ListboxSelect,
   StatusBadge,
 } from '../../components/ui'
@@ -302,9 +303,9 @@ export function CurriculumImportFlow({
 
       {phase === 'processing' && job && isCurriculumAnalysisRunning(job) && (
         <FlowingTaskSurface
-          actions={<button className="curriculum-analysis-cancel" onClick={() => setCancelConfirmOpen(true)} type="button">取消分析</button>}
+          actions={<Button className="curriculum-analysis-cancel" onClick={() => setCancelConfirmOpen(true)} variant="ghost">取消分析</Button>}
           detail={job.progressLabel && job.progressLabel !== curriculumAnalysisStageLabel(job) ? job.progressLabel : null}
-          progress={curriculumAnalysisProgress(job)}
+          progress={job.progressTotal > 1 ? curriculumAnalysisProgress(job) : null}
           progressCurrent={job.progressCurrent}
           progressLabel={job.progressLabel || curriculumAnalysisStageLabel(job)}
           progressTotal={job.progressTotal}
@@ -329,7 +330,7 @@ export function CurriculumImportFlow({
             {fieldLabels.map(([key, label, recognitionKey]) => {
               const recognition = job.recognition?.[recognitionKey]
               const needsReview = !recognition?.value
-              return <label className={needsReview ? 'needs-review' : ''} key={key}><span>{label}{needsReview && <em>请确认</em>}</span><input onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} value={form[key]} />{recognition?.evidence && <small>{recognition.evidence}</small>}</label>
+              return <Input className={needsReview ? 'needs-review' : ''} hint={recognition?.evidence || undefined} key={key} label={<>{label}{needsReview && <em>请确认</em>}</>} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} value={form[key]} />
             })}
           </div>
           {job.recognition.warnings.length > 0 && <p className="curriculum-form-warning">{job.recognition.warnings.join(' ')}</p>}

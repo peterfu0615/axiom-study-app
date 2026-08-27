@@ -4,9 +4,11 @@ import {
   Dialog,
   EmptyState,
   FlowingTaskSurface,
+  Input,
   ListboxSelect,
   Menu,
   MenuItem,
+  SearchField,
   StatusBadge,
   Tabs,
 } from '../../components/ui'
@@ -29,7 +31,6 @@ import {
   type TagDefinitionSummary,
 } from '../../platform/horizonDatabase'
 import { startRelabelBatchWorker } from './relabelWorker'
-import { Icon } from '../../components/Icon'
 
 type TagStatusFilter = 'all' | 'review' | 'active' | 'archived'
 
@@ -214,7 +215,7 @@ export function TagOverview({
         <div className="curriculum-tag-content">
           <header className="curriculum-tag-content__header"><div><h2>{currentDimension.label}</h2><p>{type === 'knowledge' && !textbook ? '请选择教材后查看教材知识点。' : currentDimension.description}</p></div>{type === 'knowledge' ? <Button disabled={!textbook} onClick={onCreateKnowledge}>新增知识点</Button> : <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button>}</header>
           {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><Button onClick={() => { setError(null); void refresh() }} variant="ghost">重试</Button></div>}
-          <div className="curriculum-tag-toolbar"><label className="curriculum-search"><span aria-hidden="true"><Icon name="search" size={13} /></span><input onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /></label><ListboxSelect ariaLabel="标签状态" onValueChange={(value) => setStatusFilter(value as TagStatusFilter)} options={[{ value: 'all', label: '全部状态' }, { value: 'review', label: '待确认' }, { value: 'active', label: '可用' }, { value: 'archived', label: '已归档' }]} value={statusFilter} /><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span></div>
+          <div className="curriculum-tag-toolbar"><SearchField className="curriculum-search" label={`搜索${currentDimension.label}`} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${currentDimension.label}`} value={query} /><ListboxSelect ariaLabel="标签状态" onValueChange={(value) => setStatusFilter(value as TagStatusFilter)} options={[{ value: 'all', label: '全部状态' }, { value: 'review', label: '待确认' }, { value: 'active', label: '可用' }, { value: 'archived', label: '已归档' }]} value={statusFilter} /><span>{loading ? '正在更新…' : `${filtered.length} 项`}</span></div>
           {!loading && !filtered.length ? <EmptyState action={type !== 'knowledge' ? <Button onClick={() => setNewOpen(true)} variant="primary">新建{currentDimension.label}</Button> : undefined} description={type === 'knowledge' ? '所选教材尚未确认知识点。可返回知识结构新增或确认节点。' : `当前科目还没有${currentDimension.label}。`} title={`暂无${currentDimension.label}`} /> : <div className="curriculum-tag-table"><div className="curriculum-tag-table__header"><span>标签名称</span><span>类型或角色</span><span>关联错题</span><span>状态</span><span /></div>{filtered.map((tag) => { const status = tagStatus(tag); return <article key={tag.id}><button className="curriculum-tag-name" onClick={() => setDetailTag(tag)} type="button"><strong>{tag.canonicalName}</strong><small>{tag.description || '暂无说明'}</small></button><span>{tag.tagType === 'method' ? tag.methodClass === 'core' ? '核心方法' : '辅助方法' : currentDimension.label}</span><span>{tag.problemCount}</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge><Menu><MenuItem onClick={() => setDetailTag(tag)}>查看详情</MenuItem>{tag.lifecycleStatus === 'active' && <MenuItem disabled={busy} onClick={() => setArchiveTarget(tag)}>归档…</MenuItem>}</Menu></article> })}</div>}
 
           <section className={`curriculum-relabel-task${hasRelabelTask ? ' is-active' : ''}`}>
@@ -242,7 +243,7 @@ export function TagOverview({
         </div>
       </section>
 
-      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><label>名称<input onChange={(event) => setNewName(event.target.value)} value={newName} /></label>{type === 'method' && <ListboxSelect label="角色" onValueChange={(value) => setMethodClass(value as 'core' | 'optional')} options={[{ value: 'core', label: '核心方法' }, { value: 'optional', label: '辅助方法' }]} value={methodClass} />}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
+      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><Input label="名称" onChange={(event) => setNewName(event.target.value)} value={newName} />{type === 'method' && <ListboxSelect label="角色" onValueChange={(value) => setMethodClass(value as 'core' | 'optional')} options={[{ value: 'core', label: '核心方法' }, { value: 'optional', label: '辅助方法' }]} value={methodClass} />}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
       <Dialog onClose={() => setDetailTag(null)} open={Boolean(detailTag)} title={detailTag?.canonicalName || '标签详情'}><div className="curriculum-dialog-form"><p>{detailTag?.description || '暂无说明。近义表达会由系统在后台自动复用；无法确认时允许作为独立标签保留。'}</p>{detailTag?.lifecycleStatus === 'active' && <Button onClick={() => { setDetailTag(null); setArchiveTarget(detailTag) }} variant="danger">归档标签…</Button>}</div></Dialog>
       <Dialog onClose={() => setArchiveTarget(null)} open={Boolean(archiveTarget)} title="归档标签">
         <p>将归档「{archiveTarget?.canonicalName || ''}」。已关联的错题不会被删除，但该标签不再参与后续映射。</p>

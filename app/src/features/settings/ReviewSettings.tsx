@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, ListboxSelect } from '../../components/ui'
+import { Button, Input, ListboxSelect } from '../../components/ui'
 import type { ReviewSessionMode } from '../../domain/review'
 import {
   DEFAULT_REVIEW_PREFERENCES,
@@ -66,14 +66,8 @@ export function ReviewSettings() {
         options={paceOptions}
         value={reviewPaceFromTarget(value.targetRetention)}
       />
-      <label>
-        <span>今日复习上限（分钟）</span>
-        <input disabled={loading || saving} max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
-      </label>
-      <label>
-        <span>每日最多复习模块</span>
-        <input disabled={loading || saving} max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: parseBoundedNumber(event.target.value, 1, 12, current.maxModules) }))} type="number" value={value.maxModules} />
-      </label>
+      <Input disabled={loading || saving} label="今日复习上限（分钟）" max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
+      <Input disabled={loading || saving} label="每日最多复习模块" max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: parseBoundedNumber(event.target.value, 1, 12, current.maxModules) }))} type="number" value={value.maxModules} />
       <ListboxSelect
         disabled={loading || saving}
         label="默认练习模式"

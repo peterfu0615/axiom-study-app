@@ -164,16 +164,12 @@ export function UpdateSettings() {
                       ? `正在下载更新… 已下载 ${formatDownloadedSize(progress.downloaded)}`
                       : `正在下载更新… ${progress.percent.toFixed(0)}%`}
           </p>
-          <div className="update-progress-bar">
+          {progress.stage === 'downloading' && progress.percent != null && <div className="update-progress-bar">
             <div
-              className={`update-progress-fill${progress.percent == null ? ' update-progress-fill--indeterminate' : ''}`}
-              style={
-                progress.percent == null
-                  ? undefined
-                  : { width: `${Math.min(100, Math.max(0, progress.percent))}%` }
-              }
+              className="update-progress-fill"
+              style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
             />
-          </div>
+          </div>}
           <p className="update-hint">
             下载达到 100% 后仍会执行签名验证与安装；完成前请勿关闭窗口。
           </p>

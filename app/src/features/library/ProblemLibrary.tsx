@@ -44,7 +44,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, DiscreteSlider, ErrorState, FlowingTaskSurface, IconButton, ListboxSelect, PageHeader, SegmentedControl, Textarea } from '../../components/ui'
+import { Button, Dialog, DiscreteSlider, ErrorState, FlowingTaskSurface, IconButton, Input, ListboxSelect, PageHeader, SearchField, SegmentedControl, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
@@ -1166,22 +1166,22 @@ export function ProblemLibrary() {
             <strong>{view === 'active' ? '全部错题' : view === 'archived' ? '归档错题' : '已删除错题'}</strong>
             <span>{filteredProblems.length} / {problems.length} 道</span>
             {view === 'active' && (
-              <button
+              <Button
                 disabled={subjectFilter === 'all'}
                 onClick={() => {
                   setBatchMode((current) => !current)
                   setBatchProblemIds(new Set())
                 }}
                 title={subjectFilter === 'all' ? '请先选择一个科目' : undefined}
-                type="button"
+                variant="ghost"
               >
                 {batchMode ? '退出批量' : '批量操作'}
-              </button>
+              </Button>
             )}
           </div>
 
           <div className="problem-list-filters">
-            <label><span className="sr-only">搜索错题</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案或标签" type="search" value={query} /></label>
+            <SearchField label="搜索错题" onChange={(event) => setQuery(event.target.value)} placeholder="搜索题干、答案或标签" value={query} />
             <ListboxSelect
               ariaLabel="筛选科目"
               onValueChange={setSubjectFilter}
@@ -1205,20 +1205,18 @@ export function ProblemLibrary() {
           {batchMode && subjectFilter !== 'all' && (
             <div className="problem-batch-toolbar" role="region" aria-label="错题批量操作">
               <strong>已选 {batchProblemIds.size} 道 · {subjectFilter}</strong>
-              <button
+              <Button
                 disabled={batchRunning || !filteredProblems.length}
                 onClick={() => setBatchProblemIds(new Set(filteredProblems.map((problem) => problem.id)))}
-                type="button"
               >
                 选择当前结果
-              </button>
-              <button
+              </Button>
+              <Button
                 disabled={batchRunning || !batchProblemIds.size}
                 onClick={() => void startSelectedRelabel()}
-                type="button"
               >
                 批量重新标注
-              </button>
+              </Button>
               <ListboxSelect
                 ariaLabel="批量迁移到教材"
                 disabled={batchRunning}
@@ -1226,13 +1224,12 @@ export function ProblemLibrary() {
                 options={[{ value: '', label: '清除教材匹配' }, ...batchTextbooks.map((book) => ({ value: book.id, label: book.title }))]}
                 value={batchTextbookId}
               />
-              <button
+              <Button
                 disabled={batchRunning || !batchProblemIds.size}
                 onClick={() => void migrateSelectedTextbook()}
-                type="button"
               >
                 应用教材迁移
-              </button>
+              </Button>
             </div>
           )}
 
@@ -1309,27 +1306,27 @@ export function ProblemLibrary() {
                 </div>
                 <div className="problem-detail-actions">
                   {selected.deletedAt ? (
-                    <button className="primary-button" disabled={updating} onClick={() => void handleRestore()} type="button">
+                    <Button className="primary-button" disabled={updating} loading={updating} onClick={() => void handleRestore()} variant="primary">
                       {updating ? '恢复中…' : '恢复到错题库'}
-                    </button>
+                    </Button>
                   ) : editing ? (
                     <>
-                      <button
+                      <Button
                         className="secondary-action"
                         disabled={updating}
                         onClick={cancelEditing}
-                        type="button"
                       >
                         取消
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         className="primary-button"
                         disabled={updating || !editTitle.trim()}
+                        loading={updating}
                         onClick={() => void saveEdits()}
-                        type="button"
+                        variant="primary"
                       >
                         {updating ? '保存中…' : '保存修改'}
-                      </button>
+                      </Button>
                     </>
                   ) : (
                     <>
@@ -1342,37 +1339,34 @@ export function ProblemLibrary() {
                       >
                         <Icon filled={selected.libraryMetadata.favorite} name="favorite" size={18} />
                       </IconButton>
-                      <button
+                      <Button
                         className="secondary-action"
                         disabled={updating}
                         onClick={beginEditing}
-                        type="button"
                       >
                         编辑
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         className="secondary-action"
                         disabled={updating || !selected.correctedImagePath}
                         onClick={() => {
                           dismiss()
                           setRecropping(true)
                         }}
-                        type="button"
                       >
                         重新裁剪
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         className="secondary-action"
                         disabled={updating}
                         onClick={() => void toggleArchive()}
-                        type="button"
                       >
                         {updating
                           ? '更新中…'
                           : selected.archivedAt
                             ? '取消归档'
                             : '归档'}
-                      </button>
+                      </Button>
                     </>
                   )}
                 </div>
@@ -1386,27 +1380,8 @@ export function ProblemLibrary() {
                     path={selected.cropImagePath}
                   />
                   <div className="problem-edit-form">
-                    <label>
-                      <span>标题</span>
-                      <input
-                        autoFocus
-                        disabled={updating}
-                        onChange={(event) => setEditTitle(event.target.value)}
-                        required
-                        value={editTitle}
-                      />
-                    </label>
-                    <label>
-                      <span>科目</span>
-                      <input
-                        disabled={updating}
-                        onChange={(event) =>
-                          setEditSubject(event.target.value)
-                        }
-                        placeholder="例如：数学"
-                        value={editSubject}
-                      />
-                    </label>
+                    <Input autoFocus disabled={updating} label="标题" onChange={(event) => setEditTitle(event.target.value)} required value={editTitle} />
+                    <Input disabled={updating} label="科目" onChange={(event) => setEditSubject(event.target.value)} placeholder="例如：数学" value={editSubject} />
                     <Textarea
                       disabled={updating}
                       label="题干 / 备注"
@@ -1444,21 +1419,21 @@ export function ProblemLibrary() {
                             {['not_started', 'completed'].includes(
                               selected.aiStatus,
                             ) && (
-                              <button
+                              <Button
                                 className="problem-ai-notice__action"
                                 disabled={updating}
                                 onClick={() => void retryAI()}
-                                type="button"
+                                variant="ghost"
                               >
                                 {selected.aiStatus === 'completed'
                                   ? '重新整理'
                                   : '开始整理'}
-                              </button>
+                              </Button>
                             )}
                             {selectedIsProcessing && (
-                              <button className="problem-ai-notice__action" disabled={updating} onClick={() => void cancelAI()} type="button">
+                              <Button className="problem-ai-notice__action" disabled={updating} onClick={() => void cancelAI()} variant="ghost">
                                 取消分析
-                              </button>
+                              </Button>
                             )}
                           </div>
                         </header>
@@ -1740,14 +1715,14 @@ export function ProblemLibrary() {
                           <div className="problem-delete-confirm">
                             <span>确认要把这道错题移入回收站吗？</span>
                             <div className="problem-delete-confirm-actions">
-                              <button className="problem-delete-cancel" disabled={deleting} onClick={() => setDeleteConfirming(false)} type="button">取消</button>
-                              <button className="problem-delete-confirm-button" disabled={deleting} onClick={() => void handleDelete()} type="button">
+                              <Button className="problem-delete-cancel" disabled={deleting} onClick={() => setDeleteConfirming(false)} variant="ghost">取消</Button>
+                              <Button className="problem-delete-confirm-button" disabled={deleting} loading={deleting} onClick={() => void handleDelete()} variant="danger">
                                 {deleting ? '处理中…' : '移入回收站'}
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         ) : (
-                          <button className="problem-delete-button" disabled={deleting} onClick={() => setDeleteConfirming(true)} type="button">移入回收站</button>
+                          <Button className="problem-delete-button" disabled={deleting} onClick={() => setDeleteConfirming(true)} variant="danger">移入回收站</Button>
                         )}
                       </section>}
 

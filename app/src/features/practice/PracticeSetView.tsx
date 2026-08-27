@@ -384,7 +384,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const needsWork = results.filter((result) => result.correctness !== 'correct').length
 
   if (mode === 'processing') return <main className="workspace practice-workspace practice-processing">
-    <FlowingTaskSurface detail={processingStep.detail} progress={processingStep.progress} progressLabel="自动处理作答" state="running" title={processingStep.title} widthMode="full">
+    <FlowingTaskSurface detail={processingStep.detail} state="running" title={processingStep.title} widthMode="full">
       <p className="practice-processing__note">请保持 Axiom 打开，处理完成后会自动显示逐题结果。</p>
     </FlowingTaskSurface>
   </main>

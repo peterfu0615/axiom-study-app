@@ -70,7 +70,7 @@
   filter: saturate(1.15) brightness(.96);
   opacity: 1;
 }
-.today-forecast__axis-label { fill: var(--ax-text-tertiary); font-size: 10px; }
+.today-forecast__axis-label { fill: var(--ax-text-tertiary); font-size: var(--ax-type-caption-size); }
 .today-forecast__tooltip { display: flex; align-items: baseline; gap: var(--ax-space-3); min-height: 20px; padding: 0 var(--ax-space-4) var(--ax-space-3); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); }
 .today-forecast__tooltip strong { color: var(--ax-text-primary); }
 .today-corrections { display: grid; gap: var(--ax-space-3); padding: var(--ax-space-5); border: 1px solid var(--ax-warning-border); border-radius: var(--ax-radius-lg); background: var(--ax-warning-bg); }

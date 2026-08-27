@@ -128,6 +128,20 @@
   --ax-danger-bg: color-mix(in srgb, var(--danger) 10%, var(--surface));
   --ax-info-fg: color-mix(in srgb, #275fc2 78%, var(--ink));
   --ax-info-bg: color-mix(in srgb, #4f8ee8 12%, var(--surface));
+  --ax-media-stage-bg: #080807;
+  --ax-media-overlay-fg: #fff;
+  --ax-media-overlay-bg: rgb(0 0 0 / 70%);
+  --ax-region-answer-border: #3d8bc2;
+  --ax-region-answer: #4e9bd2;
+  --ax-region-diagram-border: #3d9a71;
+  --ax-region-diagram: #52ad83;
+  --ax-region-annotation-border: #8a7bb8;
+  --ax-region-annotation-dark: #493f60;
+  --ax-region-annotation-light: #9d8bd3;
+  --ax-appearance-light-start: #fbfaf3;
+  --ax-appearance-light-end: #f3eddb;
+  --ax-appearance-dark-start: #2a2a2e;
+  --ax-appearance-dark-end: #14141a;
   /* AI activity surfaces must follow both the selected visual palette and
      light/dark appearance. Keep all animated highlights on semantic tokens
      so feature CSS never falls back to Axiom's default yellow. */
@@ -153,6 +167,7 @@
   --ax-space-8: 24px;
   --ax-space-9: 32px;
   --ax-space-10: 40px;
+  --ax-radius-xs: 4px;
   --ax-radius-sm: 8px;
   --ax-radius-md: 12px;
   --ax-radius-lg: 18px;
@@ -210,6 +225,8 @@
   --ax-type-footnote-line: 14px;
   --ax-type-caption-size: 10px;
   --ax-type-caption-line: 13px;
+  --ax-type-display-size: 44px;
+  --ax-type-display-line: 50px;
 
   /* Product roles map to the platform scale instead of defining new sizes. */
   --ax-type-eyebrow-size: var(--ax-type-subheadline-size);

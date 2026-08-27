@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
 import { readFileSync } from 'node:fs'
-import { Badge, Button, DiscreteSlider, IconButton, Input, PageHeader, SegmentedControl, StatusBadge, StatusTag, Tabs } from './index'
+import { Badge, Button, Checkbox, DiscreteSlider, Heading, IconButton, Input, PageHeader, SearchField, SegmentedControl, StatusBadge, StatusTag, Surface, Tabs, Text } from './index'
 import { discreteSliderIndexFromPointer } from './discreteSlider'
 import { Icon } from '../Icon'
 
@@ -24,6 +24,20 @@ describe('design system foundations', () => {
     expect(html).toContain('ax-icon-button--danger')
     expect(html).toContain('ax-status-tag--completed')
     expect(html).toContain('ax-status-tag--again')
+  })
+
+  it('covers shared text, search, checkbox and surface hierarchy', () => {
+    const html = renderToStaticMarkup(<Surface as="article" padding="standard" variant="raised">
+      <Heading as="h3" reading role="card">勾股定理</Heading>
+      <Text reading>在直角三角形中验证关系。</Text>
+      <SearchField label="搜索题目" placeholder="搜索" />
+      <Checkbox defaultChecked label="自动整理" />
+    </Surface>)
+    expect(html).toContain('ax-surface--raised ax-surface--padding-standard')
+    expect(html).toContain('ax-heading--card ax-heading--reading')
+    expect(html).toContain('ax-text--reading')
+    expect(html).toContain('aria-label="搜索题目"')
+    expect(html).toContain('ax-checkbox__box')
   })
 
   it('keeps Status capsules intrinsic and core feature CSS tokenized', () => {
@@ -145,7 +159,7 @@ describe('design system foundations', () => {
 
     expect(insights).toContain('<PageHeader')
     expect(insightsCss).not.toContain('.insights-header')
-    expect(library).toContain('<button className="problem-ai-notice__action"')
-    expect(library).not.toMatch(/selectedIsProcessing[\s\S]{0,160}<Button[^>]*variant="ghost"/u)
+    expect(library).toContain('<Button className="problem-ai-notice__action"')
+    expect(library).not.toContain('<button className="problem-ai-notice__action"')
   })
 })

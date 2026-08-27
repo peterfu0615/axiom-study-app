@@ -124,4 +124,13 @@ describe('global curriculum analysis status', () => {
     expect(markup).not.toContain('>60%<')
     expect(markup).toContain('role="progressbar"')
   })
+
+  it('uses a shared spinner without a fabricated progress bar for unknown work', () => {
+    const markup = renderToStaticMarkup(createElement(FlowingTaskSurface, {
+      state: 'running', title: '正在生成变式题', detail: '正在整理题目',
+    }))
+    expect(markup).toContain('flowing-task-surface__spinner')
+    expect(markup).not.toContain('role="progressbar"')
+    expect(markup).not.toContain('is-indeterminate')
+  })
 })

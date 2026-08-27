@@ -522,16 +522,6 @@
   line-height: var(--ax-type-secondary-line);
 }
 
-.update-progress-fill--indeterminate {
-  width: 35%;
-  animation: ax-update-progress-indeterminate 1.2s ease-in-out infinite;
-}
-
-@keyframes ax-update-progress-indeterminate {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(285%); }
-}
-
 .problem-card-copy strong,
 .queue-item strong,
 .block-copy strong {
