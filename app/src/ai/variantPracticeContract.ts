@@ -108,6 +108,17 @@ function bool(value: unknown, field: string) {
 }
 
 export function buildPracticeVariantGenerationPrompt(input: PracticeVariantGenerationInput) {
+  const promptInput = {
+    plan: input.plan,
+    source: {
+      statementMarkdown: input.source.statementMarkdown,
+      options: input.source.options,
+      canonicalAnswer: input.source.canonicalAnswer,
+      solutionJson: input.source.solutionJson,
+      hasQuestionImage: Boolean(input.source.questionImagePath),
+      hasDiagramImages: input.source.diagramImagePaths.length > 0,
+    },
+  }
   return `你是中国中学受约束变式题生成器。生成一道新题以检验迁移能力，不得只是复制或改写标点。
 必须严格保持原题可确定的科目、核心知识、核心方法、题型模型和目标难度；只能使用 allowedChanges，绝不能使用 forbiddenChanges。plan.invariants 中的标签、答案或步骤可能为空，这表示用户尚未整理这些字段，不表示原题没有对应知识或解法。此时先根据题干、选项和题图独立理解原题，再生成变式，不得要求用户补字段，也不得凭空补造原题中无法确定的条件。
 变化等级必须服从 plan.variationLevel：numeric 只改变数字、符号、名称或非关键干扰项；condition 可替换、增减或重组已知条件与数据，但必须保持结论、核心知识和解法，禁止条件与结论互换；rebuild 可更换情境、叙述和图形表现，但仍须保持知识、方法、题型模型与目标难度。
@@ -115,7 +126,7 @@ export function buildPracticeVariantGenerationPrompt(input: PracticeVariantGener
 选择题 canonical_answer 必须是 options 数组中的完整选项文本。数学内容使用 Markdown/LaTeX。只返回符合 JSON Schema 的 JSON。
 
 <variant_generation_input>
-${JSON.stringify(input)}
+${JSON.stringify(promptInput)}
 </variant_generation_input>`
 }
 

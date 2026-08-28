@@ -243,6 +243,62 @@ describe('MockAIProvider', () => {
     expect(result.solution.steps[0].title).toBe('等腰三角形性质')
   })
 
+  it('keeps variant generation text-only even when the provider supports vision', async () => {
+    const candidate = {
+      subject: '数学',
+      statement_markdown: '已知 $AB=6$，求 $AB$ 的长度。',
+      options: null,
+      canonical_answer: '6',
+      solution: { content_markdown: '$AB=6$', steps: ['$AB=6$'] },
+      difficulty: 'basic',
+      target_tag_ids: [],
+      changes: [{ kind: 'numeric_values', summary: '改变数值' }],
+      diagram_policy: 'none',
+      geometry_scene: null,
+    }
+    const input = {
+      plan: {
+        id: 'plan-1', subject: '数学', sourceProblemId: 'problem-1', skillBundleId: null,
+        targetTags: [], targetDifficulty: 'basic' as const, variationLevel: 'numeric' as const,
+        invariants: {
+          subject: '数学', sourceProblemId: 'problem-1', targetKnowledgeTagIds: [],
+          targetMethodTagIds: [], targetModelTagIds: [], targetDifficulty: 'basic' as const,
+          variationLevel: 'numeric' as const, requiredSteps: [], diagramPolicy: 'none' as const,
+        },
+        allowedChanges: ['numeric_values' as const], forbiddenChanges: [], sourceInputHash: 'hash',
+        promptVersion: 'variant-practice-v2' as const, schemaVersion: 'variant-practice-v2' as const,
+        createdAt: 1,
+      },
+      source: {
+        statementMarkdown: '已知 $AB=5$，求 $AB$ 的长度。', options: null,
+        canonicalAnswer: '5', solutionJson: '{"contentMarkdown":"$AB=5$"}',
+        questionImagePath: '/tmp/problem.jpg', diagramImagePaths: ['/tmp/diagram.jpg'],
+      },
+    }
+    const profile = {
+      id: 'variant-provider', name: 'Variant', provider: 'openai_compatible' as const,
+      baseUrl: 'https://example.com/v1', apiKey: '', hasApiKey: true,
+      apiKeySuffix: 'test', credentialRef: 'variant-provider', commandPath: '',
+      model: 'text-model', supportsVision: true, supportsText: true, enabled: true,
+      sortOrder: 0, createdAt: 1, updatedAt: 1,
+    }
+    analyzeProblemWithOpenAICompatible.mockResolvedValueOnce({ rawOutput: JSON.stringify(candidate), errorMessage: null })
+    await new OpenAICompatibleProvider(profile).generatePracticeVariant(input)
+    expect(analyzeProblemWithOpenAICompatible).toHaveBeenLastCalledWith(expect.not.objectContaining({ imagePaths: expect.anything() }))
+    const openAIRequest = analyzeProblemWithOpenAICompatible.mock.calls.at(-1)?.[0]
+    expect(openAIRequest.prompt).toContain('"hasQuestionImage":true')
+    expect(openAIRequest.prompt).toContain('"hasDiagramImages":true')
+    expect(openAIRequest.prompt).not.toContain('/tmp/problem.jpg')
+    expect(openAIRequest.prompt).not.toContain('/tmp/diagram.jpg')
+
+    analyzeProblemWithAntigravityCLI.mockResolvedValueOnce({ rawOutput: JSON.stringify(candidate), errorMessage: null })
+    await new AntigravityCLIProvider({ ...profile, provider: 'antigravity_cli', baseUrl: '', commandPath: '/usr/local/bin/agy', hasApiKey: false }).generatePracticeVariant(input)
+    expect(analyzeProblemWithAntigravityCLI).toHaveBeenLastCalledWith(expect.not.objectContaining({ imagePaths: expect.anything() }))
+    const antigravityRequest = analyzeProblemWithAntigravityCLI.mock.calls.at(-1)?.[0]
+    expect(antigravityRequest.prompt).not.toContain('/tmp/problem.jpg')
+    expect(antigravityRequest.prompt).not.toContain('/tmp/diagram.jpg')
+  })
+
   it('extracts student work and explains a selected fragment with multiple image paths', async () => {
     analyzeProblemWithAntigravityCLI
       .mockResolvedValueOnce({
