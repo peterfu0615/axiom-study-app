@@ -17,6 +17,7 @@ import {
 import type { AIErrorEnvelope } from '../../domain/aiError'
 import { Icon, type IconName } from '../Icon'
 import { discreteSliderIndexFromPointer } from './discreteSlider'
+import { isTabNavigationKey, nextEnabledTabIndex } from './tabNavigation'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
 export { ListboxSelect } from './ListboxSelect'
@@ -140,6 +141,28 @@ export interface TabOption<T extends string> {
   disabled?: boolean
 }
 
+function handleTabKeyDown<T extends string>(
+  event: KeyboardEvent<HTMLButtonElement>,
+  options: Array<{ value: T; disabled?: boolean }>,
+  currentIndex: number,
+  onChange: (value: T) => void,
+) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    onChange(options[currentIndex].value)
+    return
+  }
+  if (!isTabNavigationKey(event.key)) return
+
+  event.preventDefault()
+  const nextIndex = nextEnabledTabIndex(options, currentIndex, event.key)
+  const nextOption = options[nextIndex]
+  if (!nextOption) return
+  const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+  tabs?.[nextIndex]?.focus({ preventScroll: true })
+  onChange(nextOption.value)
+}
+
 export function SegmentedControl<T extends string>({
   value,
   onChange,
@@ -153,19 +176,14 @@ export function SegmentedControl<T extends string>({
 }) {
   return (
     <div aria-label={ariaLabel} className="segmented-control" role="tablist">
-      {options.map((option) => (
+      {options.map((option, index) => (
         <button
           aria-selected={value === option.value}
           className={value === option.value ? 'active' : ''}
           disabled={option.disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              onChange(option.value)
-            }
-          }}
+          onKeyDown={(event) => handleTabKeyDown(event, options, index, onChange)}
           role="tab"
           tabIndex={value === option.value ? 0 : -1}
           type="button"
@@ -282,19 +300,14 @@ export function Tabs<T extends string>({
 }) {
   return (
     <div aria-label={ariaLabel} className={`ax-tabs ax-tabs--${variant} ${className}`.trim()} role="tablist">
-      {options.map((option) => (
+      {options.map((option, index) => (
         <button
           aria-selected={value === option.value}
           className={value === option.value ? 'is-selected' : ''}
           disabled={option.disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              onChange(option.value)
-            }
-          }}
+          onKeyDown={(event) => handleTabKeyDown(event, options, index, onChange)}
           role="tab"
           tabIndex={value === option.value ? 0 : -1}
           type="button"

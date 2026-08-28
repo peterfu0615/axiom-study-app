@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { Badge, Button, Checkbox, DiscreteSlider, Heading, IconButton, Input, PageHeader, SearchField, SegmentedControl, StatusBadge, StatusTag, Surface, Tabs, Text } from './index'
 import { discreteSliderIndexFromPointer } from './discreteSlider'
+import { nextEnabledTabIndex } from './tabNavigation'
 import { Icon } from '../Icon'
 
 describe('design system foundations', () => {
@@ -150,6 +151,18 @@ describe('design system foundations', () => {
     for (const icon of ['refresh', 'ai', 'sun', 'info', 'download']) {
       expect(settings).toContain(`icon: '${icon}'`)
     }
+  })
+
+  it('moves shared tabs with arrow, home and end keys while skipping disabled tabs', () => {
+    const options = [{}, { disabled: true }, {}, {}]
+
+    expect(nextEnabledTabIndex(options, 0, 'ArrowRight')).toBe(2)
+    expect(nextEnabledTabIndex(options, 2, 'ArrowLeft')).toBe(0)
+    expect(nextEnabledTabIndex(options, 0, 'ArrowLeft')).toBe(3)
+    expect(nextEnabledTabIndex(options, 3, 'ArrowDown')).toBe(0)
+    expect(nextEnabledTabIndex(options, 0, 'ArrowUp')).toBe(3)
+    expect(nextEnabledTabIndex(options, 2, 'Home')).toBe(0)
+    expect(nextEnabledTabIndex(options, 0, 'End')).toBe(3)
   })
 
   it('keeps feature headers and compact AI actions on shared primitives', () => {
