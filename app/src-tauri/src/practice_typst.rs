@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -20,6 +21,7 @@ const CONTENT_WIDTH_POINTS: f32 = A4_WIDTH_POINTS - PAGE_MARGIN_POINTS * 2.0;
 const TYPST_VERSION: &str = "0.14.2";
 const RENDERER_VERSION: &str = "axiom-typst-v2";
 const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
+const RENDER_OUTPUT_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,12 +245,18 @@ fn inline_typst(content: &[InlineContent]) -> Result<String, String> {
                 output.push(')');
             }
             InlineContent::InlineMath { latex } => {
-                output.push('$');
-                output.push_str(
-                    &latex_to_typst(latex)
-                        .map_err(|error| format!("无法排版行内公式 `{latex}`：{error}"))?,
-                );
-                output.push('$');
+                if latex.as_bytes().windows(2).any(|pair| pair == b"__") {
+                    output.push_str("#text(");
+                    output.push_str(&typst_string(latex));
+                    output.push(')');
+                } else {
+                    output.push('$');
+                    output.push_str(
+                        &latex_to_typst(latex)
+                            .map_err(|error| format!("无法排版行内公式 `{latex}`：{error}"))?,
+                    );
+                    output.push('$');
+                }
             }
         }
     }
@@ -819,6 +827,20 @@ fn typst_binary() -> Result<PathBuf, String> {
     Err("Axiom 缺少离线 Typst 排版引擎，请重新安装应用".to_string())
 }
 
+fn read_renderer_output<R: Read>(mut reader: R) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut buffer = [0u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = RENDER_OUTPUT_LIMIT.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+    Ok(retained)
+}
+
 fn run_typst(binary: &Path, arguments: &[String], directory: &Path) -> Result<String, String> {
     let mut child = Command::new(binary)
         .args(arguments)
@@ -828,25 +850,49 @@ fn run_typst(binary: &Path, arguments: &[String], directory: &Path) -> Result<St
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("无法启动 Typst 排版引擎：{error}"))?;
-    let status = child
-        .wait_timeout(RENDER_TIMEOUT)
-        .map_err(|error| format!("等待 Typst 排版失败：{error}"))?;
-    if status.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("Typst 排版超过 20 秒限制".to_string());
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("读取 Typst 排版结果失败：{error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 Typst 标准输出".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 Typst 错误输出".to_string())?;
+    let stdout_reader = thread::spawn(move || read_renderer_output(stdout));
+    let stderr_reader = thread::spawn(move || read_renderer_output(stderr));
+    let status = match child.wait_timeout(RENDER_TIMEOUT) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err("Typst 排版超过 20 秒限制".to_string());
+        }
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(format!("等待 Typst 排版失败：{error}"));
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "读取 Typst 标准输出时后台任务异常".to_string())?
+        .map_err(|error| format!("读取 Typst 标准输出失败：{error}"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "读取 Typst 错误输出时后台任务异常".to_string())?
+        .map_err(|error| format!("读取 Typst 错误输出失败：{error}"))?;
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         return Err(format!(
             "Typst 排版失败：{}",
             stderr.lines().take(10).collect::<Vec<_>>().join(" ")
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&stdout).to_string())
 }
 
 fn verify_typst(binary: &Path, directory: &Path) -> Result<String, String> {
@@ -1214,6 +1260,8 @@ fn safe_render_error(
             "renderer_unavailable",
             "离线排版引擎不可用",
         )
+    } else if raw.contains("超过 20 秒限制") {
+        ("renderer_runtime", "renderer_timeout", "练习文档排版超时")
     } else if raw.contains("layout") || raw.contains("必须按练习、解析组织") {
         (
             "document_contract",
@@ -1517,6 +1565,49 @@ mod tests {
         assert!(serialized.contains("document_content_unsupported"));
         assert!(serialized.contains("axiom-typst-v2"));
         assert!(!serialized.contains("private-formula"));
+
+        let timeout = safe_render_error(&document, "Typst 排版超过 20 秒限制", None);
+        assert_eq!(timeout.stage, "renderer_runtime");
+        assert_eq!(timeout.code, "renderer_timeout");
+    }
+
+    #[test]
+    fn renders_answer_blanks_as_text_for_existing_documents() {
+        let rendered = inline_typst(&[InlineContent::InlineMath {
+            latex: "(1)___________".into(),
+        }])
+        .expect("render answer blank");
+        assert_eq!(rendered, "#text(\"(1)___________\")");
+    }
+
+    #[test]
+    fn drains_large_typst_diagnostics_without_false_timeout() {
+        let directory =
+            std::env::temp_dir().join(format!("axiom-typst-diagnostics-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create diagnostics fixture directory");
+        let source = (0..500)
+            .map(|_| "$________$")
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(directory.join("invalid.typ"), source).expect("write invalid Typst fixture");
+        let binary = typst_binary().expect("locate Typst renderer");
+        let started = std::time::Instant::now();
+        let error = run_typst(
+            &binary,
+            &[
+                "compile".into(),
+                "--diagnostic-format".into(),
+                "short".into(),
+                "invalid.typ".into(),
+                "invalid.pdf".into(),
+            ],
+            &directory,
+        )
+        .expect_err("invalid source must fail");
+        assert!(error.contains("Typst 排版失败"));
+        assert!(!error.contains("20 秒限制"));
+        assert!(started.elapsed() < RENDER_TIMEOUT);
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1534,6 +1625,17 @@ mod tests {
             true,
         );
         let mut document = fixture(&image_path, &svg_path);
+        let ContentBlock::Question { content, .. } = &mut document.sections[0].blocks[2] else {
+            panic!("exercise question fixture")
+        };
+        content.insert(
+            0,
+            ContentBlock::Paragraph {
+                content: vec![InlineContent::InlineMath {
+                    latex: "(1)___________".into(),
+                }],
+            },
+        );
         let destination = directory.join("practice.pdf");
         let output =
             render_to_path(&document, &destination).expect("render Typst practice document");

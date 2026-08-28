@@ -217,7 +217,9 @@ export function answerPolicy(item: PracticeItem, mode: PracticeSet['sessionMode'
 const DEFINITE_LATEX_COMMAND =
   /\\(?:d?frac|sqrt|angle|triangle|perp|parallel|overline|underline|vec|overrightarrow|cdot|times|div|pm|leq|geq|neq|approx|infty|sin|cos|tan|log|ln|sum|prod|int|lim|left|right|begin|end|because|therefore|Rightarrow|Leftarrow|Leftrightarrow|rightarrow|leftarrow|to|implies|impliedby|circ)\b/u
 const MATH_CANDIDATE = /[A-Za-z0-9\\{}()[\].,+\-*/=<>^_\s]+/gu
-const MATH_OPERATOR = /[=+\-*/<>^_]|≤|≥|≠|≈/u
+const MATH_OPERATOR = /[=+\-*/<>^]|≤|≥|≠|≈/u
+const MATH_SUBSCRIPT = /_(?:[A-Za-z0-9]|\{)/u
+const ANSWER_BLANK = /_{2,}/u
 
 function appendText(content: PracticeInlineContent[], text: string) {
   if (!text) return
@@ -238,8 +240,10 @@ function splitPlainPrintableContent(value: string): PracticeInlineContent[] {
     const start = match.index
     const raw = value.slice(start, start + protectedRaw.length)
     const candidate = raw.trim()
-    const mathLike = DEFINITE_LATEX_COMMAND.test(candidate)
-      || (MATH_OPERATOR.test(candidate) && /[A-Za-z0-9]/u.test(candidate))
+    const mathLike = !ANSWER_BLANK.test(candidate) && (
+      DEFINITE_LATEX_COMMAND.test(candidate)
+      || ((MATH_OPERATOR.test(candidate) || MATH_SUBSCRIPT.test(candidate)) && /[A-Za-z0-9]/u.test(candidate))
+    )
     if (!candidate || !mathLike) continue
     appendText(content, value.slice(cursor, start))
     const leading = raw.length - raw.trimStart().length
@@ -268,7 +272,10 @@ export function parsePracticeInlineContent(markdown: string): PracticeInlineCont
       else content.push(item)
     })
     const latex = normalized.slice(index + delimiter.length, end).trim()
-    if (latex) content.push({ kind: 'inlineMath', latex })
+    if (latex) {
+      if (ANSWER_BLANK.test(latex)) appendText(content, latex)
+      else content.push({ kind: 'inlineMath', latex })
+    }
     cursor = end + delimiter.length
   }
   splitPlainPrintableContent(normalized.slice(cursor)).forEach((item) => {

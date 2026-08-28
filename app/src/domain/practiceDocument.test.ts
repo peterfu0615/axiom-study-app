@@ -93,6 +93,17 @@ describe('PracticeDocument', () => {
     expect(content.filter((item) => item.kind === 'text').map((item) => item.text).join('')).not.toContain('$')
   })
 
+  it('keeps answer blanks as printable text instead of invalid math', () => {
+    const content = parsePracticeInlineContent(
+      String.raw`物理性质：(1)___________；显式占位：$(2)___________$；下标 $x_1$。`,
+    )
+    expect(content.filter((item) => item.kind === 'inlineMath')).toEqual([
+      { kind: 'inlineMath', latex: 'x_1' },
+    ])
+    expect(content.filter((item) => item.kind === 'text').map((item) => item.text).join(''))
+      .toContain('(1)___________；显式占位：(2)___________')
+  })
+
   it('adapts one practice set into practice and solution sections with forced cover breaks', () => {
     const practiceSet = set(6)
     practiceSet.items[0].questionImagePath = '/tmp/source-question.png'
