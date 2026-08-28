@@ -147,6 +147,25 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, operation: (i
   return output
 }
 
+export const PRACTICE_VARIANT_WAIT_BUDGET_MS = 20_000
+
+export async function withinOptionalVariantBudget<T>(
+  operation: Promise<T>,
+  timeoutMs = PRACTICE_VARIANT_WAIT_BUDGET_MS,
+): Promise<T | null> {
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<null>((resolve) => {
+        timeout = globalThis.setTimeout(() => resolve(null), Math.max(0, timeoutMs))
+      }),
+    ])
+  } finally {
+    if (timeout !== undefined) globalThis.clearTimeout(timeout)
+  }
+}
+
 export async function createPracticeSet(
   input: PracticePlannerInput,
   options: {
@@ -166,15 +185,16 @@ export async function createPracticeSet(
     settings: input.sessionSettings,
   })
   try {
+    const optionalVariantDeadline = Date.now() + PRACTICE_VARIANT_WAIT_BUDGET_MS
     const preparedOutcomes = await mapWithConcurrency(blueprint.items, 2, async (planned) => ({
       planned,
       outcome: options.preparedVariants?.get(planned.problem.problemId) ?? (!options.forceVariant && planned.requestedSourceType === 'existing_problem'
         ? { planId: '', variant: null, fallbackCode: 'original_only' }
-        : await generateVerifiedPracticeVariant({
+        : await withinOptionalVariantBudget(generateVerifiedPracticeVariant({
           source: planned.problem,
           targetDifficulty: planned.difficulty,
           variationLevel: planned.requestedVariationLevel,
-        })),
+        }), optionalVariantDeadline - Date.now()) ?? { planId: '', variant: null, fallbackCode: 'variant_generation_deferred' }),
     }))
     const renderedVariantDiagrams = new Map<string, {
       source: string; contract: DiagramValidationContract; render: TikzRenderResult
