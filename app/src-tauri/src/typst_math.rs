@@ -187,15 +187,15 @@ impl Parser<'_> {
             "frac" | "dfrac" | "tfrac" => {
                 let numerator = self.required_group(&name)?;
                 let denominator = self.required_group(&name)?;
-                Ok(format!("frac({numerator}, {denominator})"))
+                Ok(math_token(format!("frac({numerator}, {denominator})")))
             }
             "sqrt" => {
                 let radicand = self.required_group(&name)?;
-                Ok(format!("sqrt({radicand})"))
+                Ok(math_token(format!("sqrt({radicand})")))
             }
             "text" | "textrm" | "textnormal" => {
                 let value = self.required_raw_group(&name)?;
-                Ok(typst_math_string(&value))
+                Ok(math_token(typst_math_string(&value)))
             }
             "mathrm" | "mathbf" | "mathit" | "mathsf" | "mathtt" => {
                 let value = self.required_group(&name)?;
@@ -206,52 +206,61 @@ impl Parser<'_> {
                     "mathtt" => "mono",
                     _ => "upright",
                 };
-                Ok(format!("{function}({value})"))
+                Ok(math_token(format!("{function}({value})")))
             }
-            "overline" | "bar" => Ok(format!("overline({})", self.required_group(&name)?)),
-            "underline" => Ok(format!("underline({})", self.required_group(&name)?)),
-            "vec" | "overrightarrow" => Ok(format!("arrow({})", self.required_group(&name)?)),
+            "overline" | "bar" => Ok(math_token(format!(
+                "overline({})",
+                self.required_group(&name)?
+            ))),
+            "underline" => Ok(math_token(format!(
+                "underline({})",
+                self.required_group(&name)?
+            ))),
+            "vec" | "overrightarrow" => Ok(math_token(format!(
+                "arrow({})",
+                self.required_group(&name)?
+            ))),
             "operatorname" => {
                 let value = self.required_raw_group(&name)?;
-                Ok(format!("op({})", typst_math_string(&value)))
+                Ok(math_token(format!("op({})", typst_math_string(&value))))
             }
             "left" | "right" => Ok(String::new()),
             "quad" | "qquad" | "enspace" | "thinspace" => Ok(" ".to_string()),
-            "angle" => Ok("angle".to_string()),
-            "triangle" => Ok("triangle".to_string()),
-            "perp" => Ok("perp".to_string()),
-            "parallel" => Ok("parallel".to_string()),
-            "circ" => Ok("degree".to_string()),
-            "because" => Ok("because".to_string()),
-            "therefore" => Ok("therefore".to_string()),
-            "Longrightarrow" => Ok("==>".to_string()),
-            "Longleftarrow" => Ok("<==".to_string()),
-            "Leftrightarrow" | "Longleftrightarrow" => Ok("<==>".to_string()),
-            "Rightarrow" | "rightarrow" | "to" | "implies" => Ok("=>".to_string()),
-            "Leftarrow" | "leftarrow" | "impliedby" => Ok("<=".to_string()),
-            "geq" | "ge" => Ok(">=".to_string()),
-            "leq" | "le" => Ok("<=".to_string()),
-            "neq" | "ne" => Ok("!=".to_string()),
-            "approx" => Ok("approx".to_string()),
-            "times" => Ok("times".to_string()),
-            "cdot" => Ok("dot.c".to_string()),
-            "div" => Ok("div".to_string()),
-            "pm" => Ok("plus.minus".to_string()),
-            "mp" => Ok("minus.plus".to_string()),
-            "infty" => Ok("infinity".to_string()),
+            "angle" => Ok(math_token("angle")),
+            "triangle" => Ok(math_token("triangle")),
+            "perp" => Ok(math_token("perp")),
+            "parallel" => Ok(math_token("parallel")),
+            "circ" => Ok(math_token("degree")),
+            "because" => Ok(math_token("because")),
+            "therefore" => Ok(math_token("therefore")),
+            "Longrightarrow" => Ok(math_token("==>")),
+            "Longleftarrow" => Ok(math_token("<==")),
+            "Leftrightarrow" | "Longleftrightarrow" => Ok(math_token("<==>")),
+            "Rightarrow" | "rightarrow" | "to" | "implies" => Ok(math_token("=>")),
+            "Leftarrow" | "leftarrow" | "impliedby" => Ok(math_token("<=")),
+            "geq" | "ge" => Ok(math_token(">=")),
+            "leq" | "le" => Ok(math_token("<=")),
+            "neq" | "ne" => Ok(math_token("!=")),
+            "approx" => Ok(math_token("approx")),
+            "times" => Ok(math_token("times")),
+            "cdot" => Ok(math_token("dot.c")),
+            "div" => Ok(math_token("div")),
+            "pm" => Ok(math_token("plus.minus")),
+            "mp" => Ok(math_token("minus.plus")),
+            "infty" => Ok(math_token("infinity")),
             "sum" | "prod" | "int" | "lim" | "sin" | "cos" | "tan" | "log" | "ln" | "min"
-            | "max" | "det" | "gcd" => Ok(name),
+            | "max" | "det" | "gcd" => Ok(math_token(name)),
             "alpha" | "beta" | "gamma" | "delta" | "epsilon" | "varepsilon" | "zeta" | "eta"
             | "theta" | "vartheta" | "iota" | "kappa" | "lambda" | "mu" | "nu" | "xi" | "pi"
             | "varpi" | "rho" | "varrho" | "sigma" | "varsigma" | "tau" | "upsilon" | "phi"
             | "varphi" | "chi" | "psi" | "omega" | "Gamma" | "Delta" | "Theta" | "Lambda"
             | "Xi" | "Pi" | "Sigma" | "Upsilon" | "Phi" | "Psi" | "Omega" => {
-                Ok(name.to_ascii_lowercase())
+                Ok(math_token(name.to_ascii_lowercase()))
             }
             "begin" => {
                 let environment = self.required_raw_group(&name)?;
                 match environment.as_str() {
-                    "cases" => self.parse_cases_environment(),
+                    "cases" => self.parse_cases_environment().map(math_token),
                     _ => Err(format!("公式暂不支持 LaTeX 环境 \\begin{{{environment}}}")),
                 }
             }
@@ -375,6 +384,10 @@ fn typst_math_string(value: &str) -> String {
     )
 }
 
+fn math_token(value: impl AsRef<str>) -> String {
+    format!(" {} ", value.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,7 +399,7 @@ mod tests {
             (r"\angle ABC", "angle A B C"),
             (r"AC \perp BD", "A C perp B D"),
             (r"\frac{1}{2}", "frac(1, 2)"),
-            (r"180^\circ", "180^degree"),
+            (r"180^\circ", "180^ degree"),
             (r"\sqrt{3}", "sqrt(3)"),
             ("x^2+2x+1", "x^2+2x+1"),
         ];
@@ -399,8 +412,17 @@ mod tests {
     fn converts_nested_fractions_text_and_reasoning_symbols() {
         assert_eq!(
             latex_to_typst(r"\because m>-\frac{\sqrt{3}}{2}\therefore \text{成立}").unwrap(),
-            r#"because m>-frac(sqrt(3), 2)therefore "成立""#
+            r#"because m>- frac( sqrt(3) , 2) therefore "成立""#
         );
+    }
+
+    #[test]
+    fn separates_adjacent_measurement_symbols_from_numbers() {
+        assert_eq!(
+            latex_to_typst(r"2410\pm40^\circ\text{C}").unwrap(),
+            r#"2410 plus.minus 40^ degree "C""#
+        );
+        assert_eq!(latex_to_typst(r"2\pi r").unwrap(), "2 pi r");
     }
 
     #[test]
@@ -416,7 +438,7 @@ mod tests {
     fn parses_math_commands_inside_cases_rows() {
         assert_eq!(
             latex_to_typst(r"\begin{cases} x=\frac{1}{2} \\ y=\sqrt{3} \end{cases}").unwrap(),
-            "cases(x=frac(1, 2), y=sqrt(3))"
+            "cases(x= frac(1, 2) , y= sqrt(3) )"
         );
     }
 

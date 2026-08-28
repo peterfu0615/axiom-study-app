@@ -658,7 +658,7 @@ fn practice_page_typst(
            #place(top + left, dx: 42pt, dy: 42pt)[#box(width: {}pt)[\n\
              #text(size: 16pt, weight: \"bold\")[Axiom {}{}]\n\
              #v(4pt)\n\
-             #text(size: 9pt, fill: rgb(\"#77746c\"))[姓名：________________　日期：______________]\n\
+             #text(size: 9pt, fill: rgb(\"#77746c\"))[#text(\"姓名：________________　日期：______________\")]\n\
              #v(16pt)\n\
              {}\n\
            ]]\n\
@@ -1631,9 +1631,17 @@ mod tests {
         content.insert(
             0,
             ContentBlock::Paragraph {
-                content: vec![InlineContent::InlineMath {
-                    latex: "(1)___________".into(),
-                }],
+                content: vec![
+                    InlineContent::InlineMath {
+                        latex: "(1)___________".into(),
+                    },
+                    InlineContent::Text {
+                        text: "；熔点".into(),
+                    },
+                    InlineContent::InlineMath {
+                        latex: r"2410\pm40^\circ\text{C}".into(),
+                    },
+                ],
             },
         );
         let destination = directory.join("practice.pdf");
