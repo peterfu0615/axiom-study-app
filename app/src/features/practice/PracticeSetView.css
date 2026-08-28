@@ -19,12 +19,6 @@
 .practice-document-error { padding: var(--ax-space-8); }
 .practice-document-error strong { color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
 .practice-document-error span { max-width: 360px; line-height: var(--ax-type-body-line); }
-.practice-document-diagnostic { width: min(440px, 100%); margin-top: var(--ax-space-2); color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); text-align: left; }
-.practice-document-diagnostic > summary { width: fit-content; margin: 0 auto; cursor: pointer; }
-.practice-document-diagnostic dl { display: grid; gap: var(--ax-space-2); margin: var(--ax-space-3) 0 0; padding: var(--ax-space-3); border: 1px solid var(--ax-border-subtle); border-radius: var(--ax-radius-sm); background: var(--ax-color-surface); }
-.practice-document-diagnostic dl > div { min-width: 0; display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: var(--ax-space-2); }
-.practice-document-diagnostic dt { color: var(--ax-text-tertiary); }
-.practice-document-diagnostic dd { min-width: 0; margin: 0; color: var(--ax-text-primary); overflow-wrap: anywhere; }
 .practice-content-summary { margin-top: var(--ax-space-5); color: var(--ax-text-secondary); }
 .practice-content-summary > summary { cursor: pointer; font-size: var(--ax-type-secondary-size); }
 .practice-content-summary > div { display: grid; gap: var(--ax-space-3); margin-top: var(--ax-space-3); }

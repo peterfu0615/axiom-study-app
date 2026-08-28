@@ -10,11 +10,9 @@ import { importImage, mediaAssetUrl, openPracticeSubmission, preparePracticeSubm
 import { mapWithConcurrency } from '../../platform/concurrency'
 import {
   openExportedPracticePdf,
-  practiceDocumentDiagnostic,
   preparePracticeDocument,
   printExportedPracticePdf,
   saveExportedPracticePdf,
-  type PracticeDocumentDiagnostic,
   type PracticeDocumentRecord,
 } from '../../platform/practiceDocumentDatabase'
 import {
@@ -143,7 +141,6 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const [attemptLoaded, setAttemptLoaded] = useState(Boolean(initialAttempt))
   const [finalizing, setFinalizing] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
-  const [documentDiagnostic, setDocumentDiagnostic] = useState<PracticeDocumentDiagnostic | null>(null)
   const [manualMatch, setManualMatch] = useState<{
     submissions: PracticeAnswerSubmission[]
     pageOptions: PracticeSubmissionPageOption[]
@@ -163,7 +160,7 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   useEffect(() => {
     let cancelled = false
     documentRequest.current = null
-    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null); setDocumentDiagnostic(null)
+    setDocument(null); setSelectedSection('exercise'); setCurrentPage(1); setPagePreview(null); setDocumentState('idle'); setFeedback(null)
     setAttempt(initialAttempt ?? null); setMode(initialMode ?? 'ready'); setAttemptLoaded(Boolean(initialAttempt)); setManualMatch(null)
     if (!initialAttempt) {
       void getLatestPracticeAttempt(practiceSet.id).then((latest) => {
@@ -199,12 +196,10 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
       try {
         const record = await preparePracticeDocument(practiceSet)
         setDocument(record)
-        setDocumentDiagnostic(null)
         setDocumentState('ready')
         return record
       } catch (reason) {
         setDocumentState('error')
-        setDocumentDiagnostic(practiceDocumentDiagnostic(reason, practiceSet.id))
         // The stage owns the retry affordance; avoid repeating the same error
         // in a second global notice above the preview.
         setFeedback(null)
@@ -223,7 +218,6 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
   const retryDocument = () => {
     setDocumentState('idle')
     setFeedback(null)
-    setDocumentDiagnostic(null)
     void ensureDocument().catch(() => null)
   }
   const chooseSection = (section: PracticePdfSection) => {
@@ -511,16 +505,6 @@ export function PracticeSetView({ practiceSet, onBack, onOpenPracticeSet, initia
           <strong>练习文档暂时无法生成</strong>
           <span>请重试；如果仍然失败，请重新生成这组练习。</span>
           <Button onClick={retryDocument} variant="secondary">重新生成</Button>
-          {documentDiagnostic && <details className="practice-document-diagnostic">
-            <summary>详情</summary>
-            <dl>
-              <div><dt>阶段</dt><dd>{documentDiagnostic.stage}</dd></div>
-              <div><dt>代码</dt><dd>{documentDiagnostic.code}</dd></div>
-              <div><dt>文档契约</dt><dd>{documentDiagnostic.rendererContract}</dd></div>
-              {documentDiagnostic.rendererVersion && <div><dt>排版引擎</dt><dd>{documentDiagnostic.rendererVersion}</dd></div>}
-              <div><dt>练习 ID</dt><dd>{documentDiagnostic.practiceSetId}</dd></div>
-            </dl>
-          </details>}
         </div> : documentState === 'loading' || !document ? <div className="practice-document-loading"><span className="ax-spinner" /><strong>正在准备完整文档…</strong></div> : <>
           <div className="practice-document-page">
             {pagePreview

@@ -53,7 +53,16 @@ for (const path of sourceFiles.filter((candidate) => candidate.endsWith('.tsx'))
   }
 }
 
-const forbiddenUserCopy = ['确认发送题目图片', '实例指纹', '安全错误', 'variant-fnv1a:', '审校']
+const forbiddenUserCopy = [
+  '确认发送题目图片',
+  '实例指纹',
+  '安全错误',
+  'variant-fnv1a:',
+  '审校',
+  '文档契约',
+  '练习 ID',
+  '排版引擎',
+]
 for (const path of sourceFiles.filter((candidate) => candidate.endsWith('.tsx') && candidate.includes('/features/'))) {
   const source = readFileSync(path, 'utf8')
   for (const phrase of forbiddenUserCopy) {
