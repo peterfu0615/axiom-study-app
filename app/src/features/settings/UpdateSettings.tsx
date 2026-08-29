@@ -130,9 +130,13 @@ export function UpdateSettings() {
       {error && (
         <div className="update-error">
           <strong>{updateErrorTitle(error.stage)}</strong>
-          <p>{error.message}</p>
+          <p>{error.stage === 'checking'
+            ? '暂时无法连接更新服务。请检查网络后重新尝试。'
+            : error.stage === 'verifying_signature'
+              ? '下载的更新未通过签名验证，Axiom 没有安装它。'
+              : '更新没有完成，当前版本仍可继续使用。'}</p>
           <p className="update-hint">
-            错误码：{error.code}。{error.retryable ? '可以重试；' : ''}当前版本与本地数据未被替换。
+            {error.retryable ? '可以重新尝试；' : ''}当前版本与本地数据未被替换。
           </p>
           <a href={error.manualDownloadUrl} rel="noreferrer" target="_blank">手动下载桥接版本</a>
         </div>

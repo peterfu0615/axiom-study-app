@@ -9,6 +9,7 @@ import type {
   SavedProblem,
 } from '../../domain/models'
 import { changedRegionTypes } from '../../domain/problemRegions'
+import { userFacingError } from '../../domain/userFacingError'
 import {
   getProblemRegions,
   replaceProblemRegions,
@@ -82,7 +83,13 @@ export function ProblemCropEditor({
       setRect(nextQuestion.rect)
       setActiveRegionId(nextQuestion.id)
     }).catch((error) => {
-      if (!cancelled) notify(`读取区域失败：${String(error)}`, 'error')
+      console.warn('读取错题裁剪区域失败', error)
+      if (!cancelled) {
+        notify(userFacingError(
+          error,
+          '未能读取已保存的裁剪区域。原图没有改变，请返回后重试。',
+        ), 'error')
+      }
     })
     return () => {
       cancelled = true
@@ -117,7 +124,11 @@ export function ProblemCropEditor({
       const changes = changedRegionTypes(originalRegions, nextRegions)
       onSaved(await replaceProblemRegions(problem.id, nextRegions), changes)
     } catch (error) {
-      notify(`重新裁剪失败：${String(error)}`, 'error')
+      console.warn('保存错题裁剪区域失败', error)
+      notify(userFacingError(
+        error,
+        '裁剪没有保存，当前调整仍然保留。请重试。',
+      ), 'error')
     } finally {
       setSaving(false)
     }

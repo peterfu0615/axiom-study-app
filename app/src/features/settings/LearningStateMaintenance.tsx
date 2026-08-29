@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Dialog, StatusBadge } from '../../components/ui'
+import { Button, Dialog, DialogFooter, StatusBadge } from '../../components/ui'
 import type { ReviewReplayPreview } from '../../domain/reviewReplay'
+import { userFacingError } from '../../domain/userFacingError'
 import { previewLearningState, rebuildLearningState } from '../../platform/reviewMaintenance'
 import './LearningStateMaintenance.css'
 
@@ -22,7 +23,13 @@ export function LearningStateMaintenance() {
   const check = useCallback(async () => {
     setBusy(true); setError(null); setRepaired(false)
     try { setPreview(await previewLearningState()) }
-    catch (reason) { setError(String(reason)) }
+    catch (reason) {
+      console.warn('检查学习状态失败', reason)
+      setError(userFacingError(
+        reason,
+        '未能检查学习状态。现有学习记录没有修改，请重试。',
+      ))
+    }
     finally { setBusy(false) }
   }, [])
   useEffect(() => { void check() }, [check])
@@ -33,7 +40,13 @@ export function LearningStateMaintenance() {
     try {
       const result = await rebuildLearningState()
       setPreview(result.after); setRepaired(true)
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) {
+      console.warn('重新生成学习状态失败', reason)
+      setError(userFacingError(
+        reason,
+        '未能重新生成学习状态。现有错题和复习记录仍保留，请重新检查后重试。',
+      ))
+    }
     finally { setBusy(false) }
   }
 
@@ -62,10 +75,10 @@ export function LearningStateMaintenance() {
       <Dialog onClose={() => setRebuildConfirming(false)} open={rebuildConfirming} title="重新生成学习状态">
         <p>将根据现有复习记录重新生成学习状态。错题、复习记录和今日计划不会被修改。</p>
         <p>此操作不可撤销，是否继续？</p>
-        <div className="learning-maintenance__confirm-actions">
+        <DialogFooter>
           <Button onClick={() => setRebuildConfirming(false)} variant="ghost">取消</Button>
-          <Button disabled={busy} onClick={() => void rebuild()} variant="danger">{busy ? '正在重建…' : '确认重建'}</Button>
-        </div>
+          <Button disabled={busy} onClick={() => void rebuild()} variant="danger">{busy ? '正在重新生成…' : '重新生成学习状态'}</Button>
+        </DialogFooter>
       </Dialog>
   </div>
 }

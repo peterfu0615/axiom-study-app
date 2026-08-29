@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DiagramView } from '../../components/DiagramView'
 import type { Diagram } from '../../domain/diagram'
+import { userFacingError } from '../../domain/userFacingError'
 import { renderTikz } from '../../platform/native'
 import './DiagramPreview.css'
 
@@ -39,7 +40,10 @@ export function DiagramPreview() {
     void Promise.all(fixtures.map(async ([, source], index) =>
       diagramFromRender(index, source, await renderTikz(source))))
       .then((next) => { if (!cancelled) setDiagrams(next) })
-      .catch((reason) => { if (!cancelled) setError(String(reason)) })
+      .catch((reason) => {
+        console.warn('渲染图形验收样例失败', reason)
+        if (!cancelled) setError(userFacingError(reason, '图形样例没有完成渲染，请重新打开此预览。'))
+      })
     return () => { cancelled = true }
   }, [])
 

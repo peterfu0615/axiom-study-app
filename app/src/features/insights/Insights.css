@@ -9,7 +9,7 @@
 .insights-section > header { display: flex; align-items: end; justify-content: space-between; gap: var(--ax-space-5); margin-bottom: var(--ax-space-6); }
 .insights-section h2 { margin: var(--ax-space-1) 0 0; color: var(--ax-text-primary); font-size: var(--ax-type-section-size); }
 .insights-trend { min-width: 0; height: 150px; display: grid; grid-template-columns: repeat(7, minmax(22px, 1fr)); align-items: end; gap: var(--ax-space-3); }
-.insights-trend--30 { grid-template-columns: repeat(30, minmax(12px, 1fr)); gap: 3px; overflow-x: auto; }
+.insights-trend--30 { grid-template-columns: repeat(30, minmax(12px, 1fr)); gap: var(--ax-space-2); overflow-x: auto; }
 .insights-trend__day { height: 100%; display: grid; grid-template-rows: 1fr 18px 18px; justify-items: center; gap: var(--ax-space-1); min-width: 0; }
 .insights-trend__bar { width: min(24px, 80%); height: 100%; display: flex; align-items: end; border-radius: var(--ax-radius-sm); background: var(--ax-surface-muted); overflow: hidden; }
 .insights-trend__bar i { width: 100%; min-height: 2px; border-radius: var(--ax-radius-sm); background: var(--ax-accent); }

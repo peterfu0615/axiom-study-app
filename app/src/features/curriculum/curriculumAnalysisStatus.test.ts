@@ -96,23 +96,26 @@ describe('global curriculum analysis status', () => {
     expect(markup).not.toContain('放弃')
   })
 
-  it('turns off all flowing highlights when reduced motion is requested', () => {
+  it('keeps task feedback static and removes determinate width motion when requested', () => {
     const css = readFileSync(new URL('../../components/ui/FlowingTaskSurface.css', import.meta.url), 'utf8')
     const reducedMotion = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
-    expect(reducedMotion).toContain('.flowing-task-surface__glow')
     expect(reducedMotion).toContain('.flowing-task-surface__progress > span')
-    expect(reducedMotion).toContain('animation: none')
+    expect(reducedMotion).toContain('transition: none')
+    expect(css).not.toContain('.flowing-task-surface__glow')
+    expect(css).not.toContain('@keyframes')
   })
 
-  it('derives every AI flowing highlight from the active visual theme', () => {
+  it('uses semantic theme tones without a decorative flowing highlight', () => {
     const tokens = readFileSync(new URL('../../index.css', import.meta.url), 'utf8')
     const surface = readFileSync(new URL('../../components/ui/FlowingTaskSurface.css', import.meta.url), 'utf8')
-    const app = readFileSync(new URL('../../App.css', import.meta.url), 'utf8')
-    expect(tokens).toContain('--ax-ai-flow-highlight: color-mix(in srgb, var(--brand)')
-    expect(surface).toContain('var(--ax-ai-flow-highlight)')
-    expect(app).toContain('var(--ax-ai-flow-highlight)')
-    expect(app).not.toContain('rgba(255, 239, 154')
-    expect(app).not.toContain('rgba(129, 98, 0')
+    const status = readFileSync(new URL('./CurriculumAnalysisStatus.css', import.meta.url), 'utf8')
+    expect(tokens).toContain('--ax-ai-flow-soft: color-mix(in srgb, var(--brand)')
+    expect(tokens).toContain('--ax-ai-flow-strong: color-mix(in srgb, var(--brand)')
+    expect(surface).toContain('var(--ax-ai-flow-soft)')
+    expect(surface).toContain('var(--ax-ai-flow-strong)')
+    expect(status).toContain('var(--ax-ai-flow-soft)')
+    expect(surface).not.toContain('var(--ax-ai-flow-highlight)')
+    expect(surface).not.toContain('gradient(')
   })
 
   it('uses persisted counts and does not fabricate percentage text', () => {

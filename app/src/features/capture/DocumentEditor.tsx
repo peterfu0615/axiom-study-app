@@ -27,7 +27,7 @@ import {
 } from '../../platform/database'
 import { runProblemAIWorker } from '../../ai/pipeline'
 import { processDocument } from '../../platform/native'
-import { SegmentedControl } from '../../components/ui'
+import { Button, IconButton, PageHeader, SegmentedControl, Tooltip } from '../../components/ui'
 
 type EnhancementMode = 'color' | 'grayscale'
 type PreviewMode = 'corrected' | 'original'
@@ -160,7 +160,8 @@ export function DocumentEditor({
       } catch (error) {
         setCorrectedPath(document.correctedImagePath)
         setProcessingStage('failed')
-        notify(`页面处理失败：${String(error)}`, 'error')
+        console.warn('重新处理页面失败', error)
+        notify('页面没有重新处理。上一次结果和当前选择均已保留，请检查图片后重试。', 'error')
       } finally {
         // The user may have navigated back to capture mid-processing; the
         // backend run still completes and persists, only the UI writes stop.
@@ -231,7 +232,8 @@ export function DocumentEditor({
           if (!cancelled) {
             setCorrectedPath(document.correctedImagePath)
             setProcessingStage('failed')
-            notify(`页面处理失败：${String(error)}`, 'error')
+            console.warn('自动处理页面失败', error)
+            notify('暂时无法识别这张图片。原图已安全保存，可以重试或返回采集。', 'error')
           }
         } finally {
           if (!cancelled) setProcessing(false)
@@ -433,37 +435,17 @@ export function DocumentEditor({
     )
   }
 
-  // Two-step inline confirmation for deleting OCR blocks: the first click
-  // arms the button, the second one deletes.  Disarms when the selection
-  // changes or after a short timeout so it cannot fire much later.
-  const [deleteArmed, setDeleteArmed] = useState(false)
-  const deleteArmTimerRef = useRef<number | null>(null)
-  useEffect(() => {
-    setDeleteArmed(false)
-    if (deleteArmTimerRef.current !== null) {
-      window.clearTimeout(deleteArmTimerRef.current)
-      deleteArmTimerRef.current = null
-    }
-  }, [activeId, selectedIds])
-  useEffect(() => () => {
-    if (deleteArmTimerRef.current !== null) window.clearTimeout(deleteArmTimerRef.current)
-  }, [])
-
   const deleteSelectedBlocks = () => {
     if (!selectedIds.size && !activeId) return
-    if (!deleteArmed) {
-      setDeleteArmed(true)
-      deleteArmTimerRef.current = window.setTimeout(() => {
-        deleteArmTimerRef.current = null
-        setDeleteArmed(false)
-      }, 3000)
-      return
-    }
-    if (deleteArmTimerRef.current !== null) {
-      window.clearTimeout(deleteArmTimerRef.current)
-      deleteArmTimerRef.current = null
-    }
     const ids = selectedIds.size ? selectedIds : new Set([activeId!])
+    const previous = {
+      activeId,
+      activeRegionId,
+      blocks,
+      regionSelections,
+      saveSelectedIds,
+      selectedIds,
+    }
     setBlocks((current) => current.filter((block) => !ids.has(block.id)))
     setSelectedIds(new Set())
     setSaveSelectedIds((current) =>
@@ -471,7 +453,19 @@ export function DocumentEditor({
     )
     setActiveId(null)
     setActiveRegionId(null)
-    setDeleteArmed(false)
+    notify(`已移除 ${ids.size} 个题目块`, 'info', {
+      action: {
+        label: '撤销',
+        onClick: () => {
+          setBlocks(previous.blocks)
+          setSelectedIds(previous.selectedIds)
+          setSaveSelectedIds(previous.saveSelectedIds)
+          setRegionSelections(previous.regionSelections)
+          setActiveId(previous.activeId)
+          setActiveRegionId(previous.activeRegionId)
+        },
+      },
+    })
   }
 
   const saveBlocks = async () => {
@@ -516,8 +510,9 @@ export function DocumentEditor({
       try {
         await onSaved()
       } catch (error) {
+        console.warn('刷新采集队列失败', error)
         notify(
-          `保存成功，但页面状态刷新失败：${String(error)}。错题已写入本地错题库。`,
+          '错题已保存，但采集队列没有刷新。返回采集后重新刷新即可，已保存内容不会丢失。',
           'error',
         )
         return
@@ -532,7 +527,8 @@ export function DocumentEditor({
           : undefined,
       )
     } catch (error) {
-      notify(`错题保存失败：${String(error)}`, 'error')
+      console.warn('保存错题失败', error)
+      notify('错题没有保存。当前题目范围和选择均已保留，请检查本地存储后重试。', 'error')
     } finally {
       setSaving(false)
     }
@@ -563,43 +559,38 @@ export function DocumentEditor({
 
   return (
     <main className="workspace editor-workspace">
-      <header className="editor-header">
-        <button className="back-button" onClick={onBack} type="button">
-          <Icon name="chevron-left" size={14} /> 返回采集
-        </button>
-        <div>
-          <p className="eyebrow">页面处理</p>
-          <h1>矫正与切题</h1>
-        </div>
-        <div className="editor-header-actions">
-          <button
-            className="secondary-action"
+      <PageHeader
+        actions={<div className="editor-header-actions">
+          <Button
             disabled={processing || saving}
             onClick={() => void runProcessing(mode)}
-            type="button"
+            variant="secondary"
           >
             <Icon name="refresh" size={16} />
             重新识别
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
             disabled={
               saving ||
               processing ||
               !correctedPath ||
               saveSelectedBlocks.length === 0
             }
+            loading={saving}
             onClick={requestSave}
-            type="button"
+            variant="primary"
           >
-            {saving
-              ? '保存中…'
-              : saveSelectedBlocks.length
-                ? `保存 ${saveSelectedBlocks.length} 道错题`
-                : '请选择要保存的题块'}
-          </button>
-        </div>
-      </header>
+            {saveSelectedBlocks.length
+              ? `保存 ${saveSelectedBlocks.length} 道错题`
+              : '请选择要保存的题块'}
+          </Button>
+        </div>}
+        className="editor-header"
+        eyebrow="页面处理"
+        leading={<Button onClick={onBack} variant="ghost"><Icon name="chevron-left" size={14} />返回采集</Button>}
+        summary="调整题目边界与附加区域，勾选需要收录的题目；保存后会进入自动整理。"
+        title="矫正与切题"
+      />
 
       <section className="editor-layout">
         <div className="document-panel">
@@ -690,61 +681,55 @@ export function DocumentEditor({
               <p className="eyebrow">题目块</p>
               <h2>{blocks.length} 个候选</h2>
             </div>
-            <button
-              className="icon-button add-block"
-              disabled={processing || saving}
-              onClick={addBlock}
-              type="button"
-            >
-              <Icon name="plus" size={16} />
-            </button>
+            <Tooltip content="添加手动题目块">
+              <IconButton appearance="plain" className="add-block" disabled={processing || saving} label="添加手动题目块" onClick={addBlock}>
+                <Icon name="plus" size={16} />
+              </IconButton>
+            </Tooltip>
           </div>
 
           <div className="block-actions">
-            <button
+            <Button
               disabled={!activeBlock || processing || saving}
               onClick={splitActiveBlock}
-              type="button"
+              variant="secondary"
             >
               上下拆分
-            </button>
-            <button
+            </Button>
+            <Button
               disabled={selectedBlocks.length < 2 || processing || saving}
               onClick={mergeSelectedBlocks}
-              type="button"
+              variant="secondary"
             >
               合并所选
-            </button>
-            <button
-              className={deleteArmed ? 'danger is-armed' : 'danger'}
+            </Button>
+            <Button
               disabled={
                 processing || saving || (!activeBlock && !selectedIds.size)
               }
               onClick={deleteSelectedBlocks}
-              type="button"
+              variant="danger"
             >
-              {deleteArmed
-                ? `确认删除 ${selectedIds.size || 1} 块？`
-                : '删除'}
-            </button>
+              移除所选
+            </Button>
           </div>
 
           <div className="save-selection-actions">
             <span>已收录 {saveSelectedBlocks.length} 个</span>
-            <button
+            <Button
               disabled={processing || saving || !blocks.length}
               onClick={() => setSaveSelectedIds(allProblemBlockIds(blocks))}
-              type="button"
+              variant="ghost"
             >
               全选
-            </button>
-            <button
+            </Button>
+            <Button
               disabled={processing || saving || !saveSelectedIds.size}
               onClick={() => setSaveSelectedIds(new Set())}
-              type="button"
+              variant="ghost"
             >
               全不选
-            </button>
+            </Button>
           </div>
 
           <div className="block-list">

@@ -4,6 +4,7 @@ import type { CurriculumImportJob, TextbookRecognition } from '../../domain/hori
 import {
   Button,
   Dialog,
+  DialogFooter,
   EmptyState,
   ErrorState,
   FlowingTaskSurface,
@@ -11,6 +12,8 @@ import {
   IconButton,
   Input,
   ListboxSelect,
+  PageHeader,
+  ProgressSteps,
   StatusBadge,
 } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
@@ -152,7 +155,8 @@ export function CurriculumImportFlow({
         publishJob(finished)
       }
     } catch (reason) {
-      setError(String(reason))
+      console.warn('开始教材识别失败', reason)
+      setError('没有开始教材识别，已选择的文件仍然保留。请检查文件后重试。')
       setPhase('preview')
     } finally {
       setSubmitting(false)
@@ -170,7 +174,8 @@ export function CurriculumImportFlow({
       const next = await retryPromise
       publishJob(next)
     } catch (reason) {
-      setError(String(reason))
+      console.warn('重试教材识别失败', reason)
+      setError('没有开始重试，当前分析进度仍然保留。请检查 AI 设置或稍后重试。')
     } finally {
       setSubmitting(false)
     }
@@ -189,7 +194,8 @@ export function CurriculumImportFlow({
       publishJob(null)
       onBack()
     } catch (reason) {
-      setError(String(reason))
+      console.warn('取消教材导入失败', reason)
+      setError('暂时无法取消分析。原始文件与当前进度仍然保留，请稍后重试。')
     } finally {
       setSubmitting(false)
     }
@@ -213,33 +219,33 @@ export function CurriculumImportFlow({
       const textbookId = await confirmCurriculumImportJob(job.id, form)
       onCompleted(textbookId)
     } catch (reason) {
-      setError(String(reason))
+      console.warn('保存教材结构失败', reason)
+      setError('课程结构没有保存，当前修改仍然保留。请检查必填信息后重试。')
     } finally {
       setSaving(false)
     }
   }
 
-  const step = phase === 'select' ? 1 : phase === 'preview' ? 2 : phase === 'processing' ? 3 : phase === 'confirm' ? 4 : 5
+  const importSteps: Array<{ value: ImportPhase; label: string }> = [
+    { value: 'select', label: '选择文件' },
+    { value: 'preview', label: '文件预览' },
+    { value: 'processing', label: '识别内容' },
+    { value: 'confirm', label: '确认教材' },
+    { value: 'structure', label: '检查结构' },
+  ]
 
   return (
     <main className="workspace curriculum-workspace curriculum-import-workspace curriculum-task-page">
-      <header className="workspace-header curriculum-page-header">
-        <div>
-          <p className="eyebrow">课程</p>
-          <h1>导入教材</h1>
-          <p className="subtitle">先在本地识别带页码全文，再由 AI 分析结构与候选标签。</p>
-        </div>
-        <Button onClick={onBack} variant="ghost">返回课程</Button>
-      </header>
+      <PageHeader
+        actions={<Button onClick={onBack} variant="ghost"><Icon name="chevron-left" size={14} />返回课程</Button>}
+        className="curriculum-page-header"
+        eyebrow="课程"
+        summary="先在本地识别带页码全文，再由 AI 分析结构；每一步都可检查和校正。"
+        title="导入教材"
+      />
 
       <div className="curriculum-task-safe-area">
-      {!(phase === 'processing' && job) && <ol className="curriculum-import-steps" aria-label="教材导入步骤">
-        {['选择文件', '文件预览', 'AI 识别', '确认教材信息', '检查课程结构'].map((label, index) => (
-          <li className={index + 1 === step ? 'is-active' : index + 1 < step ? 'is-complete' : ''} key={label}>
-            <span>{index + 1}</span>{label}
-          </li>
-        ))}
-      </ol>}
+      <ProgressSteps current={phase} label="教材导入步骤" steps={importSteps} />
 
       {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}><Icon name="close" size={14} /></IconButton></div>}
 
@@ -253,7 +259,7 @@ export function CurriculumImportFlow({
               else setError('请使用“从 Finder 选择”导入文件。')
             }}
           >
-            <span className="curriculum-drop-icon">⌑</span>
+            <span className="curriculum-drop-icon"><Icon name="download" size={24} /></span>
             <strong>拖入 PDF 或目录图片</strong>
             <small>支持文字版 PDF、扫描版 PDF、JPG、PNG 和 WebP</small>
           </FileDropzone>
@@ -355,7 +361,7 @@ export function CurriculumImportFlow({
                 <small>p.{item.pageNumber}</small>
               </div>
             ))}
-            {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" title="目录需要手动建立" />}
+            {!outline.length && <EmptyState description="没有检测到清晰目录。你仍可以先使用空课程，再手动补充章节和知识点。" size="compact" title="目录需要手动建立" />}
           </div>
           {job.extraction.warnings.length > 0 && <p className="curriculum-form-warning">{job.extraction.warnings.join(' ')}</p>}
           {saving
@@ -368,10 +374,10 @@ export function CurriculumImportFlow({
       <Dialog onClose={() => setCancelConfirmOpen(false)} open={cancelConfirmOpen} title="取消教材分析">
         <div className="curriculum-dialog-form">
           <p>取消后将清理本次分析的断点和临时数据，不会删除原始 PDF。</p>
-          <div className="curriculum-dialog-actions">
+          <DialogFooter>
             <Button onClick={() => setCancelConfirmOpen(false)} variant="ghost">暂不取消</Button>
             <Button loading={submitting} onClick={() => void cancel()} variant="secondary">确认取消</Button>
-          </div>
+          </DialogFooter>
         </div>
       </Dialog>
     </main>

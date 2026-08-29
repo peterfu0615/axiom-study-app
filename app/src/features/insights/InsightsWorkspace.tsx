@@ -3,6 +3,7 @@ import { AsyncState, Badge, Button, EmptyState, ListboxSelect, PageHeader, Statu
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
 import type { InsightEvidenceSplit } from '../../domain/reviewInsights'
+import { userFacingError } from '../../domain/userFacingError'
 import { getReviewInsights } from '../../platform/insightsDatabase'
 import { LEARNING_STATE_EVENT } from '../../platform/learningStateEvents'
 import './Insights.css'
@@ -134,7 +135,13 @@ export function InsightsWorkspace() {
       }
     }
     catch (reason) {
-      if (loadSeqRef.current === seq) setError(String(reason))
+      console.warn('读取学习洞察失败', reason)
+      if (loadSeqRef.current === seq) {
+        setError(userFacingError(
+          reason,
+          '未能读取学习洞察。现有复习记录没有改变，请重试。',
+        ))
+      }
     }
     finally {
       if (loadSeqRef.current === seq) setLoading(false)

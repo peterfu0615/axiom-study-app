@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Dialog,
+  DialogFooter,
   EmptyState,
   IconButton,
   InlineNotice,
@@ -13,6 +14,7 @@ import {
 import type { Feedback } from '../../components/ui'
 import type { HorizonTagType } from '../../domain/models'
 import type { Textbook } from '../../domain/horizon'
+import { userFacingError } from '../../domain/userFacingError'
 import {
   bulkReviewTagScope,
   confirmProblemTag,
@@ -119,7 +121,14 @@ export function ReviewCenter({
       setFeedback(null)
       onReviewDataChanged?.()
     } catch (reason) {
-      setFeedback({ tone: 'danger', message: String(reason) })
+      console.warn('读取标签审核项目失败', reason)
+      setFeedback({
+        tone: 'danger',
+        message: userFacingError(
+          reason,
+          '未能读取审核项目。现有标签和错题关联没有改变，请重试。',
+        ),
+      })
     } finally {
       setLoading(false)
     }
@@ -190,7 +199,14 @@ export function ReviewCenter({
       await refresh()
       return true
     } catch (reason) {
-      setRowErrors((current) => ({ ...current, [key]: String(reason) }))
+      console.warn('处理单项标签审核失败', reason)
+      setRowErrors((current) => ({
+        ...current,
+        [key]: userFacingError(
+          reason,
+          '这一项没有更新，其他审核结果仍然保留。请重试。',
+        ),
+      }))
       return false
     } finally {
       setRowBusy((current) => { const next = new Set(current); next.delete(key); return next })
@@ -232,7 +248,14 @@ export function ReviewCenter({
         result.approvedProblemTags + result.rejectedProblemTags
       setFeedback({ tone: 'success', message: `${decision === 'approve' ? '批准' : '驳回'}完成：已处理 ${affected} 项。` })
     } catch (reason) {
-      setFeedback({ tone: 'danger', message: String(reason) })
+      console.warn('批量处理标签审核失败', reason)
+      setFeedback({
+        tone: 'danger',
+        message: userFacingError(
+          reason,
+          '批量处理没有完成。已处理的项目会保留，请刷新后继续。',
+        ),
+      })
     } finally {
       setBusy(false)
     }
@@ -322,7 +345,7 @@ export function ReviewCenter({
           {bulkDecision === 'approve'
             ? <p>将批准 {bulkScope.definitionIds.length} 个课程标签和 {bulkScope.approveProblemTagIds.length} 个错题标签；{unmappedCount} 个独立标签保持原样，可在题目中单独处理。当前科目：{subject}。{tagType === 'knowledge' ? `当前教材：${textbook?.title ?? '未选择教材'}。` : ''}</p>
             : <p>将驳回 {bulkScope.definitionIds.length + bulkScope.rejectProblemTagIds.length} 个审核项目。当前科目：{subject}。{tagType === 'knowledge' ? `当前教材：${textbook?.title ?? '未选择教材'}。` : ''}历史来源、证据和审计记录不会被删除。</p>}
-          <div className="curriculum-dialog-actions"><Button disabled={busy} onClick={() => setBulkDecision(null)} variant="ghost">取消</Button><Button disabled={busy} loading={busy} onClick={() => void confirmBulk()} variant={bulkDecision === 'approve' ? 'primary' : 'danger'}>确认{bulkDecision === 'approve' ? '批准' : '驳回'}</Button></div>
+          <DialogFooter><Button disabled={busy} onClick={() => setBulkDecision(null)} variant="ghost">取消</Button><Button disabled={busy} loading={busy} onClick={() => void confirmBulk()} variant={bulkDecision === 'approve' ? 'primary' : 'danger'}>{bulkDecision === 'approve' ? '批准这些项目' : '驳回这些项目'}</Button></DialogFooter>
         </div>
       </Dialog>
 

@@ -13,7 +13,7 @@ import {
   listAIProviderProfiles,
   saveAIProviderProfiles,
 } from '../../platform/database'
-import { Button, Checkbox, Dialog, IconButton, Input, ListboxSelect, PageHeader, Tabs } from '../../components/ui'
+import { Button, Checkbox, Dialog, DialogFooter, IconButton, Input, ListboxSelect, PageHeader, RadioGroup, Tabs } from '../../components/ui'
 import { registerUnsavedGuard, unregisterUnsavedGuard } from '../../platform/unsavedGuard'
 import { UpdateSettings } from './UpdateSettings'
 import { LearningStateMaintenance } from './LearningStateMaintenance'
@@ -24,13 +24,12 @@ type SettingsTab = 'providers' | 'review' | 'appearance' | 'maintenance' | 'abou
 type SettingsMessage = { text: string; tone: 'success' | 'error' }
 
 function readableError(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === 'string') return error
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return String(error)
-  }
+  const value = String(error instanceof Error ? error.message : error).toLocaleLowerCase('zh-CN')
+  if (/401|403|unauthori[sz]ed|forbidden|api.?key|认证|鉴权/u.test(value)) return 'API Key 无效或没有当前模型的访问权限。'
+  if (/network|connect|dns|socket|timeout|网络|连接|超时/u.test(value)) return '无法连接 AI 服务，请检查网络、服务地址和代理设置。'
+  if (/url|endpoint|地址|端点/u.test(value)) return '服务地址格式不正确，请填写完整的 http 或 https 地址。'
+  if (/model|模型/u.test(value)) return '当前模型不可用或返回格式不兼容，请检查模型名称。'
+  return '操作没有完成。当前输入已保留，请检查设置后重试。'
 }
 
 function newProvider(index: number): AIProviderProfile {
@@ -299,12 +298,12 @@ export function AISettings() {
             ariaLabel="设置分区"
             onChange={setTab}
             options={[
-              { value: 'maintenance', label: '数据维护', icon: 'refresh' },
               { value: 'providers', label: 'AI 模型', icon: 'ai' },
               { value: 'review', label: '复习设置', icon: 'today' },
               { value: 'appearance', label: '外观', icon: 'sun' },
-              { value: 'about', label: '关于', icon: 'info' },
+              { value: 'maintenance', label: '数据维护', icon: 'refresh' },
               { value: 'update', label: '更新', icon: 'download' },
+              { value: 'about', label: '关于', icon: 'info' },
             ]}
             value={tab}
             variant="rail"
@@ -335,28 +334,25 @@ export function AISettings() {
                           selectedProviderId === profile.id ? 'active' : ''
                         }`}
                         key={profile.id}
-                        onClick={() => setSelectedProviderId(profile.id)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            setSelectedProviderId(profile.id)
-                          }
-                        }}
                       >
-                        <span className="provider-nav-index">
-                          {index + 1}
-                        </span>
-                        <span className="provider-nav-copy">
-                          <strong>{profile.name || '未命名服务'}</strong>
-                          <small>{providerSubtitle(profile)}</small>
-                          <span className="provider-nav-tags">
-                            {profile.supportsVision && (
-                              <span className="provider-tag">多模态</span>
-                            )}
+                        <button
+                          className="provider-nav-select"
+                          onClick={() => setSelectedProviderId(profile.id)}
+                          type="button"
+                        >
+                          <span className="provider-nav-index">
+                            {index + 1}
                           </span>
-                        </span>
+                          <span className="provider-nav-copy">
+                            <strong>{profile.name || '未命名服务'}</strong>
+                            <small>{providerSubtitle(profile)}</small>
+                            <span className="provider-nav-tags">
+                              {profile.supportsVision && (
+                                <span className="provider-tag">多模态</span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
                         <span className="provider-nav-reorder" role="group" aria-label="调整顺序">
                           <IconButton
                             className="provider-nav-arrow"
@@ -547,70 +543,35 @@ export function AISettings() {
                 <h2>外观</h2>
                 <p className="subtitle">Axiom 主题会按系统或你的选择切换明暗外观。</p>
               </header>
-              <div className="appearance-options">
-                {APPEARANCE_OPTIONS.map((option) => (
-                  <button
-                    className={`appearance-option ${
-                      appearance === option.value ? 'active' : ''
-                    }`}
-                    key={option.value}
-                    onClick={() => setAppearance(option.value)}
-                    type="button"
-                  >
-                    <div className="appearance-option-swatch">
-                      <span
-                        className={`swatch swatch-${option.value}`}
-                        aria-hidden="true"
-                      />
-                    </div>
-                    <div className="appearance-option-copy">
-                      <strong>
-                        <span
-                          aria-hidden="true"
-                          className={`selection-check${appearance === option.value ? ' is-active' : ''}`}
-                        >
-                          <Icon name="check" size={12} />
-                        </span>
-                        {option.label}
-                      </strong>
-                      <small>{option.description}</small>
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <RadioGroup
+                ariaLabel="选择明暗外观"
+                className="appearance-options"
+                onChange={setAppearance}
+                options={APPEARANCE_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: <span className="appearance-choice-label"><span aria-hidden="true" className={`swatch swatch-${option.value}`} />{option.label}</span>,
+                  description: option.description,
+                }))}
+                value={appearance}
+                variant="cards"
+              />
               <section className="color-theme-picker" aria-label="颜色主题">
                 <p className="eyebrow">颜色主题</p>
-                <div className="color-theme-picker__grid" role="radiogroup" aria-label="选择颜色主题">
-                  {VISUAL_THEMES.map((theme) => (
-                    <button
-                      aria-checked={visualTheme === theme}
-                      className={`color-theme-card${visualTheme === theme ? ' active' : ''}`}
-                      key={theme}
-                      onClick={() => setVisualTheme(theme)}
-                      role="radio"
-                      type="button"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="color-theme-card__swatch"
-                        style={{
-                          background: `linear-gradient(135deg, ${VISUAL_THEME_SWATCHES[theme].brand} 0 46%, ${VISUAL_THEME_SWATCHES[theme].paperLight} 46% 72%, ${VISUAL_THEME_SWATCHES[theme].paperDark} 72% 100%)`,
-                        }}
-                      />
-                      <span className="color-theme-card__copy">
-                        <strong>
-                          <span
-                            aria-hidden="true"
-                            className={`selection-check${visualTheme === theme ? ' is-active' : ''}`}
-                          >
-                            <Icon name="check" size={12} />
-                          </span>
-                          {VISUAL_THEME_LABELS[theme]}
-                        </strong>
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                <RadioGroup
+                  ariaLabel="选择颜色主题"
+                  className="color-theme-picker__grid"
+                  onChange={setVisualTheme}
+                  options={VISUAL_THEMES.map((theme) => ({
+                    value: theme,
+                    label: <span className="appearance-choice-label"><span
+                      aria-hidden="true"
+                      className="color-theme-card__swatch"
+                      style={{ background: `linear-gradient(135deg, ${VISUAL_THEME_SWATCHES[theme].brand} 0 46%, ${VISUAL_THEME_SWATCHES[theme].paperLight} 46% 72%, ${VISUAL_THEME_SWATCHES[theme].paperDark} 72% 100%)` }}
+                    />{VISUAL_THEME_LABELS[theme]}</span>,
+                  }))}
+                  value={visualTheme}
+                  variant="cards"
+                />
               </section>
             </div>
           ) : tab === 'maintenance' ? (
@@ -663,7 +624,7 @@ export function AISettings() {
       <Dialog onClose={() => setProviderRemoveConfirming(false)} open={providerRemoveConfirming && Boolean(selectedProfile)} title="移除 AI 服务">
         <p>将移除「{selectedProfile?.name || '未命名服务'}」及其 API Key。未保存的修改会一并丢弃。</p>
         <p>确认移除？</p>
-        <div className="settings-confirm-actions">
+        <DialogFooter>
           <Button onClick={() => setProviderRemoveConfirming(false)} variant="ghost">取消</Button>
           <Button
             onClick={() => {
@@ -674,13 +635,13 @@ export function AISettings() {
           >
             确认移除
           </Button>
-        </div>
+        </DialogFooter>
       </Dialog>
 
       <Dialog onClose={() => setApiKeyDeleteTarget(null)} open={Boolean(apiKeyDeleteTarget)} title="删除 API Key">
         <p>将删除「{apiKeyDeleteTarget?.name || ''}」已保存的 API Key，该服务的 AI 任务会立即不可用。</p>
         <p>确认删除？</p>
-        <div className="settings-confirm-actions">
+        <DialogFooter>
           <Button onClick={() => setApiKeyDeleteTarget(null)} variant="ghost">取消</Button>
           <Button
             onClick={() => {
@@ -692,7 +653,7 @@ export function AISettings() {
           >
             确认删除
           </Button>
-        </div>
+        </DialogFooter>
       </Dialog>
     </main>
   )

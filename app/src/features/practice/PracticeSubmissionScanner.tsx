@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Button, Checkbox, InlineNotice } from '../../components/ui'
 import type { PracticeScanPreview } from '../../domain/practiceAttempt'
+import { userFacingError } from '../../domain/userFacingError'
 import {
   captureVideoFrame,
   drawOrientedVideoFrame,
@@ -75,7 +76,15 @@ export function PracticeSubmissionScanner({ practiceSetId, onCancel, onSubmit }:
         const next = await openCameraStream(device.id)
         if (!active) { stopCameraStream(next); return }
         setStream(next); setStatus('请将整张答题纸放入取景框')
-      } catch (reason) { if (active) setError(String(reason)) }
+      } catch (reason) {
+        console.warn('连接练习拍摄相机失败', reason)
+        if (active) {
+          setError(userFacingError(
+            reason,
+            '无法连接相机。请确认相机已连接，并在 macOS“系统设置”中允许 Axiom 使用相机。',
+          ))
+        }
+      }
     })()
     return () => { active = false }
   }, [practiceSetId])
@@ -163,7 +172,11 @@ export function PracticeSubmissionScanner({ practiceSetId, onCancel, onSubmit }:
       setStatus(`第 ${(target.pageIndex ?? 0) + 1} 页已加入，继续拍下一页`)
     } catch (reason) {
       stablePageRef.current.captured.delete(pageId)
-      setError(String(reason))
+      console.warn('拍摄练习答题页失败', reason)
+      setError(userFacingError(
+        reason,
+        '这一页没有拍摄成功，之前已拍摄的页面仍然保留。请重新对准后重试。',
+      ))
     } finally {
       captureBusyRef.current = false
       setBusy(false)

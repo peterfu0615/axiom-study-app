@@ -34,7 +34,6 @@
 .problem-tag-remove { width: var(--ax-control-sm); height: var(--ax-control-sm); flex: 0 0 var(--ax-control-sm); align-self: center; border: 0; border-radius: var(--ax-radius-pill); background: transparent; }
 .problem-tag-remove:hover:not(:disabled), .problem-tag-remove:focus-visible { color: var(--ax-danger-fg); background: var(--ax-danger-bg); }
 /* Armed state of the two-step removal confirmation. */
-.problem-tag-remove.is-armed { color: var(--ax-danger-fg); background: var(--ax-danger-bg); box-shadow: inset 0 0 0 1px var(--ax-danger-fg); }
 .empty-tag-dimension { color: var(--ax-text-secondary); font-size: var(--ax-type-caption-size); line-height: var(--ax-type-caption-line); }
 .difficulty > .ax-badge { white-space: normal; overflow-wrap: anywhere; }
 .problem-tag-picker { display: grid; gap: var(--ax-space-5); }

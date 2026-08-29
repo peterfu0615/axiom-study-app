@@ -4,6 +4,7 @@ import {
   AsyncState,
   Button,
   Dialog,
+  DialogFooter,
   EmptyState,
   IconButton,
   Input,
@@ -18,6 +19,7 @@ import {
   Textarea,
 } from '../../components/ui'
 import type { KnowledgeNode, Textbook } from '../../domain/horizon'
+import { userFacingError } from '../../domain/userFacingError'
 import {
   addKnowledgeEdge,
   archiveKnowledgeNode,
@@ -57,6 +59,11 @@ function verification(node: KnowledgeNode) {
   if (node.verificationStatus === 'user_verified') return { label: '已确认', tone: 'success' as const }
   if (node.verificationStatus === 'needs_review') return { label: '待确认', tone: 'warning' as const }
   return { label: '待整理', tone: 'neutral' as const }
+}
+
+function curriculumFailure(reason: unknown, context: string, fallback: string) {
+  console.warn(`${context}失败`, reason)
+  return userFacingError(reason, fallback)
 }
 
 function KnowledgeTree({
@@ -152,7 +159,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   }, [])
 
   useEffect(() => {
-    void refreshSubjects().catch((reason) => setError(String(reason)))
+    void refreshSubjects().catch((reason) => setError(curriculumFailure(
+      reason,
+      '读取课程科目',
+      '未能读取课程科目。现有教材没有改变，请重试。',
+    )))
   }, [refreshSubjects])
 
   useEffect(() => {
@@ -173,7 +184,15 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
           ? current
           : next[0]?.id ?? null)
       })
-      .catch((reason) => { if (!cancelled) setError(String(reason)) })
+      .catch((reason) => {
+        if (!cancelled) {
+          setError(curriculumFailure(
+            reason,
+            '读取教材列表',
+            '未能读取该科目的教材。现有课程数据没有改变，请重试。',
+          ))
+        }
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [subject])
@@ -199,7 +218,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   }, [textbookId])
 
   useEffect(() => {
-    void refreshTree().catch((reason) => { setError(String(reason)) })
+    void refreshTree().catch((reason) => setError(curriculumFailure(
+      reason,
+      '读取课程结构',
+      '未能读取课程结构。现有教材和知识点没有改变，请重试。',
+    )))
   }, [refreshTree])
 
   const reviewCountSeqRef = useRef(0)
@@ -215,12 +238,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       const count = await getCurriculumReviewCount(targetSubject, targetTextbookId)
       if (reviewCountSeqRef.current === seq) setPendingReviewCount(count)
     } catch (reason) {
-      if (reviewCountSeqRef.current === seq) setError(String(reason))
+      console.warn('读取待确认数量失败', reason)
+      if (reviewCountSeqRef.current === seq) setPendingReviewCount(0)
     }
   }, [subject, textbookId])
 
   useEffect(() => {
-    void refreshReviewCount().catch((reason) => { setError(String(reason)) })
+    void refreshReviewCount()
   }, [refreshReviewCount])
 
   const handleReviewDataChanged = useCallback(() => {
@@ -244,10 +268,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
   const saveNode = async () => {
     if (!selectedTextbook || !nodeEditor) return
+    const parent = nodeParentId ? nodes.find((candidate) => candidate.id === nodeParentId) : null
+    if (nodeParentId && parent?.nodeType !== 'chapter') {
+      setError('知识点只能归属于章节或单元。请重新选择上级目录。')
+      return
+    }
     setBusy(true)
     try {
-      const parent = nodeParentId ? nodes.find((candidate) => candidate.id === nodeParentId) : null
-      if (nodeParentId && parent?.nodeType !== 'chapter') throw new Error('知识点只能归属于章节或单元')
       const normalizedNodeType: KnowledgeNode['nodeType'] = nodeParentId ? 'knowledge' : 'chapter'
       const nodeId = await saveKnowledgeNode({
         id: nodeEditor.node?.id,
@@ -262,7 +289,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       await refreshTree()
       setSelectedNodeId(nodeId)
     } catch (reason) {
-      setError(String(reason))
+      setError(curriculumFailure(
+        reason,
+        '保存课程节点',
+        '课程节点没有保存，当前输入已保留。请检查名称和上级目录后重试。',
+      ))
     } finally {
       setBusy(false)
     }
@@ -279,7 +310,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       setTextbookId(newId)
       await refreshSubjects()
     } catch (reason) {
-      setError(String(reason))
+      setError(curriculumFailure(
+        reason,
+        '创建课程',
+        '课程没有创建，当前输入已保留。请检查科目和教材名称后重试。',
+      ))
     } finally {
       setBusy(false)
     }
@@ -287,7 +322,10 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
 
   const confirmNode = async (node: KnowledgeNode) => {
     setBusy(true)
-    try { await confirmKnowledgeNode(node); await refreshTree() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    try { await confirmKnowledgeNode(node); await refreshTree() }
+    catch (reason) {
+      setError(curriculumFailure(reason, '确认知识点', '没有确认该知识点。现有课程结构没有改变，请重试。'))
+    } finally { setBusy(false) }
   }
 
   const batchConfirmNodes = async () => {
@@ -298,12 +336,17 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       const pending = nodes.filter((node) => node.verificationStatus === 'needs_review')
       for (const node of pending) await confirmKnowledgeNode(node)
       await refreshTree()
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(curriculumFailure(reason, '批量确认知识点', '批量确认没有完成。已确认的项目会保留，请刷新后继续。'))
+    } finally { setBusy(false) }
   }
 
   const archiveNode = async (node: KnowledgeNode) => {
     setBusy(true)
-    try { await archiveKnowledgeNode(node); await refreshTree() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    try { await archiveKnowledgeNode(node); await refreshTree() }
+    catch (reason) {
+      setError(curriculumFailure(reason, '归档课程节点', '该节点没有归档，现有课程结构没有改变，请重试。'))
+    } finally { setBusy(false) }
   }
 
   const mergeNode = async () => {
@@ -313,7 +356,9 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       await mergeKnowledgeNodes(mergeSource.subject, mergeSource.id, mergeTargetId)
       setMergeSource(null)
       await refreshTree()
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(curriculumFailure(reason, '合并课程节点', '节点没有合并，现有课程结构没有改变，请重新选择目标后重试。'))
+    } finally { setBusy(false) }
   }
 
   const addRelation = async () => {
@@ -323,7 +368,9 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       await addKnowledgeEdge(relation.node.subject, relation.node.id, relation.targetId, relation.relation)
       setRelation(null)
       await refreshTree()
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(curriculumFailure(reason, '添加课程关系', '关系没有添加，现有课程结构没有改变，请重新选择目标后重试。'))
+    } finally { setBusy(false) }
   }
 
   const openDeleteTextbookDialog = async (textbook: Textbook) => {
@@ -333,7 +380,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       setDeleteImpact(await getTextbookDeletionImpact(textbook.id))
     } catch (reason) {
       setDeleteTarget(null)
-      setError(String(reason))
+      setError(curriculumFailure(
+        reason,
+        '读取教材删除影响',
+        '未能确认这本教材会影响哪些内容，因此没有执行删除。请重试。',
+      ))
     }
   }
 
@@ -355,7 +406,11 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       setTextbookId(nextTextbooks[0]?.id ?? null)
       await refreshSubjects()
     } catch (reason) {
-      setError(String(reason))
+      setError(curriculumFailure(
+        reason,
+        '删除教材',
+        '教材没有删除，课程结构和错题关联仍然保留。请重试。',
+      ))
     } finally {
       setBusy(false)
     }
@@ -368,7 +423,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       if (!impact) throw new Error('该科目不存在或已删除')
       setDeleteSubjectImpact(impact)
       setDeleteSubjectOpen(true)
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) {
+      setError(curriculumFailure(
+        reason,
+        '读取科目删除影响',
+        '未能确认该科目会影响哪些内容，因此没有执行删除。请重试。',
+      ))
+    }
   }
 
   const confirmDeleteSubject = async () => {
@@ -383,7 +444,13 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       setSubjects(next)
       setSubject(next[0] ?? '')
       setTextbookId(null)
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(curriculumFailure(
+        reason,
+        '删除科目',
+        '科目没有删除，相关教材和错题仍然保留。请重试。',
+      ))
+    } finally { setBusy(false) }
   }
 
   const tree = useMemo(() => buildKnowledgeTree(nodes), [nodes])
@@ -437,10 +504,10 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
   return (
     <main className="workspace curriculum-workspace">
       <PageHeader
-        actions={<div className="curriculum-page-header__actions">
+        actions={(subjects.length > 0 || curriculumJob) ? <div className="curriculum-page-header__actions">
           {curriculumJob && <CurriculumAnalysisStatusPill onOpen={() => openProgress(curriculumJob.id)} />}
           <Button onClick={beginNewImport} variant="primary">导入教材</Button>
-        </div>}
+        </div> : undefined}
         className="curriculum-page-header"
         eyebrow="知识结构"
         summary="管理教材、知识结构与当前科目的标签概况。"
@@ -456,16 +523,17 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
       <Tabs ariaLabel="课程视图" onChange={setView} options={[{ value: 'structure', label: '知识结构' }, { value: 'tags', label: '标签概览' }, { value: 'review', label: '审核确认', count: pendingReviewCount }]} value={view} />
 
       <div className={`curriculum-view-scroll curriculum-view-scroll--${view}`}>
-        {error && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}><Icon name="close" size={14} /></IconButton></div>}
+        {error && subjects.length > 0 && <div className="curriculum-inline-error" role="alert"><span>{error}</span><IconButton label="关闭提示" onClick={() => setError(null)}><Icon name="close" size={14} /></IconButton></div>}
 
+        <AsyncState error={!subjects.length ? error : null} loading={loading && !subjects.length} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
         {view === 'tags' ? <div className="curriculum-tags-view"><TagOverview onCreateKnowledge={() => { setView('structure'); if (selectedTextbook) openNodeEditor(null, selectedNode?.nodeType === 'chapter' ? selectedNode.id : selectedNode?.parentId ?? null) }} onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : view === 'review' ? <div className="curriculum-review-view"><ReviewCenter onReviewDataChanged={handleReviewDataChanged} subject={subject} textbook={selectedTextbook} /></div> : (
-          <AsyncState error={error} loading={loading} onRetry={() => { setError(null); void refreshSubjects(); void refreshTree() }}>
-          {!selectedTextbook ? (
+          !selectedTextbook ? (
             <EmptyState
               action={<Button onClick={beginNewImport} variant="primary">导入教材</Button>}
               description="导入正在使用的教材，Axiom 会自动识别科目、版本、章节目录和候选知识点。"
               icon={<Icon name="curriculum" size={23} />}
               secondaryAction={<Button onClick={() => { setManualSubject(subject); setManualOpen(true) }} variant="secondary">手动创建</Button>}
+              size="compact"
               title="建立你的课程知识结构"
             />
           ) : (
@@ -486,56 +554,56 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
                     <dl className="curriculum-node-facts"><div><dt>教材页码</dt><dd>{selectedNode.sourcePageStart ? `第 ${selectedNode.sourcePageStart}${selectedNode.sourcePageEnd && selectedNode.sourcePageEnd !== selectedNode.sourcePageStart ? `–${selectedNode.sourcePageEnd}` : ''} 页` : '手动建立'}</dd></div><div><dt>来源</dt><dd>{selectedNode.extractionMethod === 'manual' ? '手动建立' : selectedNode.extractionMethod === 'vision_ocr' ? '扫描识别' : '教材文字提取'}</dd></div><div><dt>审核状态</dt><dd>{verification(selectedNode).label}</dd></div><div><dt>关联关系</dt><dd>{edgeCount ? `${edgeCount} 条课程关系` : '尚未添加'}</dd></div></dl>
                     <section className="curriculum-evidence"><h3>教材依据</h3><p>{selectedNode.evidenceText || '该节点由你手动建立，尚未添加教材依据。'}</p></section>
                     {selectedNode.description && <section className="curriculum-evidence"><h3>备注</h3><p>{selectedNode.description}</p></section>}
-                  </> : <EmptyState description="从左侧选择章节或知识点，即可查看教材依据并进行编辑。" title="选择一个课程节点" />}
+                  </> : <EmptyState description="从左侧选择章节或知识点，即可查看教材依据并进行编辑。" size="compact" title="选择一个课程节点" />}
                 </section>
               </Surface>
             </div>
-          )}
-          </AsyncState>
+          )
         )}
+        </AsyncState>
       </div>
 
       <Dialog onClose={() => setManualOpen(false)} open={manualOpen} title="手动创建课程">
-        <div className="curriculum-dialog-form"><Input label="科目" onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /><Input label="教材或课程名称" onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /><div className="curriculum-dialog-actions"><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></div></div>
+        <div className="curriculum-dialog-form"><Input label="科目" onChange={(event) => setManualSubject(event.target.value)} placeholder="例如：数学" value={manualSubject} /><Input label="教材或课程名称" onChange={(event) => setManualTitle(event.target.value)} placeholder="例如：七年级数学上册" value={manualTitle} /><DialogFooter><Button onClick={() => setManualOpen(false)} variant="ghost">取消</Button><Button disabled={!manualSubject.trim() || !manualTitle.trim()} loading={busy} onClick={() => void createManual()} variant="primary">创建课程</Button></DialogFooter></div>
       </Dialog>
 
       <Dialog onClose={() => { if (!busy) setDeleteSubjectOpen(false) }} open={deleteSubjectOpen} title={`删除「${subject}」？`}>
         <div className="curriculum-dialog-form">
           <p>该科目的 {deleteSubjectImpact?.textbookCount ?? 0} 本教材、{deleteSubjectImpact?.problemCount ?? 0} 道当前错题和学习状态将归档或移除。已完成的 {deleteSubjectImpact?.reviewAttemptCount ?? 0} 次复习、题目快照和不可变日志会保留。</p>
-          <div className="curriculum-dialog-actions"><Button disabled={busy} onClick={() => setDeleteSubjectOpen(false)} variant="ghost">取消</Button><Button loading={busy} onClick={() => void confirmDeleteSubject()} variant="danger">删除科目</Button></div>
+          <DialogFooter><Button disabled={busy} onClick={() => setDeleteSubjectOpen(false)} variant="ghost">取消</Button><Button loading={busy} onClick={() => void confirmDeleteSubject()} variant="danger">删除科目</Button></DialogFooter>
         </div>
       </Dialog>
 
       <Dialog onClose={() => setNodeEditor(null)} open={Boolean(nodeEditor)} title={nodeEditor?.node ? '编辑课程节点' : '新增课程节点'}>
-        <div className="curriculum-dialog-form"><Input label="节点名称" onChange={(event) => setNodeName(event.target.value)} value={nodeName} /><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><Textarea label="备注" onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /><div className="curriculum-dialog-actions"><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存</Button></div></div>
+        <div className="curriculum-dialog-form"><Input label="节点名称" onChange={(event) => setNodeName(event.target.value)} value={nodeName} /><ListboxSelect label="知识节点类型" onValueChange={(value) => { const nextType = value as KnowledgeNode['nodeType']; setNodeType(nextType); if (nextType === 'chapter') setNodeParentId(null); else if (!nodeParentId) setNodeParentId(nodes.find((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id)?.id ?? null) }} options={nodeTypes.map(([value, label]) => ({ value, label }))} value={nodeType === 'chapter' && !nodeParentId ? 'chapter' : 'knowledge'} /><ListboxSelect label="父章节" onValueChange={(value) => { const nextParentId = value || null; setNodeParentId(nextParentId); setNodeType(nextParentId ? 'knowledge' : 'chapter') }} options={[...(nodeEditor?.node?.nodeType === 'chapter' || !nodeEditor?.node ? [{ value: '', label: '作为根章节' }] : []), ...nodes.filter((node) => node.nodeType === 'chapter' && node.id !== nodeEditor?.node?.id).map((node) => ({ value: node.id, label: node.path }))]} value={nodeParentId ?? ''} /><Textarea label="备注" onChange={(event) => setNodeDescription(event.target.value)} value={nodeDescription} /><DialogFooter><Button onClick={() => setNodeEditor(null)} variant="ghost">取消</Button><Button disabled={!nodeName.trim()} loading={busy} onClick={() => void saveNode()} variant="primary">保存课程节点</Button></DialogFooter></div>
       </Dialog>
 
       <Dialog onClose={() => setMergeSource(null)} open={Boolean(mergeSource)} title="合并课程节点">
-        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的同章节知识点，历史引用会保留。</p><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.nodeType === 'knowledge' && node.parentId === mergeSource?.parentId && node.id !== mergeSource?.id).map((node) => ({ value: node.id, label: node.path }))]} value={mergeTargetId} /><div className="curriculum-dialog-actions"><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并</Button></div></div>
+        <div className="curriculum-dialog-form"><p>“{mergeSource?.canonicalName}”将归入你选择的同章节知识点，历史引用会保留。</p><ListboxSelect label="合并到" onValueChange={setMergeTargetId} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.nodeType === 'knowledge' && node.parentId === mergeSource?.parentId && node.id !== mergeSource?.id).map((node) => ({ value: node.id, label: node.path }))]} value={mergeTargetId} /><DialogFooter><Button onClick={() => setMergeSource(null)} variant="ghost">取消</Button><Button disabled={!mergeTargetId} loading={busy} onClick={() => void mergeNode()} variant="primary">合并课程节点</Button></DialogFooter></div>
       </Dialog>
 
       <Dialog onClose={() => setRelation(null)} open={Boolean(relation)} title="添加课程关联">
-        <div className="curriculum-dialog-form"><ListboxSelect label="关联类型" onValueChange={(value) => setRelation((current) => current ? { ...current, relation: value as NonNullable<NodeRelation>['relation'] } : current)} options={[{ value: 'prerequisite_of', label: '前置知识' }, { value: 'derived_from', label: '由此推导' }, { value: 'similar_to', label: '相似知识' }, { value: 'confusable_with', label: '易混淆' }, { value: 'used_by', label: '被用于' }, { value: 'appears_in', label: '出现于' }, { value: 'contains', label: '包含' }]} value={relation?.relation ?? 'prerequisite_of'} /><ListboxSelect label="关联到" onValueChange={(value) => setRelation((current) => current ? { ...current, targetId: value } : current)} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== relation?.node.id).map((node) => ({ value: node.id, label: node.path }))]} value={relation?.targetId ?? ''} /><div className="curriculum-dialog-actions"><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加关联</Button></div></div>
+        <div className="curriculum-dialog-form"><ListboxSelect label="关联类型" onValueChange={(value) => setRelation((current) => current ? { ...current, relation: value as NonNullable<NodeRelation>['relation'] } : current)} options={[{ value: 'prerequisite_of', label: '前置知识' }, { value: 'derived_from', label: '由此推导' }, { value: 'similar_to', label: '相似知识' }, { value: 'confusable_with', label: '易混淆' }, { value: 'used_by', label: '被用于' }, { value: 'appears_in', label: '出现于' }, { value: 'contains', label: '包含' }]} value={relation?.relation ?? 'prerequisite_of'} /><ListboxSelect label="关联到" onValueChange={(value) => setRelation((current) => current ? { ...current, targetId: value } : current)} options={[{ value: '', label: '请选择节点' }, ...nodes.filter((node) => node.id !== relation?.node.id).map((node) => ({ value: node.id, label: node.path }))]} value={relation?.targetId ?? ''} /><DialogFooter><Button onClick={() => setRelation(null)} variant="ghost">取消</Button><Button disabled={!relation?.targetId} loading={busy} onClick={() => void addRelation()} variant="primary">添加课程关联</Button></DialogFooter></div>
       </Dialog>
 
       <Dialog onClose={closeDeleteTextbookDialog} open={Boolean(deleteTarget)} title="删除课程">
-        <div className="curriculum-dialog-form"><p>删除后“{deleteTarget?.title}”将从课程与教材列表中移除，已锁定的题目教材匹配将保留。</p>{deleteImpact ? <><dl className="curriculum-delete-impact"><div><dt>章节</dt><dd>{deleteImpact.chapterCount} 个</dd></div><div><dt>知识点</dt><dd>{deleteImpact.knowledgeCount} 个</dd></div><div><dt>教材页</dt><dd>{deleteImpact.pageCount} 页</dd></div><div><dt>关联题目</dt><dd>{deleteImpact.matchedProblemCount} 道</dd></div></dl>{deleteImpact.matchedProblemCount > 0 && <p>关联题目中未锁定的教材匹配将被清除，已锁定的匹配保持不变。</p>}</> : <p role="status">正在统计删除影响…</p>}<div className="curriculum-dialog-actions"><Button disabled={busy} onClick={closeDeleteTextbookDialog} variant="ghost">取消</Button><Button disabled={!deleteImpact} loading={busy} onClick={() => void confirmDeleteTextbook()} variant="danger">删除课程</Button></div></div>
+        <div className="curriculum-dialog-form"><p>删除后“{deleteTarget?.title}”将从课程与教材列表中移除，已锁定的题目教材匹配将保留。</p>{deleteImpact ? <><dl className="curriculum-delete-impact"><div><dt>章节</dt><dd>{deleteImpact.chapterCount} 个</dd></div><div><dt>知识点</dt><dd>{deleteImpact.knowledgeCount} 个</dd></div><div><dt>教材页</dt><dd>{deleteImpact.pageCount} 页</dd></div><div><dt>关联题目</dt><dd>{deleteImpact.matchedProblemCount} 道</dd></div></dl>{deleteImpact.matchedProblemCount > 0 && <p>关联题目中未锁定的教材匹配将被清除，已锁定的匹配保持不变。</p>}</> : <p role="status">正在统计删除影响…</p>}<DialogFooter><Button disabled={busy} onClick={closeDeleteTextbookDialog} variant="ghost">取消</Button><Button disabled={!deleteImpact} loading={busy} onClick={() => void confirmDeleteTextbook()} variant="danger">删除课程</Button></DialogFooter></div>
       </Dialog>
 
       <Dialog onClose={() => setBatchConfirmOpen(false)} open={batchConfirmOpen} title="批量确认知识节点">
         <div className="curriculum-dialog-form">
           <p>将把当前教材下 {reviewCount} 个待确认节点全部标记为「已确认」。已确认的节点之后仍可逐个编辑或归档。</p>
-          <div className="curriculum-dialog-actions">
+          <DialogFooter>
             <Button onClick={() => setBatchConfirmOpen(false)} variant="ghost">取消</Button>
             <Button loading={busy} onClick={() => void batchConfirmNodes()} variant="primary">确认 {reviewCount} 个节点</Button>
-          </div>
+          </DialogFooter>
         </div>
       </Dialog>
 
       <Dialog onClose={() => setArchiveNodeTarget(null)} open={Boolean(archiveNodeTarget)} title="归档课程节点">
         <div className="curriculum-dialog-form">
           <p>将归档「{archiveNodeTarget?.canonicalName || ''}」。它不再出现在知识树中，已建立的题目关联保留，可随时恢复。</p>
-          <div className="curriculum-dialog-actions">
+          <DialogFooter>
             <Button onClick={() => setArchiveNodeTarget(null)} variant="ghost">取消</Button>
             <Button
               loading={busy}
@@ -546,9 +614,9 @@ export function CurriculumWorkspace({ initialView = 'structure' }: { initialView
               }}
               variant="danger"
             >
-              确认归档
+              归档课程节点
             </Button>
-          </div>
+          </DialogFooter>
         </div>
       </Dialog>
     </main>

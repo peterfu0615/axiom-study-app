@@ -70,7 +70,9 @@ describe('SolutionComparison', () => {
     expect(html).toContain('正确解法')
     expect(html).toContain('我的解答')
     expect(html).toContain('class="katex"')
-    expect(html).toContain('点击查看完整解答')
+    expect(html).toContain('class="ax-button ax-button--secondary comparison-open-action"')
+    expect(html).toContain('查看完整解答')
+    expect(html).not.toContain('role="button"')
   })
 
   it('uses the shared icon control for the modal close action', () => {

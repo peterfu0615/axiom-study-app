@@ -44,8 +44,9 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Dialog, DiscreteSlider, ErrorState, FlowingTaskSurface, IconButton, Input, ListboxSelect, PageHeader, SearchField, SegmentedControl, Textarea } from '../../components/ui'
+import { Button, Checkbox, DetailHeader, Dialog, DialogFooter, DiscreteSlider, DropdownMenu, DropdownMenuItem, EmptyState, ErrorState, FlowingTaskSurface, IconButton, Input, ListboxSelect, LoadingState, PageHeader, SearchField, SegmentedControl, Tabs, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
+import { userFacingError } from '../../domain/userFacingError'
 import { useToast } from '../../platform/useToast'
 import { ProblemCropEditor } from './ProblemCropEditor'
 import {
@@ -271,7 +272,7 @@ function ProblemDiagramImage({
   )
 }
 
-export function ProblemLibrary() {
+export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: () => void } = {}) {
   const [view, setView] = useState<LibraryView>('active')
   const [problems, setProblems] = useState<SavedProblem[]>([])
   const [query, setQuery] = useState('')
@@ -284,6 +285,8 @@ export function ProblemLibrary() {
   const [methodFilter, setMethodFilter] = useState('all')
   const [modelFilter, setModelFilter] = useState('all')
   const [reviewFilter, setReviewFilter] = useState('all')
+  const [detailTab, setDetailTab] = useState<'content' | 'history' | 'variants'>('content')
+  const [narrowDetailOpen, setNarrowDetailOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
@@ -319,7 +322,6 @@ export function ProblemLibrary() {
   const [editStemMarkdown, setEditStemMarkdown] = useState('')
   const [editKnowledgePoints, setEditKnowledgePoints] = useState('')
   const [subjectChangeConfirming, setSubjectChangeConfirming] = useState(false)
-  const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
   // Event listeners must not be re-armed on every selection change, so they
@@ -388,7 +390,8 @@ export function ProblemLibrary() {
       if (!quietly) {
         setProblems([])
         setSelectedId(null)
-        notify(`读取错题库失败：${String(error)}`, 'error')
+        console.warn('读取错题库失败', error)
+        notify('暂时无法读取错题库。本地数据没有被修改，请重新尝试。', 'error')
       } else {
         dirtyRef.current = true
         console.warn(
@@ -668,7 +671,6 @@ export function ProblemLibrary() {
 
   useEffect(() => {
     let cancelled = false
-    setDeleteConfirming(false)
     if (!selectedId) {
       setModelRuns([])
       return
@@ -699,6 +701,7 @@ export function ProblemLibrary() {
       })
       .catch((error) => {
         if (!cancelled) {
+          console.warn('读取错题解答失败', error)
           setSolution({
             id: '',
             problemId: selectedId,
@@ -709,7 +712,7 @@ export function ProblemLibrary() {
             knowledgePoints: [],
             status: 'failed',
             activeModelRunId: null,
-            errorMessage: `读取 Solution 失败：${String(error)}`,
+            errorMessage: userFacingError(error, '未能读取这道错题的解答。题目内容仍然可用，请重新生成解答。'),
             createdAt: 0,
             updatedAt: Date.now(),
           })
@@ -783,7 +786,8 @@ export function ProblemLibrary() {
       } else if (error instanceof ProblemSubjectChangeTagConflict) {
         notify(error.message, 'error')
       } else {
-        notify(`保存修改失败：${String(error)}`, 'error')
+        console.warn('保存错题修改失败', error)
+        notify('修改没有保存，当前输入已保留。请检查内容后重试。', 'error')
       }
     } finally {
       setUpdating(false)
@@ -796,7 +800,8 @@ export function ProblemLibrary() {
       setSolution(await queueProblemSolution(selected.id))
       void runSolutionWorker()
     } catch (error) {
-      notify(`无法重新生成：${String(error)}`, 'error')
+      console.warn('重新生成解答失败', error)
+      notify('没有开始重新生成，现有解答仍然可用。请检查 AI 设置后重试。', 'error')
     }
   }
 
@@ -871,7 +876,8 @@ export function ProblemLibrary() {
       await refresh(view)
       notify(action, 'success')
     } catch (error) {
-      notify(`更新失败：${String(error)}`, 'error')
+      console.warn('更新归档状态失败', error)
+      notify('归档状态没有更改。当前错题和学习记录均已保留，请重试。', 'error')
     } finally {
       setUpdating(false)
     }
@@ -889,7 +895,8 @@ export function ProblemLibrary() {
         problem.id === updated.id ? updated : problem))
       notify(updated.libraryMetadata.favorite ? '已收藏' : '已取消收藏', 'success')
     } catch (error) {
-      notify(`收藏状态保存失败：${String(error)}`, 'error')
+      console.warn('保存收藏状态失败', error)
+      notify('收藏状态没有保存，请重试。', 'error')
     } finally {
       setUpdating(false)
     }
@@ -962,7 +969,8 @@ export function ProblemLibrary() {
         'success',
       )
     } catch (error) {
-      notify(`重复题处理失败：${String(error)}`, 'error')
+      console.warn('处理重复题失败', error)
+      notify('重复题决策没有保存，两道错题均保持原状。', 'error')
     } finally {
       setUpdating(false)
     }
@@ -970,15 +978,34 @@ export function ProblemLibrary() {
 
   const handleDelete = async () => {
     if (!selected) return
+    const problemId = selected.id
     setDeleting(true)
     dismiss()
     try {
-      await deleteProblem(selected.id)
-      setDeleteConfirming(false)
+      await deleteProblem(problemId)
       await refresh(view)
-      notify('已移入回收站，可随时恢复', 'success')
+      setNarrowDetailOpen(false)
+      notify('已移入回收站', 'success', {
+        action: {
+          label: '撤销',
+          onClick: () => {
+            void (async () => {
+              try {
+                await restoreProblem(problemId)
+                await refresh(viewRef.current)
+                setSelectedId(problemId)
+                notify('已撤销，错题已恢复', 'success')
+              } catch (error) {
+                console.warn('撤销移入回收站失败', error)
+                notify('暂时无法撤销。可前往“回收站”手动恢复这道错题。', 'error')
+              }
+            })()
+          },
+        },
+      })
     } catch (error) {
-      notify(`删除失败：${String(error)}`, 'error')
+      console.warn('移入回收站失败', error)
+      notify('错题没有移入回收站，当前内容和学习记录均已保留。', 'error')
     } finally {
       setDeleting(false)
     }
@@ -991,7 +1018,10 @@ export function ProblemLibrary() {
       await restoreProblem(selected.id)
       await refresh(view)
       notify('错题已恢复', 'success')
-    } catch (error) { notify(`恢复失败：${String(error)}`, 'error') }
+    } catch (error) {
+      console.warn('恢复错题失败', error)
+      notify('错题没有恢复。它仍保留在回收站中，请重试。', 'error')
+    }
     finally { setUpdating(false) }
   }
 
@@ -1009,7 +1039,8 @@ export function ProblemLibrary() {
       setModelRuns(await listProblemModelRuns(selected.id))
       void runProblemAIWorker()
     } catch (error) {
-      notify(`AI 重试失败：${String(error)}`, 'error')
+      console.warn('重新排队 AI 解析失败', error)
+      notify('没有开始新的 AI 解析，现有题目内容未改变。请检查 AI 设置后重试。', 'error')
     } finally {
       setUpdating(false)
     }
@@ -1023,7 +1054,8 @@ export function ProblemLibrary() {
       await refresh(view, true)
       setModelRuns(await listProblemModelRuns(selected.id))
     } catch (error) {
-      notify(`取消 AI 分析失败：${String(error)}`, 'error')
+      console.warn('取消 AI 分析失败', error)
+      notify('暂时无法取消分析。任务状态会继续更新，请稍后重试。', 'error')
     } finally {
       setUpdating(false)
     }
@@ -1047,7 +1079,8 @@ export function ProblemLibrary() {
     } catch (error) {
       // The crop itself is already saved; only the detail-panel refresh
       // failed, so report it without discarding the success.
-      notify(`刷新解答详情失败：${String(error)}`, 'error')
+      console.warn('刷新解答详情失败', error)
+      notify('裁图已保存，但解答详情没有刷新。切换题目后返回即可重新读取。', 'error')
     }
 
     try {
@@ -1075,7 +1108,8 @@ export function ProblemLibrary() {
       setModelRuns(await listProblemModelRuns(updated.id))
       void runProblemAIWorker()
     } catch (error) {
-      notify(`新裁图已保存，但 AI 重新排队失败：${String(error)}`, 'error')
+      console.warn('裁图后重新排队 AI 解析失败', error)
+      notify('新裁图已保存，但没有开始 AI 解析。可在题目详情中点击“重新解析”。', 'error')
     }
   }
 
@@ -1097,7 +1131,8 @@ export function ProblemLibrary() {
       notify(`已为 ${batchProblemIds.size} 道${subjectFilter}错题启动重新标注`, 'success')
       setBatchProblemIds(new Set())
     } catch (error) {
-      notify(`批量重新标注失败：${String(error)}`, 'error')
+      console.warn('批量重新标注失败', error)
+      notify('没有启动批量重新标注，当前选择仍然保留。请重试。', 'error')
     } finally {
       setBatchRunning(false)
     }
@@ -1121,10 +1156,23 @@ export function ProblemLibrary() {
       )
       setBatchProblemIds(new Set())
     } catch (error) {
-      notify(`批量迁移教材失败：${String(error)}`, 'error')
+      console.warn('批量迁移教材失败', error)
+      notify('教材匹配没有更改，当前选择仍然保留。请重试。', 'error')
     } finally {
       setBatchRunning(false)
     }
+  }
+
+  const clearFilters = () => {
+    setQuery('')
+    setSubjectFilter('all')
+    setDifficultyFilter('all')
+    setTextbookFilter('all')
+    setChapterFilter('all')
+    setKnowledgeFilter('all')
+    setMethodFilter('all')
+    setModelFilter('all')
+    setReviewFilter('all')
   }
 
   if (recropping && selected) {
@@ -1142,25 +1190,28 @@ export function ProblemLibrary() {
   return (
     <main className="workspace library-workspace">
       <PageHeader
-        actions={<SegmentedControl
-          ariaLabel="错题库视图"
-          onChange={(nextView) => {
-            setView(nextView)
-            setBatchMode(false)
-            setBatchProblemIds(new Set())
-          }}
-          options={[
-            { value: 'active', label: '错题', disabled: editing },
-            { value: 'archived', label: '已归档', disabled: editing },
-            { value: 'trash', label: '回收站', disabled: editing },
-          ]}
-          value={view}
-        />}
         eyebrow="学习记录"
+        summary="搜索、筛选并复习已保存的错题。"
         title="错题库"
       />
 
-      <section className="library-layout">
+      <Tabs
+        ariaLabel="错题库视图"
+        className="library-view-tabs"
+        onChange={(nextView) => {
+          setView(nextView)
+          setBatchMode(false)
+          setBatchProblemIds(new Set())
+        }}
+        options={[
+          { value: 'active', label: '错题', disabled: editing },
+          { value: 'archived', label: '已归档', disabled: editing },
+          { value: 'trash', label: '回收站', disabled: editing },
+        ]}
+        value={view}
+      />
+
+      <section className={`library-layout${narrowDetailOpen ? ' is-detail-open' : ''}`}>
         <div className="problem-list-panel">
           <div className="problem-list-heading">
             <strong>{view === 'active' ? '全部错题' : view === 'archived' ? '归档错题' : '已删除错题'}</strong>
@@ -1235,63 +1286,61 @@ export function ProblemLibrary() {
 
           <div className="problem-card-list">
             {loading ? (
-              <div className="library-empty">正在读取本地错题…</div>
+              <LoadingState label="正在读取本地错题…" />
             ) : filteredProblems.length ? (
               filteredProblems.map((problem) => (
-                <button
-                  aria-pressed={batchMode ? batchProblemIds.has(problem.id) : undefined}
-                  className={`problem-card ${
-                    selectedId === problem.id ? 'active' : ''
-                  } ${batchProblemIds.has(problem.id) ? 'batch-selected' : ''}`}
-                  data-problem-id={problem.id}
-                  key={problem.id}
-                  disabled={editing}
-                  onClick={() => {
-                    if (batchMode) {
-                      toggleBatchProblem(problem.id)
-                      return
-                    }
-                    setSelectedId(problem.id)
-                  }}
-                  type="button"
-                >
-                  <ProblemImage
-                    alt=""
-                    className="problem-card-image"
-                    path={problem.cropImagePath}
-                  />
-                  {problem.libraryMetadata.favorite && (
-                    <span aria-label="已收藏" className="problem-card-favorite">
-                      <Icon filled name="favorite" size={14} />
-                    </span>
-                  )}
-                  <span className="problem-card-copy">
-                    <strong>{problem.title}</strong>
-                    <small>{dateFormatter.format(problem.createdAt)}</small>
-                    <span className="problem-card-statuses">
-                      <span className="problem-status">
-                        {problem.deletedAt ? '回收站' : problem.archivedAt ? '已归档' : '已保存'}
+                <article className={`problem-card-row${batchProblemIds.has(problem.id) ? ' batch-selected' : ''}`} key={problem.id}>
+                  {batchMode && <Checkbox
+                    checked={batchProblemIds.has(problem.id)}
+                    className="problem-card-selection"
+                    disabled={editing}
+                    label={<span className="sr-only">选择“{problem.title}”进行批量操作</span>}
+                    onChange={() => toggleBatchProblem(problem.id)}
+                  />}
+                  <button
+                    className={`problem-card ${selectedId === problem.id ? 'active' : ''}`}
+                    data-problem-id={problem.id}
+                    disabled={editing}
+                    onClick={() => {
+                      setSelectedId(problem.id)
+                      setNarrowDetailOpen(true)
+                    }}
+                    type="button"
+                  >
+                    <ProblemImage alt="" className="problem-card-image" path={problem.cropImagePath} />
+                    {problem.libraryMetadata.favorite && (
+                      <span aria-label="已收藏" className="problem-card-favorite">
+                        <Icon filled name="favorite" size={14} />
                       </span>
-                      <span
-                        className={`problem-ai-status ${problem.aiStatus}`}
-                      >
-                        <AIStatusContent status={problem.aiStatus} />
+                    )}
+                    <span className="problem-card-copy">
+                      <strong>{problem.title}</strong>
+                      <small>{dateFormatter.format(problem.createdAt)}</small>
+                      <span className="problem-card-statuses">
+                        <span className="problem-status">
+                          {problem.deletedAt ? '回收站' : problem.archivedAt ? '已归档' : '已保存'}
+                        </span>
+                        <span className={`problem-ai-status ${problem.aiStatus}`}>
+                          <AIStatusContent status={problem.aiStatus} />
+                        </span>
                       </span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                </article>
               ))
             ) : (
-              <div className="library-empty">
-                <strong>
-                  {problems.length ? '没有符合筛选条件的错题' : view === 'active' ? '还没有保存错题' : view === 'archived' ? '没有归档错题' : '回收站为空'}
-                </strong>
-                <p>
-                  {problems.length ? '尝试清除搜索词或切换科目。' : view === 'active'
-                    ? '在采集页面确认题块后，点击“保存为错题”。'
-                    : view === 'archived' ? '归档后的错题会显示在这里。' : '删除的错题会保留复习记录与媒体，可在这里恢复。'}
-                </p>
-              </div>
+              <EmptyState
+                action={problems.length
+                  ? <Button onClick={clearFilters} variant="secondary">清除搜索和筛选</Button>
+                  : view === 'active' && onNavigateToCapture
+                    ? <Button onClick={onNavigateToCapture} variant="primary">添加错题</Button>
+                    : undefined}
+                description={problems.length ? '当前搜索词或筛选条件没有匹配项；清除后可查看这一分区的全部题目。' : view === 'active'
+                  ? '从采集页添加图片，确认题目范围并保存后，错题会显示在这里。'
+                  : view === 'archived' ? '归档后的错题会显示在这里。' : '移入回收站的错题会保留复习记录与媒体，可随时恢复。'}
+                size="compact"
+                title={problems.length ? '没有符合条件的错题' : view === 'active' ? '还没有保存错题' : view === 'archived' ? '没有归档错题' : '回收站为空'}
+              />
             )}
           </div>
         </div>
@@ -1299,33 +1348,28 @@ export function ProblemLibrary() {
         <article className="problem-detail-panel">
           {selected ? (
             <>
-              <div className="problem-detail-heading">
-                <div>
-                  <p className="eyebrow">错题详情</p>
-                  <h2>{editing ? '编辑错题信息' : selected.title}</h2>
-                </div>
-                <div className="problem-detail-actions">
+              <DetailHeader
+                actions={<div className="problem-detail-actions">
                   {selected.deletedAt ? (
-                    <Button className="primary-button" disabled={updating} loading={updating} onClick={() => void handleRestore()} variant="primary">
-                      {updating ? '恢复中…' : '恢复到错题库'}
+                    <Button disabled={updating} loading={updating} onClick={() => void handleRestore()} variant="primary">
+                      恢复到错题库
                     </Button>
                   ) : editing ? (
                     <>
                       <Button
-                        className="secondary-action"
                         disabled={updating}
                         onClick={cancelEditing}
+                        variant="ghost"
                       >
                         取消
                       </Button>
                       <Button
-                        className="primary-button"
                         disabled={updating || !editTitle.trim()}
                         loading={updating}
                         onClick={() => void saveEdits()}
                         variant="primary"
                       >
-                        {updating ? '保存中…' : '保存修改'}
+                        保存修改
                       </Button>
                     </>
                   ) : (
@@ -1340,37 +1384,49 @@ export function ProblemLibrary() {
                         <Icon filled={selected.libraryMetadata.favorite} name="favorite" size={18} />
                       </IconButton>
                       <Button
-                        className="secondary-action"
                         disabled={updating}
                         onClick={beginEditing}
                       >
                         编辑
                       </Button>
-                      <Button
-                        className="secondary-action"
-                        disabled={updating || !selected.correctedImagePath}
-                        onClick={() => {
-                          dismiss()
-                          setRecropping(true)
-                        }}
-                      >
-                        重新裁剪
-                      </Button>
-                      <Button
-                        className="secondary-action"
-                        disabled={updating}
-                        onClick={() => void toggleArchive()}
-                      >
-                        {updating
-                          ? '更新中…'
-                          : selected.archivedAt
-                            ? '取消归档'
-                            : '归档'}
-                      </Button>
+                      <DropdownMenu label="更多错题操作">
+                        <DropdownMenuItem
+                          disabled={updating || !selected.correctedImagePath}
+                          onClick={() => {
+                            dismiss()
+                            setRecropping(true)
+                          }}
+                        >
+                          重新裁剪
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={updating} onClick={() => void toggleArchive()}>
+                          {selected.archivedAt ? '取消归档' : '归档错题'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="is-danger" disabled={deleting} onClick={() => void handleDelete()}>
+                          {deleting ? '正在移入回收站…' : '移入回收站'}
+                        </DropdownMenuItem>
+                      </DropdownMenu>
                     </>
                   )}
-                </div>
-              </div>
+                </div>}
+                className="problem-detail-heading"
+                eyebrow="错题详情"
+                leading={<Button className="problem-detail-back" onClick={() => setNarrowDetailOpen(false)} variant="ghost"><Icon name="chevron-left" size={14} />返回列表</Button>}
+                metadata={`${selected.subject || '科目待补充'} · ${dateFormatter.format(selected.createdAt)}`}
+                title={editing ? '编辑错题信息' : selected.title}
+              />
+
+              {!editing && <Tabs
+                ariaLabel="错题详情分区"
+                className="problem-detail-tabs"
+                onChange={setDetailTab}
+                options={[
+                  { value: 'content', label: '题目与解答' },
+                  { value: 'history', label: '复习记录', count: reviewHistory.length },
+                  { value: 'variants', label: '变式题', count: savedVariantCount },
+                ]}
+                value={detailTab}
+              />}
 
               {editing ? (
                 <div className="problem-detail-content">
@@ -1403,7 +1459,7 @@ export function ProblemLibrary() {
               ) : (
                 <>
                   <div className="problem-detail-content">
-                    <div className="problem-learning-page">
+                    <div className="problem-learning-page" data-detail-tab={detailTab}>
                       <section className="problem-reading-section">
                         <header className="problem-reading-header">
                           <div>
@@ -1511,17 +1567,11 @@ export function ProblemLibrary() {
                                     showCaption={false}
                                   />
                                 : selected.aiDiagramKind === 'geometry'
-                                  ? <div
+                                  ? <button
                                       aria-label="打开题目图形工具"
                                       className="problem-geometry-scene__media"
                                       onClick={() => setGeometryDialogOpen(true)}
-                                      onKeyDown={(event) => {
-                                        if (event.key !== 'Enter' && event.key !== ' ') return
-                                        event.preventDefault()
-                                        setGeometryDialogOpen(true)
-                                      }}
-                                      role="button"
-                                      tabIndex={0}
+                                      type="button"
                                     >
                                       <ProblemDiagramImage
                                         alt={`${selected.title}中的题目原图`}
@@ -1529,7 +1579,7 @@ export function ProblemLibrary() {
                                         path={selected.cropImagePath}
                                         rect={selectedDiagramRect}
                                       />
-                                    </div>
+                                    </button>
                                   : <ProblemDiagramImage
                                       alt={`${selected.title}中的题目原图`}
                                       croppedPath={selectedDiagramPath}
@@ -1707,25 +1757,6 @@ export function ProblemLibrary() {
                         </ul> : <p>完成练习后，这里会显示你的复习记录。</p>}
                       </section>
 
-                      {!selected.deletedAt && <section className="problem-delete-section">
-                        <p className="eyebrow">管理题目</p>
-                        <h3>移入回收站</h3>
-                        <p>题目会从学习安排中移除，解答、复习证据与相关图片都会保留，可从回收站恢复。</p>
-                        {deleteConfirming ? (
-                          <div className="problem-delete-confirm">
-                            <span>确认要把这道错题移入回收站吗？</span>
-                            <div className="problem-delete-confirm-actions">
-                              <Button className="problem-delete-cancel" disabled={deleting} onClick={() => setDeleteConfirming(false)} variant="ghost">取消</Button>
-                              <Button className="problem-delete-confirm-button" disabled={deleting} loading={deleting} onClick={() => void handleDelete()} variant="danger">
-                                {deleting ? '处理中…' : '移入回收站'}
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Button className="problem-delete-button" disabled={deleting} onClick={() => setDeleteConfirming(true)} variant="danger">移入回收站</Button>
-                        )}
-                      </section>}
-
                       <section className="problem-variant-summary-card">
                         <button onClick={openVariantDialog} type="button">
                           <div>
@@ -1791,11 +1822,11 @@ export function ProblemLibrary() {
                 : <div className="geometry-generation-dialog__empty" aria-hidden="true"><Icon name="image" size={30} /></div>}
             </section>
           </div>
-          <div className="curriculum-dialog-actions">
+          <DialogFooter>
             <Button disabled={geometryRunBusy} loading={geometrySceneBusy} onClick={() => void rebuildGeometryScene()} variant="primary">
               {generatedDiagram ? '重新生成' : '生成 TikZ'}
             </Button>
-          </div>
+          </DialogFooter>
         </div>
       </Dialog>
 
@@ -1874,14 +1905,14 @@ export function ProblemLibrary() {
       <Dialog
         onClose={() => { if (!updating) setSubjectChangeConfirming(false) }}
         open={subjectChangeConfirming}
-        title="确认更改题目科目"
+        title="更改题目科目"
       >
         <div className="problem-edit-form">
           <p>更改科目后，Axiom 会按新科目重新整理本题标签。</p>
-          <div className="curriculum-dialog-actions">
+          <DialogFooter>
             <Button onClick={() => setSubjectChangeConfirming(false)} variant="ghost">取消</Button>
-            <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">继续更改</Button>
-          </div>
+            <Button loading={updating} onClick={() => void saveEdits(true)} variant="primary">更改科目并重新整理标签</Button>
+          </DialogFooter>
         </div>
       </Dialog>
       <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />

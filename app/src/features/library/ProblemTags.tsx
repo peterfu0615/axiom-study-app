@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AI_STATUS_EVENT } from '../../ai/pipeline'
 import { Icon } from '../../components/Icon'
-import { Badge, Button, Dialog, IconButton, Input, ListboxSelect, StatusBadge } from '../../components/ui'
+import { Toast } from '../../components/Toast'
+import { Badge, Button, Dialog, DialogFooter, IconButton, Input, ListboxSelect, StatusBadge } from '../../components/ui'
+import { userFacingError } from '../../domain/userFacingError'
 import type { HorizonTagType } from '../../domain/models'
 import {
   type ProblemTag,
@@ -18,6 +20,7 @@ import {
   type AvailableHorizonTagsStatus,
   type ProblemDifficultyView,
 } from '../../platform/horizonDatabase'
+import { useToast } from '../../platform/useToast'
 
 const labels: Record<HorizonTagType, string> = {
   knowledge: '知识点', method: '方法', model: '题型', error: '错误类型',
@@ -34,35 +37,7 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
   const [selectedDefinitionId, setSelectedDefinitionId] = useState('')
   const [newTagName, setNewTagName] = useState('')
   const reqSeqRef = useRef(0)
-  // Two-step removal: the first click arms the ×, the second removes.
-  // Prevents accidental one-click deletes; auto-disarms shortly after.
-  const [armedTagId, setArmedTagId] = useState<string | null>(null)
-  const armTimerRef = useRef<number | null>(null)
-  useEffect(() => () => {
-    if (armTimerRef.current !== null) window.clearTimeout(armTimerRef.current)
-  }, [])
-  const armTagRemoval = (tagId: string) => {
-    setArmedTagId(tagId)
-    if (armTimerRef.current !== null) window.clearTimeout(armTimerRef.current)
-    armTimerRef.current = window.setTimeout(() => {
-      armTimerRef.current = null
-      setArmedTagId(null)
-    }, 2500)
-  }
-  const removeTag = (tagId: string) => {
-    if (armedTagId !== tagId) {
-      armTagRemoval(tagId)
-      return
-    }
-    if (armTimerRef.current !== null) {
-      window.clearTimeout(armTimerRef.current)
-      armTimerRef.current = null
-    }
-    setArmedTagId(null)
-    void removeProblemTag(tagId)
-      .then(async () => { await refresh(); onChange?.() })
-      .catch((error) => setMessage(`移除标签失败：${String(error)}`))
-  }
+  const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
 
   const refresh = useCallback(async () => {
     const seq = ++reqSeqRef.current
@@ -91,8 +66,39 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
     }
   }, [problemId, subjectId])
 
+  const removeTag = async (tag: ProblemTag) => {
+    const definition = definitions.find((item) => item.id === tag.tagId)
+    setMessage(null)
+    try {
+      await removeProblemTag(tag.id)
+      await refresh()
+      onChange?.()
+      notify(`已移除“${tag.canonicalName}”标签。`, 'info', definition && subjectId ? {
+        duration: 6000,
+        action: {
+          label: '撤销',
+          onClick: () => {
+            void (async () => {
+              try {
+                await addProblemTag(problemId, subjectId, definition, tag.role)
+                await refresh()
+                onChange?.()
+                notify(`已恢复“${tag.canonicalName}”标签。`, 'success')
+              } catch (error) {
+                console.warn('撤销移除题目标签失败', error)
+                notify(userFacingError(error, '标签没有恢复，请重新添加。'), 'error')
+              }
+            })()
+          },
+        },
+      } : undefined)
+    } catch (error) {
+      console.warn('移除题目标签失败', error)
+      setMessage(userFacingError(error, '标签没有移除，请重试。'))
+    }
+  }
+
   useEffect(() => {
-    setArmedTagId(null)
     void refresh().catch((error) => {
       console.error('Horizon tag query failed', { problemId, subjectId, error })
       setMessage('标签加载失败，请稍后重试。')
@@ -127,7 +133,8 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
     } catch (error) {
       // Surface the failure inside the picker instead of swallowing it as an
       // unhandled rejection (e.g. cross-subject tag rejections).
-      setMessage(`添加标签失败：${String(error)}`)
+      console.warn('添加题目标签失败', error)
+      setMessage(userFacingError(error, '标签没有添加，请检查选择后重试。'))
     }
   }
 
@@ -145,7 +152,10 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
       setPicker(null); setNewTagName('')
       await refresh()
       onChange?.()
-    } catch (error) { setMessage(`创建标签失败：${String(error)}`) }
+    } catch (error) {
+      console.warn('创建题目标签失败', error)
+      setMessage(userFacingError(error, '标签没有创建，当前输入仍然保留。请重试。'))
+    }
   }
 
   const confirmTag = async (tagId: string) => {
@@ -153,7 +163,10 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
       await confirmProblemTag(tagId)
       await refresh()
       onChange?.()
-    } catch (error) { setMessage(`确认标签失败：${String(error)}`) }
+    } catch (error) {
+      console.warn('确认题目标签失败', error)
+      setMessage(userFacingError(error, '标签没有确认，请重试。'))
+    }
   }
 
   const pickerOptions = picker
@@ -167,7 +180,7 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
 
   return <section className="problem-tags">
     <header><div><p className="eyebrow">题目标签</p><h3>知识点、方法、题型与错误类型</h3></div><StatusBadge>{subject || '请先确认科目'}</StatusBadge></header>
-    {message && <p className="problem-tag-error">{message}</p>}
+    {message && <p className="problem-tag-error" role="alert">{message}</p>}
     <div className="problem-tag-dimensions">
       {(['knowledge','method','model','error'] as HorizonTagType[]).map((type) => <div className="problem-tag-dimension" key={type}>
         <div className="problem-tag-dimension-title"><strong>{labels[type]}</strong><IconButton appearance="plain" className="problem-tag-add" disabled={!subject} label={`添加${labels[type]}`} onClick={() => openPicker(type)}><Icon name="plus" size={16} /></IconButton></div>
@@ -177,10 +190,9 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
             {tag.tagId && tag.verificationStatus !== 'user_verified' && tag.verificationStatus !== 'rejected' && <Button onClick={() => void confirmTag(tag.id)} variant="ghost">确认</Button>}
             <IconButton
               appearance="plain"
-              aria-pressed={armedTagId === tag.id}
-              className={`problem-tag-remove${armedTagId === tag.id ? ' is-armed' : ''}`}
-              label={armedTagId === tag.id ? `再次点击确认移除${tag.canonicalName}` : `移除${tag.canonicalName}`}
-              onClick={() => removeTag(tag.id)}
+              className="problem-tag-remove"
+              label={`移除${tag.canonicalName}`}
+              onClick={() => void removeTag(tag)}
               tone="danger"
             >
               <Icon name="close" size={16} />
@@ -200,8 +212,9 @@ export function ProblemTags({ problemId, subjectId, subject, onChange }: { probl
         <ListboxSelect label="选择标签" onValueChange={setSelectedDefinitionId} options={[{ value: '', label: '请选择' }, ...pickerOptions.map((item) => ({ value: item.id, label: item.canonicalName }))]} value={selectedDefinitionId} />
         {!pickerOptions.length && <p className="problem-tag-picker__empty">{emptyPickerMessage}</p>}
         {picker && picker.type !== 'knowledge' && <Input label={`或创建新的${labels[picker.type]}`} onChange={(event) => setNewTagName(event.target.value)} placeholder={`输入${labels[picker.type]}名称`} value={newTagName} />}
-        <div><Button onClick={() => setPicker(null)} variant="ghost">取消</Button>{newTagName.trim() && picker?.type !== 'knowledge' ? <Button onClick={() => void createAndApplyTag()} variant="primary">创建并使用</Button> : <Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">确认</Button>}</div>
+        <DialogFooter><Button onClick={() => setPicker(null)} variant="ghost">取消</Button>{newTagName.trim() && picker?.type !== 'knowledge' ? <Button onClick={() => void createAndApplyTag()} variant="primary">创建并添加</Button> : <Button disabled={!selectedDefinitionId} onClick={() => void applyPicker()} variant="primary">添加标签</Button>}</DialogFooter>
       </div>
     </Dialog>
+    <Toast toast={toast} onClose={dismiss} onPause={pauseAutoDismiss} onResume={resumeAutoDismiss} />
   </section>
 }

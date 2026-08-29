@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { AsyncState, Button, EmptyState, IconButton, PageHeader, SegmentedControl, StatusTag } from '../../components/ui'
+import { AsyncState, Button, EmptyState, IconButton, PageHeader, ProgressSteps, SegmentedControl, StatusTag } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
 import type { PracticeAttempt } from '../../domain/practiceAttempt'
 import {
-  addTodayReviewUnit,
   getOrCreateTodayPlan,
   getReviewForecast,
   listTodayCorrectionTasks,
-  refreshTodayPlan,
   type TodayCorrectionTask,
   type TodayReviewPlan,
   type TodayReviewUnit,
@@ -233,14 +231,17 @@ function PracticePreparationView({ snapshot }: { snapshot: PracticePreparationSn
   }
   const order: PreparationPhase[] = ['selecting', 'generating', 'verifying', 'rendering']
   const phase = order.includes(snapshot.status as PreparationPhase) ? snapshot.status as PreparationPhase : 'rendering'
-  const active = order.indexOf(phase)
   return <main className="workspace today-workspace practice-preparation" aria-live="polite">
     <PageHeader eyebrow="今日练习" title="正在准备练习" summary={`${snapshot.totalSlots} 个学习主题 · 窗口可继续移动和操作`} />
     <section className="practice-preparation__card">
       <div className="practice-preparation__spinner" aria-hidden="true" />
       <h2>{labels[phase]}</h2>
       <p>AI、TikZ 与文件排版都在后台执行，完成安全兜底后会自动进入练习。</p>
-      <ol>{order.map((item, index) => <li className={index <= active ? 'is-active' : ''} key={item}>{labels[item]}</li>)}</ol>
+      <ProgressSteps
+        current={phase}
+        label="练习准备进度"
+        steps={order.map((item) => ({ label: labels[item], value: item }))}
+      />
     </section>
   </main>
 }
@@ -382,15 +383,6 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
     void refreshForecast(range)
   }
 
-  const mutate = async (operation: () => Promise<TodayReviewPlan | void>) => {
-    setBusy(true); setError(null)
-    try {
-      const next = await operation()
-      setPlan(next ?? await refreshTodayPlan())
-      void refreshForecast(forecastRangeRef.current)
-    } catch (reason) { setError(practiceErrorMessage(reason)) }
-    finally { setBusy(false) }
-  }
   const openTodayPractice = () => {
     if (!plan) return
     const sessionMode = plan.preferences.preferredMode
@@ -474,10 +466,10 @@ export function TodayWorkspace({ onNavigate }: { onNavigate: (section: AppSectio
         </article>)}
       </section>}
       {plan && plan.units.length === 0 ? <EmptyState
-        action={<Button onClick={() => void mutate(() => addTodayReviewUnit())} variant="primary">重新检查</Button>}
+        action={<Button onClick={() => onNavigate('capture')} variant="primary">添加错题</Button>}
         description="保存并完成解析的错题会在这里形成适合今天练习的学习主题。题目会根据上一次已确认练习在原题与变式间自动轮换。"
         icon={<Icon name="today" size={22} />}
-        secondaryAction={<><Button onClick={() => onNavigate('library')} variant="secondary">前往错题库</Button><Button onClick={() => onNavigate('curriculum')} variant="ghost">查看课程</Button></>}
+        secondaryAction={<Button onClick={() => onNavigate('library')} variant="secondary">查看错题库</Button>}
         title="今天暂时没有学习安排"
       /> : plan && <>
         <section className="today-units" aria-label="今日学习主题">

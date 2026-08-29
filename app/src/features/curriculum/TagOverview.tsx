@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Dialog,
+  DialogFooter,
   EmptyState,
   FlowingTaskSurface,
   Input,
@@ -14,6 +15,7 @@ import {
 } from '../../components/ui'
 import type { TagDefinition, Textbook } from '../../domain/horizon'
 import type { HorizonTagType } from '../../domain/models'
+import { userFacingError } from '../../domain/userFacingError'
 import {
   createRelabelBatch,
   createTagDefinition,
@@ -40,6 +42,11 @@ const dimensions: Array<{ value: HorizonTagType; label: string; description: str
   { value: 'model', label: '题型模型', description: '描述稳定的题目结构与条件组合' },
   { value: 'error', label: '错误类型', description: '用于记录可确认的错误模式' },
 ]
+
+function tagFailure(reason: unknown, context: string, fallback: string) {
+  console.warn(`${context}失败`, reason)
+  return userFacingError(reason, fallback)
+}
 
 function tagStatus(tag: TagDefinition) {
   if (tag.lifecycleStatus === 'candidate' || tag.verificationStatus === 'needs_review') return { label: '待确认', tone: 'warning' as const }
@@ -96,7 +103,11 @@ export function TagOverview({
       setError(null)
       onReviewDataChanged?.()
     } catch (reason) {
-      setError(String(reason))
+      setError(tagFailure(
+        reason,
+        '读取课程标签',
+        '未能读取课程标签。现有标签和错题关联没有改变，请重试。',
+      ))
     } finally {
       setLoading(false)
     }
@@ -132,12 +143,17 @@ export function TagOverview({
     try {
       await createTagDefinition({ subject, tagType: type, canonicalName: newName, methodClass: type === 'method' ? methodClass : null, approved: true })
       setNewName(''); setNewOpen(false); await refresh()
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(tagFailure(reason, '创建课程标签', '标签没有创建，当前输入已保留。请检查名称后重试。'))
+    } finally { setBusy(false) }
   }
 
   const reviewTag = async (tag: TagDefinition, decision: 'archive') => {
     setBusy(true)
-    try { await reviewTagDefinition(tag, decision); await refresh() } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    try { await reviewTagDefinition(tag, decision); await refresh() }
+    catch (reason) {
+      setError(tagFailure(reason, '归档课程标签', '标签没有归档，现有错题关联仍然保留。请重试。'))
+    } finally { setBusy(false) }
   }
 
   const confirmArchive = async () => {
@@ -155,7 +171,9 @@ export function TagOverview({
       const next = await refreshRelabelBatch(id)
       setBatch(next)
       void startRelabelBatchWorker(id).then(() => refreshRelabelBatch(id).then((value) => value && setBatch(value)))
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(tagFailure(reason, '开始旧错题标签更新', '更新任务没有开始，现有错题和标签没有改变。请重试。'))
+    } finally { setBusy(false) }
   }
 
   const toggleBatch = async () => {
@@ -165,7 +183,9 @@ export function TagOverview({
       const next = batch.status === 'paused' ? await resumeRelabelBatch(batch.id) : await pauseRelabelBatch(batch.id)
       setBatch(next)
       if (next?.status === 'processing') void startRelabelBatchWorker(next.id)
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(tagFailure(reason, '切换旧错题更新状态', '任务状态没有改变。已完成的项目仍然保留，请重试。'))
+    } finally { setBusy(false) }
   }
 
   const retryBatch = async () => {
@@ -175,7 +195,9 @@ export function TagOverview({
       const next = await retryFailedRelabelItems(batch.id)
       setBatch(next)
       if (next && ['pending', 'processing'].includes(next.status)) void startRelabelBatchWorker(next.id)
-    } catch (reason) { setError(String(reason)) } finally { setBusy(false) }
+    } catch (reason) {
+      setError(tagFailure(reason, '重试旧错题标签更新', '失败项目没有重新开始。已完成的项目仍然保留，请重试。'))
+    } finally { setBusy(false) }
   }
 
   if (!subject) {
@@ -243,16 +265,16 @@ export function TagOverview({
         </div>
       </section>
 
-      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><Input label="名称" onChange={(event) => setNewName(event.target.value)} value={newName} />{type === 'method' && <ListboxSelect label="角色" onValueChange={(value) => setMethodClass(value as 'core' | 'optional')} options={[{ value: 'core', label: '核心方法' }, { value: 'optional', label: '辅助方法' }]} value={methodClass} />}<div className="curriculum-dialog-actions"><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存</Button></div></div></Dialog>
+      <Dialog onClose={() => setNewOpen(false)} open={newOpen} title={`新建${currentDimension.label}`}><div className="curriculum-dialog-form"><Input label="名称" onChange={(event) => setNewName(event.target.value)} value={newName} />{type === 'method' && <ListboxSelect label="角色" onValueChange={(value) => setMethodClass(value as 'core' | 'optional')} options={[{ value: 'core', label: '核心方法' }, { value: 'optional', label: '辅助方法' }]} value={methodClass} />}<DialogFooter><Button onClick={() => setNewOpen(false)} variant="ghost">取消</Button><Button disabled={!newName.trim()} loading={busy} onClick={() => void createTag()} variant="primary">保存{currentDimension.label}</Button></DialogFooter></div></Dialog>
       <Dialog onClose={() => setDetailTag(null)} open={Boolean(detailTag)} title={detailTag?.canonicalName || '标签详情'}><div className="curriculum-dialog-form"><p>{detailTag?.description || '暂无说明。近义表达会由系统在后台自动复用；无法确认时允许作为独立标签保留。'}</p>{detailTag?.lifecycleStatus === 'active' && <Button onClick={() => { setDetailTag(null); setArchiveTarget(detailTag) }} variant="danger">归档标签…</Button>}</div></Dialog>
       <Dialog onClose={() => setArchiveTarget(null)} open={Boolean(archiveTarget)} title="归档标签">
         <p>将归档「{archiveTarget?.canonicalName || ''}」。已关联的错题不会被删除，但该标签不再参与后续映射。</p>
-        <div className="curriculum-dialog-actions">
+        <DialogFooter>
           <Button onClick={() => setArchiveTarget(null)} variant="ghost">取消</Button>
-          <Button loading={busy} onClick={() => void confirmArchive()} variant="danger">确认归档</Button>
-        </div>
+          <Button loading={busy} onClick={() => void confirmArchive()} variant="danger">归档标签</Button>
+        </DialogFooter>
       </Dialog>
-      <Dialog onClose={() => setScopeOpen(false)} open={scopeOpen} title="旧错题标签更新范围"><div className="curriculum-dialog-form"><p>当前科目共有 {batch?.totalCount ?? scopeCount} 道已保存错题会进入更新任务。用户已经确认的标签不会被重新覆盖。</p>{batch && <p>已完成 {batch.completedCount} 道，待确认 {batch.needsReviewCount} 项，失败 {batch.failedCount} 道。</p>}<div className="curriculum-dialog-actions"><Button onClick={() => setScopeOpen(false)} variant="primary">知道了</Button></div></div></Dialog>
+      <Dialog onClose={() => setScopeOpen(false)} open={scopeOpen} title="旧错题标签更新范围"><div className="curriculum-dialog-form"><p>当前科目共有 {batch?.totalCount ?? scopeCount} 道已保存错题会进入更新任务。用户已经确认的标签不会被重新覆盖。</p>{batch && <p>已完成 {batch.completedCount} 道，待确认 {batch.needsReviewCount} 项，失败 {batch.failedCount} 道。</p>}<DialogFooter><Button onClick={() => setScopeOpen(false)} variant="primary">关闭范围说明</Button></DialogFooter></div></Dialog>
     </section>
   )
 }

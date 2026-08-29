@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Button, Input, ListboxSelect } from '../../components/ui'
+import { useCallback, useEffect, useState } from 'react'
+import { AsyncState, Button, InlineNotice, Input, ListboxSelect, type Feedback } from '../../components/ui'
+import { userFacingError } from '../../domain/userFacingError'
 import type { ReviewSessionMode } from '../../domain/review'
 import {
   DEFAULT_REVIEW_PREFERENCES,
@@ -34,30 +35,42 @@ export function ReviewSettings() {
   const [value, setValue] = useState<ReviewPreferences>(DEFAULT_REVIEW_PREFERENCES)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<Feedback>(null)
 
-  useEffect(() => {
-    void getReviewPreferences().then(setValue).catch(() => setMessage('读取复习设置失败。')).finally(() => setLoading(false))
+  const load = useCallback(async () => {
+    setLoading(true); setError(null)
+    try { setValue(await getReviewPreferences()) }
+    catch (reason) {
+      console.warn('读取复习设置失败', reason)
+      setError(userFacingError(reason, '未能读取复习设置。现有设置没有改变，请重新加载。'))
+    } finally { setLoading(false) }
   }, [])
 
+  useEffect(() => { void load() }, [load])
+
   const save = async () => {
-    setSaving(true); setMessage(null)
+    setSaving(true); setFeedback(null)
     try {
       setValue(await saveReviewPreferences(value))
-      setMessage('复习设置已保存；今日安排和未来任务量已更新。')
-    } catch { setMessage('保存复习设置失败，请重试。') }
+      setFeedback({ tone: 'success', message: '复习设置已保存；今日安排和未来任务量已更新。' })
+    } catch (reason) {
+      console.warn('保存复习设置失败', reason)
+      setFeedback({ tone: 'danger', message: userFacingError(reason, '复习设置没有保存，当前输入仍然保留。请重试。') })
+    }
     finally { setSaving(false) }
   }
 
   return <div className="settings-appearance-pane review-settings-pane">
     <header>
       <p className="eyebrow">学习负担</p>
-      <h2>Today 复习设置</h2>
+      <h2>今日复习设置</h2>
       <p className="subtitle">复习节奏控制任务出现的频率；今日上限和模块数控制一次安排的规模。</p>
     </header>
+    <AsyncState error={error} loading={loading} loadingLabel="正在读取复习设置…" onRetry={load}>
     <div className="settings-form">
       <ListboxSelect
-        disabled={loading || saving}
+        disabled={saving}
         label="复习节奏"
         onValueChange={(pace) => setValue((current) => ({
           ...current,
@@ -66,19 +79,20 @@ export function ReviewSettings() {
         options={paceOptions}
         value={reviewPaceFromTarget(value.targetRetention)}
       />
-      <Input disabled={loading || saving} label="今日复习上限（分钟）" max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
-      <Input disabled={loading || saving} label="每日最多复习模块" max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: parseBoundedNumber(event.target.value, 1, 12, current.maxModules) }))} type="number" value={value.maxModules} />
+      <Input disabled={saving} label="今日复习上限（分钟）" max={180} min={5} onChange={(event) => setValue((current) => ({ ...current, maxDailyMinutes: parseBoundedNumber(event.target.value, 5, 180, current.maxDailyMinutes) }))} type="number" value={value.maxDailyMinutes} />
+      <Input disabled={saving} label="每日最多复习模块" max={12} min={1} onChange={(event) => setValue((current) => ({ ...current, maxModules: parseBoundedNumber(event.target.value, 1, 12, current.maxModules) }))} type="number" value={value.maxModules} />
       <ListboxSelect
-        disabled={loading || saving}
+        disabled={saving}
         label="默认练习模式"
         onValueChange={(preferredMode) => setValue((current) => ({ ...current, preferredMode: preferredMode as ReviewSessionMode }))}
         options={modeOptions}
         value={value.preferredMode}
       />
     </div>
+    <InlineNotice feedback={feedback} onClose={() => setFeedback(null)} />
     <div className="settings-save-row">
-      <span role="status">{message}</span>
-      <Button disabled={loading || saving} loading={saving} onClick={() => void save()} variant="primary">保存复习设置</Button>
+      <Button disabled={saving} loading={saving} onClick={() => void save()} variant="primary">保存复习设置</Button>
     </div>
+    </AsyncState>
   </div>
 }

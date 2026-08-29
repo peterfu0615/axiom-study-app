@@ -17,7 +17,8 @@ import type {
 } from '../../domain/models'
 import { MathMarkdown } from '../../components/MathMarkdown'
 import { Icon } from '../../components/Icon'
-import { IconButton } from '../../components/ui'
+import { Button, IconButton } from '../../components/ui'
+import { userFacingError } from '../../domain/userFacingError'
 import { explainSelection, EXPLAIN_STREAM_EVENT } from '../../ai/intelligencePipeline'
 import { sanitizeAIOutputText, extractPartialField } from '../../ai/intelligenceParser'
 import { SOLUTION_STREAM_EVENT } from '../../ai/solutionPipeline'
@@ -594,7 +595,8 @@ export function ExplainableProblemMarkdown({
       setExplanation({ status: 'completed', target, result })
     } catch (error) {
       if (currentRequest !== requestId.current) return
-      setExplanation({ status: 'failed', target, error: String(error) })
+      console.warn('解释题目内容失败', error)
+      setExplanation({ status: 'failed', target, error: userFacingError(error, '暂时无法解释这段内容。当前解答没有改变，请重试。') })
     }
   }
 
@@ -741,7 +743,8 @@ export function SolutionComparison({
       setExplanation({ status: 'completed', target, result })
     } catch (error) {
       if (requestId !== explanationRequestId.current) return
-      setExplanation({ status: 'failed', target, error: String(error) })
+      console.warn('解释解答内容失败', error)
+      setExplanation({ status: 'failed', target, error: userFacingError(error, '暂时无法解释这段内容。当前解答没有改变，请重试。') })
     }
   }
 
@@ -755,7 +758,8 @@ export function SolutionComparison({
       await navigator.clipboard.writeText(solution.contentMarkdown)
       setCopyMessage('已复制 Markdown / LaTeX')
     } catch (error) {
-      setCopyMessage(`复制失败：${String(error)}`)
+      console.warn('复制解答失败', error)
+      setCopyMessage(userFacingError(error, '没有复制到剪贴板。当前解答没有改变，请重试。'))
     }
   }
 
@@ -786,18 +790,6 @@ export function SolutionComparison({
         <div
           aria-label="查看正确解法与我的解答"
           className="solution-comparison-preview"
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              setModalOpen(true)
-            }
-          }}
-          onClick={() => {
-            if (window.getSelection()?.toString().trim()) return
-            setModalOpen(true)
-          }}
-          role="button"
-          tabIndex={0}
         >
           <SolutionPane
             attempt={attempt}
@@ -816,7 +808,9 @@ export function SolutionComparison({
             onTarget={openExplanation}
             solution={solution}
           />
-          <span className="comparison-open-hint">点击查看完整解答</span>
+          <Button className="comparison-open-action" onClick={() => setModalOpen(true)} variant="secondary">
+            查看完整解答
+          </Button>
         </div>
       </section>
 

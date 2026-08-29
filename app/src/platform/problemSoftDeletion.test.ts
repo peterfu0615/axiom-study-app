@@ -18,7 +18,7 @@ describe('problem recovery contract', () => {
     const source = readFileSync(new URL('../features/library/ProblemLibrary.tsx', import.meta.url), 'utf8')
     expect(source).toContain("type LibraryView = 'active' | 'archived' | 'trash'")
     expect(source).toContain('恢复到错题库')
-    expect(source).toContain('复习证据与相关图片都会保留')
+    expect(source).toContain('移入回收站的错题会保留复习记录与媒体，可随时恢复')
   })
 
   it('hydrates library search and filter metadata for list and detail reads', () => {

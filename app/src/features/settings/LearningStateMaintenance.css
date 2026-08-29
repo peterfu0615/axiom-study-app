@@ -5,7 +5,6 @@
 .learning-maintenance__status h3 { margin: 0; color: var(--ax-text-primary); font-size: var(--ax-type-item-size); }
 .learning-maintenance__status p { margin: 0; color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); line-height: var(--ax-type-secondary-line); }
 .learning-maintenance__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ax-space-3); }
-.learning-maintenance__confirm-actions { display: flex; justify-content: flex-end; gap: var(--ax-space-3); margin-top: var(--ax-space-5); }
 .learning-maintenance__success { color: var(--ax-success-fg) !important; }
 .learning-maintenance__details { color: var(--ax-text-secondary); font-size: var(--ax-type-secondary-size); }
 .learning-maintenance__details summary { cursor: pointer; color: var(--ax-text-primary); }

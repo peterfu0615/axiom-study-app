@@ -14,7 +14,7 @@ export function CurriculumAnalysisStatusPill({ onOpen }: { onOpen: () => void })
       title="查看分析进度"
       type="button"
     >
-      {status.animated && <span aria-hidden="true" className="curriculum-analysis-status-pill__glow" />}
+      {status.animated && <span aria-hidden="true" className="ax-spinner curriculum-analysis-status-pill__spinner" />}
       <span className="curriculum-analysis-status-pill__copy">
         <strong>{status.label}</strong>
         {status.detail && <small>{status.detail}</small>}

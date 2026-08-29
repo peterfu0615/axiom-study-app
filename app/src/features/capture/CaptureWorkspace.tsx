@@ -33,7 +33,7 @@ import {
   saveSourceDocument,
 } from '../../platform/database'
 import { DocumentEditor } from './DocumentEditor'
-import { ListboxSelect, PageHeader, SegmentedControl } from '../../components/ui'
+import { Button, EmptyState, IconButton, ListboxSelect, ListRow, PageHeader, SegmentedControl, Switch, Tooltip } from '../../components/ui'
 
 type CaptureMode = 'camera' | 'import'
 
@@ -89,7 +89,8 @@ export function CaptureWorkspace({
     try {
       setRecent(await listRecentSourceDocuments())
     } catch (error) {
-      notify(`读取本地记录失败：${String(error)}`, 'error')
+      console.warn('读取本地采集记录失败', error)
+      notify('暂时无法读取本地处理队列。现有图片没有被删除，请稍后重试。', 'error')
     }
   }, [notify])
 
@@ -255,7 +256,13 @@ export function CaptureWorkspace({
           ? 'denied'
           : 'error',
       )
-      notify(`无法连接相机：${String(error)}`, 'error')
+      console.warn('连接相机失败', error)
+      notify(
+        name === 'NotAllowedError' || name === 'PermissionDeniedError'
+          ? '相机权限未开启。请在“系统设置 → 隐私与安全性 → 相机”中允许 Axiom。'
+          : '暂时无法连接相机。请确认 iPhone 已靠近并锁屏，然后重新检查。',
+        'error',
+      )
     }
   }, [dismiss, notify, stream])
 
@@ -275,7 +282,8 @@ export function CaptureWorkspace({
         setCameraStatus('ready')
       } catch (error) {
         setCameraStatus('error')
-        notify(`切换相机失败：${String(error)}`, 'error')
+        console.warn('切换相机失败', error)
+        notify('无法切换到这台相机。当前图片和处理队列没有变化，请重新连接。', 'error')
       }
     },
     [notify, stream],
@@ -326,14 +334,16 @@ export function CaptureWorkspace({
           notify('本页已保存到队列，可以继续拍摄下一页', 'success')
         } catch (resumeError) {
           setCameraStatus('error')
-          notify(`本页已保存；重新连接相机失败：${String(resumeError)}`, 'error')
+          console.warn('连续采集重新连接失败', resumeError)
+          notify('本页已安全保存，但相机没有重新连接。请重新检查相机后继续。', 'error')
         }
       } else {
         notify('照片已保存到本地处理队列', 'success')
         setEditingDocument(document)
       }
     } catch (error) {
-      notify(`拍照失败：${String(error)}`, 'error')
+      console.warn('拍照失败', error)
+      notify('没有保存这张照片。请等待预览稳定后重新拍摄。', 'error')
     } finally {
       setBusy(false)
     }
@@ -380,7 +390,8 @@ export function CaptureWorkspace({
       setCameraStatus('idle')
       if (documents.length === 1) setEditingDocument(document)
     } catch (error) {
-      notify(`导入失败：${String(error)}`, 'error')
+      console.warn('导入图片失败', error)
+      notify('图片没有导入。请确认文件仍可访问且格式为 JPG、PNG 或 WebP，然后重试。', 'error')
     } finally {
       setBusy(false)
     }
@@ -411,6 +422,7 @@ export function CaptureWorkspace({
     <main className="workspace capture-workspace">
       <PageHeader
         eyebrow="快速采集"
+        summary="连接相机或导入图片；下一步确认题目范围并保存到错题库。"
         title="添加错题"
       />
 
@@ -455,26 +467,25 @@ export function CaptureWorkspace({
               ) : (
                 <div className="camera-empty">
                   <div className="camera-orbit">
-                    <Icon name="camera" size={34} />
+                    <Icon name="camera" size={24} />
                   </div>
                   <h2>连接 iPhone 连续互通相机</h2>
                   <p>
                     将 iPhone 靠近 Mac 并锁定屏幕，然后允许 Axiom
                     使用摄像头。
                   </p>
-                  <button
-                    className="primary-button"
-                    disabled={cameraStatus === 'requesting'}
+                  <Button
+                    loading={cameraStatus === 'requesting'}
                     onClick={() => void connectCamera()}
-                    type="button"
+                    variant="primary"
                   >
-                    {cameraStatus === 'requesting' ? '正在连接…' : '检查相机'}
-                  </button>
+                    检查相机
+                  </Button>
                 </div>
               )}
 
               <div className="camera-toolbar">
-                <div>
+                <div aria-live="polite" role="status">
                   <span
                     className={`status-dot ${
                       cameraStatus === 'ready' ? 'online' : ''
@@ -494,29 +505,25 @@ export function CaptureWorkspace({
                 )}
                 {stream && (
                   <>
-                    <label className="continuous-capture-toggle">
-                      <input
-                        checked={continuousCapture}
-                        disabled={busy}
-                        onChange={(event) => setContinuousCapture(event.target.checked)}
-                        type="checkbox"
-                      />
-                      连续多页
-                    </label>
-                    <button
-                      aria-label="顺时针旋转预览"
-                      className="camera-rotate-button"
-                      onClick={() => {
-                        setManualRotation(true)
-                        setRotation((current) =>
-                          normalizeQuarterTurn(current + 90),
-                        )
-                      }}
-                      title="手动顺时针旋转 90°；重新连接后恢复自动方向"
-                      type="button"
-                    >
-                      <Icon name="rotate" size={16} />
-                    </button>
+                    <Switch
+                      checked={continuousCapture}
+                      className="camera-continuous-switch"
+                      disabled={busy}
+                      label="连续采集"
+                      onChange={(event) => setContinuousCapture(event.target.checked)}
+                    />
+                    <Tooltip content="顺时针旋转 90°；重新连接后恢复自动方向">
+                      <IconButton
+                        appearance="plain"
+                        label="顺时针旋转预览"
+                        onClick={() => {
+                          setManualRotation(true)
+                          setRotation((current) => normalizeQuarterTurn(current + 90))
+                        }}
+                      >
+                        <Icon name="rotate" size={16} />
+                      </IconButton>
+                    </Tooltip>
                     <button
                       className="shutter-button"
                       disabled={busy || !frameReady}
@@ -542,7 +549,7 @@ export function CaptureWorkspace({
               </span>
               <strong>{busy ? '正在导入…' : '选择试卷图片'}</strong>
               <span>支持 JPG、PNG、WebP，单张不超过 30 MB</span>
-              <span className="secondary-button">从 Finder 选择</span>
+              <span className="drop-zone__action-copy">打开 Finder 选择图片</span>
             </button>
           )}
         </div>
@@ -553,14 +560,11 @@ export function CaptureWorkspace({
               <p className="eyebrow">最新采集</p>
               <h2>本地处理队列</h2>
             </div>
-            <button
-              aria-label="刷新"
-              className="icon-button"
-              onClick={() => void refreshRecent()}
-              type="button"
-            >
-              <Icon name="refresh" size={18} />
-            </button>
+            <Tooltip content="刷新本地处理队列">
+              <IconButton appearance="plain" label="刷新本地处理队列" onClick={() => void refreshRecent()}>
+                <Icon name="refresh" size={18} />
+              </IconButton>
+            </Tooltip>
           </div>
 
           {preview && (
@@ -585,9 +589,11 @@ export function CaptureWorkspace({
           <div className="queue-list">
             {recent.length ? (
               recent.map((document) => (
-                <button
-                  className="queue-item"
+                <ListRow
+                  className="capture-queue-row"
+                  description={`${document.processingStatus === 'ready_for_segmentation' ? '可编辑题目范围 · ' : '等待页面校正 · '}${queueTimeFormatter.format(document.capturedAt)}`}
                   key={document.id}
+                  leading={<img alt="" decoding="async" loading="lazy" src={mediaAssetUrl(document.originalImagePath)} />}
                   onClick={() => {
                     stopCameraStream(stream)
                     setStream(null)
@@ -595,33 +601,16 @@ export function CaptureWorkspace({
                     setPreview(document)
                     setEditingDocument(document)
                   }}
-                  type="button"
-                >
-                  <img
-                    alt=""
-                    decoding="async"
-                    loading="lazy"
-                    src={mediaAssetUrl(document.originalImagePath)}
-                  />
-                  <span>
-                    <strong>
-                      {document.sourceType === 'camera' ? '相机拍摄' : '图片导入'}
-                    </strong>
-                    <small>
-                      {document.processingStatus === 'ready_for_segmentation'
-                        ? '已生成题目块 · '
-                        : ''}
-                      {queueTimeFormatter.format(document.capturedAt)}
-                    </small>
-                  </span>
-                  <Icon name="chevron" size={16} />
-                </button>
+                  status={<Icon name="chevron" size={16} />}
+                  title={document.sourceType === 'camera' ? '相机拍摄' : '图片导入'}
+                />
               ))
             ) : (
-              <div className="empty-queue">
-                <span>0</span>
-                <p>还没有待处理图片</p>
-              </div>
+              <EmptyState
+                description="拍照或导入后，图片会按采集时间显示在这里。"
+                size="compact"
+                title="还没有待处理图片"
+              />
             )}
           </div>
         </aside>
