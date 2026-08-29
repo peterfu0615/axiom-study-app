@@ -1,34 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { DatabasePathCheck } from '../platform/database'
 import { migrateDatabase } from '../platform/native'
+import { Button, Dialog, DialogFooter, InlineNotice } from './ui'
+import './DatabaseLocationErrorDialog.css'
 
 interface DatabaseLocationErrorDialogProps {
   check: DatabasePathCheck
 }
 
 /**
- * 数据库路径不一致错误对话框。
- *
- * 当 plugin-sql 与 Rust sqlx 指向不同数据库文件时显示，
- * 阻塞应用启动，避免用户在错误数据库上操作导致数据丢失。
- *
- * 提供两个操作：
- *   - 迁移数据库：把 DB 文件从错误位置复制到期望位置（不删除原文件），提示重启
- *   - 安全退出：直接退出 App
+ * Blocks startup when the two database clients resolve different files. The
+ * recovery copies data and never deletes the source, so it is offered directly
+ * instead of adding another confirmation step.
  */
 export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDialogProps) {
   const [migrating, setMigrating] = useState(false)
-  const [migrateResult, setMigrateResult] = useState<
-    | { ok: true }
-    | { ok: false; message: string }
-    | null
-  >(null)
-
-  useEffect(() => {
-    // 阻止用户通过快捷键关闭窗口绕过此对话框
-    // （窗口本身仍可拖动，但不应允许关闭后继续使用错误数据库）
-  }, [])
+  const [migrateResult, setMigrateResult] = useState<'success' | 'failure' | null>(null)
+  const canRepair = Boolean(check.pluginPath && check.rustPath)
 
   const handleMigrate = async () => {
     if (!check.pluginPath || !check.rustPath) return
@@ -36,12 +25,10 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
     setMigrateResult(null)
     try {
       await migrateDatabase(check.pluginPath, check.rustPath)
-      setMigrateResult({ ok: true })
+      setMigrateResult('success')
     } catch (error) {
-      setMigrateResult({
-        ok: false,
-        message: String(error),
-      })
+      console.error('修复本地数据连接失败', error)
+      setMigrateResult('failure')
     } finally {
       setMigrating(false)
     }
@@ -52,181 +39,81 @@ export function DatabaseLocationErrorDialog({ check }: DatabaseLocationErrorDial
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0, 0, 0, 0.6)',
-        backdropFilter: 'blur(8px)',
-      }}
+    <Dialog
+      dismissible={false}
+      onClose={() => undefined}
+      open
       role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="db-error-title"
+      title="需要修复本地数据连接"
     >
-      <div
-        style={{
-          maxWidth: '560px',
-          width: '90%',
-          background: 'var(--surface, #1e1e1e)',
-          border: '1px solid var(--border, #333)',
-          borderRadius: '12px',
-          padding: '28px 32px',
-          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-          color: 'var(--ink)',
-          fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-        }}
-      >
-        <h2
-          id="db-error-title"
-          style={{
-            margin: '0 0 16px',
-            fontSize: '20px',
-            fontWeight: 600,
-            color: 'var(--danger)',
-          }}
-        >
-          数据库位置错误
-        </h2>
-
-        <p style={{ margin: '0 0 16px', fontSize: '14px', lineHeight: '1.6' }}>
-          Axiom 检测到数据库连接指向了不同的文件位置。这可能导致：
+      <div className="database-recovery">
+        <p>
+          Axiom 检测到两个本地数据位置。为避免把新内容写入错误位置，应用已暂停进入工作区。
         </p>
-        <ul
-          style={{
-            margin: '0 0 16px',
-            paddingLeft: '20px',
-            fontSize: '13px',
-            lineHeight: '1.8',
-            color: 'var(--muted)',
+        <InlineNotice
+          feedback={{
+            tone: 'warning',
+            message: '自动修复只会把现有数据复制到正确位置，不会删除原文件、错题或复习记录。',
           }}
-        >
-          <li>数据库 migration 重复执行</li>
-          <li>用户数据「消失」（实际写入了错误位置）</li>
-          <li>读取到空数据或过时数据</li>
-        </ul>
+        />
 
-        <div
-          style={{
-            background: 'var(--canvas)',
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            padding: '12px 14px',
-            marginBottom: '16px',
-            fontSize: '12px',
-            fontFamily: 'ui-monospace, monospace',
-            lineHeight: '1.6',
-            overflow: 'auto',
-          }}
-        >
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ color: 'var(--danger)' }}>当前路径（plugin-sql）：</span>
-            <br />
-            <span style={{ wordBreak: 'break-all' }}>
-              {check.pluginPath || '未知'}
-            </span>
-          </div>
-          <div>
-            <span style={{ color: 'var(--brand-pressed)' }}>期望路径（Rust sqlx）：</span>
-            <br />
-            <span style={{ wordBreak: 'break-all' }}>
-              {check.rustPath || '未知'}
-            </span>
-          </div>
-        </div>
+        <ol className="database-recovery__steps">
+          <li>复制现有数据到 Axiom 当前使用的位置。</li>
+          <li>退出并重新打开 Axiom。</li>
+          <li>确认错题库与今日复习内容正常显示。</li>
+        </ol>
 
-        {check.error && (
-          <p
-            style={{
-              margin: '0 0 16px',
-              fontSize: '12px',
-              color: 'var(--muted)',
-              fontStyle: 'italic',
+        {!canRepair && (
+          <InlineNotice
+            feedback={{
+              tone: 'danger',
+              message: 'Axiom 无法自动定位数据文件。请先安全退出，再联系支持人员处理；当前数据不会被修改。',
             }}
-          >
-            {check.error}
-          </p>
+          />
+        )}
+        {migrateResult === 'success' && (
+          <InlineNotice
+            feedback={{
+              tone: 'success',
+              message: '数据已复制，原文件仍然保留。请退出 Axiom，然后重新打开应用。',
+            }}
+          />
+        )}
+        {migrateResult === 'failure' && (
+          <InlineNotice
+            feedback={{
+              tone: 'danger',
+              message: '数据没有复制，原文件未被修改。你可以重试；如果仍然失败，请安全退出并联系支持人员。',
+            }}
+          />
         )}
 
-        {migrateResult?.ok && (
-          <div
-            style={{
-              background: 'color-mix(in srgb, var(--success) 15%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--success) 40%, transparent)',
-              borderRadius: '8px',
-              padding: '12px 14px',
-              marginBottom: '16px',
-              fontSize: '13px',
-            }}
-          >
-            数据库已成功复制到期望位置。<strong>请退出并重新启动 Axiom</strong>
-            以加载正确的数据库文件。原文件未被删除。
-          </div>
-        )}
+        <details className="database-recovery__details">
+          <summary>查看技术信息</summary>
+          <dl>
+            <div><dt>检测到的位置</dt><dd>{check.pluginPath || '无法确定'}</dd></div>
+            <div><dt>Axiom 需要的位置</dt><dd>{check.rustPath || '无法确定'}</dd></div>
+          </dl>
+        </details>
 
-        {migrateResult && !migrateResult.ok && (
-          <div
-            style={{
-              background: 'color-mix(in srgb, var(--danger) 15%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--danger) 40%, transparent)',
-              borderRadius: '8px',
-              padding: '12px 14px',
-              marginBottom: '16px',
-              fontSize: '13px',
-            }}
-          >
-            迁移失败：{migrateResult.message}
-            <br />
-            <span style={{ fontSize: '12px', color: 'var(--muted)' }}>
-              你可以手动复制数据库文件，或联系支持。
-            </span>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={handleExit}
-            style={{
-              padding: '8px 20px',
-              fontSize: '14px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              background: 'transparent',
-              color: 'var(--ink)',
-              cursor: 'pointer',
-            }}
-          >
-            安全退出
-          </button>
-          <button
-            type="button"
-            onClick={handleMigrate}
-            disabled={migrating || !check.pluginPath || !check.rustPath || migrateResult?.ok === true}
-            style={{
-              padding: '8px 20px',
-              fontSize: '14px',
-              fontWeight: 500,
-              borderRadius: '8px',
-              border: 'none',
-              background:
-                migrating || !check.pluginPath || !check.rustPath || migrateResult?.ok === true
-                  ? 'var(--border)'
-                  : 'var(--brand)',
-              color: 'var(--brand-ink)',
-              cursor:
-                migrating || !check.pluginPath || !check.rustPath || migrateResult?.ok === true
-                  ? 'not-allowed'
-                  : 'pointer',
-            }}
-          >
-            {migrating ? '迁移中...' : '迁移数据库（复制，不删除原文件）'}
-          </button>
-        </div>
+        <DialogFooter>
+          {migrateResult === 'success' ? (
+            <Button onClick={() => void handleExit()} variant="primary">退出 Axiom</Button>
+          ) : (
+            <>
+              <Button disabled={migrating} onClick={() => void handleExit()} variant="secondary">安全退出</Button>
+              <Button
+                disabled={!canRepair}
+                loading={migrating}
+                onClick={() => void handleMigrate()}
+                variant="primary"
+              >
+                复制数据到正确位置
+              </Button>
+            </>
+          )}
+        </DialogFooter>
       </div>
-    </div>
+    </Dialog>
   )
 }

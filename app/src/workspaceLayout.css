@@ -14,19 +14,19 @@
  * so load order does not matter.
  */
 
-.app-shell:has(> .capture-workspace),
-.app-shell:has(> .editor-workspace),
-.app-shell:has(> .library-workspace),
-.app-shell:has(> .settings-workspace) {
+.app-shell:has(.capture-workspace),
+.app-shell:has(.editor-workspace),
+.app-shell:has(.library-workspace),
+.app-shell:has(.settings-workspace) {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
 }
 
-.app-shell:has(> .capture-workspace) > .capture-workspace,
-.app-shell:has(> .editor-workspace) > .editor-workspace,
-.app-shell:has(> .library-workspace) > .library-workspace,
-.app-shell:has(> .settings-workspace) > .settings-workspace {
+.app-section-panel > .capture-workspace,
+.app-section-panel > .editor-workspace,
+.app-section-panel > .library-workspace,
+.app-section-panel > .settings-workspace {
   height: 100%;
   min-height: 0;
   overflow: hidden;

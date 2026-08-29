@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import './FlowingTaskSurface.css'
 
 export type FlowingTaskState =
@@ -40,20 +40,21 @@ export function FlowingTaskSurface({
   actions,
   children,
 }: FlowingTaskSurfaceProps) {
+  const headingId = useId()
   const fraction = normalizedProgress(progress)
   const hasCount = Number.isFinite(progressCurrent) && Number.isFinite(progressTotal)
-    && Number(progressTotal) > 0
+    && Number(progressTotal) > 1
   const determinate = fraction !== null
+  const visibleProgressLabel = progressLabel && progressLabel !== title ? progressLabel : null
 
   return (
     <section
-      aria-live="polite"
+      aria-labelledby={headingId}
       className={`flowing-task-surface flowing-task-surface--${state}${compact ? ' is-compact' : ''}${widthMode === 'full' ? ' is-full-width' : ''}`}
     >
-      {state === 'running' && <span aria-hidden="true" className="flowing-task-surface__glow" />}
       <div className="flowing-task-surface__header">
-        <div className="flowing-task-surface__heading">
-          <h2>{state === 'running' && <span aria-hidden="true" className="ax-spinner flowing-task-surface__spinner" />}{title}</h2>
+        <div aria-atomic="true" aria-live="polite" className="flowing-task-surface__heading" role={state === 'failed' ? 'alert' : 'status'}>
+          <h2 id={headingId}>{state === 'running' && <span aria-hidden="true" className="ax-spinner flowing-task-surface__spinner" />}{title}</h2>
           {detail && <p>{detail}</p>}
         </div>
         {state === 'paused' && <span className="flowing-task-surface__state">已暂停</span>}
@@ -74,9 +75,9 @@ export function FlowingTaskSurface({
         </div>
       )}
 
-      {(progressLabel || hasCount) && (
+      {(visibleProgressLabel || hasCount) && (
         <div className="flowing-task-surface__meta">
-          {progressLabel && <span>{progressLabel}</span>}
+          {visibleProgressLabel && <span>{visibleProgressLabel}</span>}
           {hasCount && <span>{Number(progressCurrent)} / {Number(progressTotal)}</span>}
         </div>
       )}

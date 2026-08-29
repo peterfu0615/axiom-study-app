@@ -102,7 +102,7 @@
   --ax-color-selected: var(--brand-soft);
   --ax-text-primary: var(--ink);
   --ax-text-secondary: var(--muted);
-  --ax-text-tertiary: color-mix(in srgb, var(--muted) 82%, var(--surface));
+  --ax-text-tertiary: var(--muted);
   --ax-text-disabled: color-mix(in srgb, var(--muted) 62%, var(--surface));
   --ax-text-inverse: #fffdf7;
   --ax-border-subtle: color-mix(in srgb, var(--border) 68%, var(--surface));
@@ -116,7 +116,7 @@
   --ax-accent-foreground: var(--ax-primary-control-ink);
   --ax-accent-border: color-mix(in srgb, var(--brand) 68%, var(--border));
   --ax-accent-ink: var(--brand-ink);
-  --ax-page-eyebrow: #bd6500;
+  --ax-page-eyebrow: #b35b00;
   /* Filled yellow controls require the same dark foreground in both themes.
      --ax-accent-ink still follows the theme for text and selected surfaces. */
   --ax-primary-control-ink: #4a3b00;
@@ -124,13 +124,16 @@
   --ax-success-bg: color-mix(in srgb, var(--brand) 38%, var(--surface));
   --ax-warning-fg: var(--brand-ink);
   --ax-warning-bg: color-mix(in srgb, var(--brand) 22%, var(--surface));
+  --ax-warning-border: color-mix(in srgb, var(--ax-warning-fg) 32%, var(--ax-border-default));
   --ax-danger-fg: var(--danger);
   --ax-danger-bg: color-mix(in srgb, var(--danger) 10%, var(--surface));
   --ax-info-fg: color-mix(in srgb, #275fc2 78%, var(--ink));
   --ax-info-bg: color-mix(in srgb, #4f8ee8 12%, var(--surface));
+  --ax-accent-strong: var(--ax-accent-active);
   --ax-media-stage-bg: #080807;
   --ax-media-overlay-fg: #fff;
   --ax-media-overlay-bg: rgb(0 0 0 / 70%);
+  --ax-media-overlay-solid: #1d1d1f;
   --ax-region-answer-border: #3d8bc2;
   --ax-region-answer: #4e9bd2;
   --ax-region-diagram-border: #3d9a71;
@@ -142,14 +145,11 @@
   --ax-appearance-light-end: #f3eddb;
   --ax-appearance-dark-start: #2a2a2e;
   --ax-appearance-dark-end: #14141a;
-  /* AI activity surfaces must follow both the selected visual palette and
-     light/dark appearance. Keep all animated highlights on semantic tokens
-     so feature CSS never falls back to Axiom's default yellow. */
+  /* AI activity surfaces follow the active palette without decorative scan
+     gradients; ongoing work is communicated by copy and the shared spinner. */
   --ax-ai-flow-soft: color-mix(in srgb, var(--brand) 9%, transparent);
   --ax-ai-flow-medium: color-mix(in srgb, var(--brand) 24%, transparent);
-  --ax-ai-flow-highlight: color-mix(in srgb, var(--brand) 48%, var(--surface));
   --ax-ai-flow-strong: color-mix(in srgb, var(--brand) 78%, var(--ink));
-  --ax-ai-flow-shadow: color-mix(in srgb, var(--brand) 14%, transparent);
   --ax-review-again: var(--ax-danger-fg);
   --ax-review-hard: var(--ax-warning-fg);
   --ax-review-good: var(--ax-success-fg);
@@ -167,17 +167,28 @@
   --ax-space-8: 24px;
   --ax-space-9: 32px;
   --ax-space-10: 40px;
+  --ax-space-11: 48px;
   --ax-radius-xs: 4px;
   --ax-radius-sm: 8px;
   --ax-radius-md: 12px;
   --ax-radius-lg: 18px;
-  --ax-radius-xl: 22px;
   --ax-radius-pill: 999px;
   --ax-control-sm: 32px;
   --ax-control-md: 38px;
   --ax-control-lg: 44px;
   --ax-control-padding-inline: 12px;
+  --ax-icon-xs: 12px;
+  --ax-icon-sm: 16px;
   --ax-icon-md: 16px;
+  --ax-icon-lg: 20px;
+  --ax-icon-xl: 24px;
+  --ax-icon-empty: 32px;
+  --ax-content-reading-width: 780px;
+  --ax-content-form-width: 640px;
+  --ax-content-page-width: 1180px;
+  --ax-content-wide-width: 1480px;
+  --ax-sidebar-width: 220px;
+  --ax-sidebar-narrow-width: 184px;
   --ax-state-panel-max: 640px;
   --ax-shadow-card: var(--card-shadow);
   --ax-shadow-floating: var(--card-shadow);
@@ -186,9 +197,15 @@
   --ax-focus-ring: 0 0 0 3px color-mix(in srgb, var(--brand) 46%, transparent);
   --ax-z-dialog: 20;
   --ax-z-popover: 1000;
-  --ax-motion-instant: 80ms;
+  --ax-z-toast: 1100;
+  --ax-motion-instant: 100ms;
   --ax-motion-fast: 140ms;
-  --ax-motion-standard: 180ms;
+  --ax-motion-standard: 200ms;
+  --ax-duration-fast: var(--ax-motion-fast);
+  --ax-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ax-ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  --ax-ease-standard: var(--ax-ease-out);
+  --ax-reading-line: 1.7;
   /* Semantic font roles: interface chrome stays neutral and efficient, while
      problem statements and AI explanations use a more editorial reading face. */
   --ax-font-ui:
@@ -325,7 +342,7 @@
   --muted: #776a70;
   --border: #eed7dd;
   --ax-page-eyebrow: #b84a62;
-  --ax-primary-control-ink: #ffffff;
+  --ax-primary-control-ink: #38091a;
 }
 
 :root[data-visual-theme='sakura'][data-theme='dark'] {
@@ -360,7 +377,7 @@
   --surface: #f4f9ff;
   --surface-muted: #e9f0fa;
   --ink: #182230;
-  --muted: #66768a;
+  --muted: #617185;
   --border: #d4dfeb;
   --ax-page-eyebrow: #1a63cf;
   --ax-primary-control-ink: #ffffff;
@@ -398,7 +415,7 @@
   --surface: #f1f8f2;
   --surface-muted: #e6f0e7;
   --ink: #1c2a20;
-  --muted: #66766c;
+  --muted: #627268;
   --border: #d3e0d6;
   --ax-page-eyebrow: #23703c;
   --ax-primary-control-ink: #ffffff;
@@ -501,6 +518,21 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Screen-reader-only text is a global accessibility primitive. It must not be
+   scoped to one page because SearchField, RadioGroup and Table all rely on it. */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+  white-space: nowrap !important;
 }
 
 html,

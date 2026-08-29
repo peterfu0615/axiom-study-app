@@ -1,4 +1,5 @@
 import { Icon } from './Icon'
+import { SidebarItem } from './ui'
 
 export type AppSection =
   | 'today'
@@ -12,12 +13,13 @@ const items: Array<{
   id: AppSection
   label: string
   icon: Parameters<typeof Icon>[0]['name']
+  shortcut: string
 }> = [
-  { id: 'today', label: '今日', icon: 'today' },
-  { id: 'capture', label: '采集', icon: 'capture' },
-  { id: 'library', label: '错题库', icon: 'library' },
-  { id: 'curriculum', label: '课程', icon: 'curriculum' },
-  { id: 'insights', label: '洞察', icon: 'insights' },
+  { id: 'today', label: '今日', icon: 'today', shortcut: '⌘1' },
+  { id: 'capture', label: '采集', icon: 'capture', shortcut: '⌘2' },
+  { id: 'library', label: '错题库', icon: 'library', shortcut: '⌘3' },
+  { id: 'curriculum', label: '课程', icon: 'curriculum', shortcut: '⌘4' },
+  { id: 'insights', label: '洞察', icon: 'insights', shortcut: '⌘5' },
 ]
 
 export function Sidebar({
@@ -56,27 +58,27 @@ export function Sidebar({
 
       <nav aria-label="主要导航">
         {items.map((item) => (
-          <button
-            className={`nav-item ${active === item.id ? 'active' : ''}`}
+          <SidebarItem
+            active={active === item.id}
+            data-sidebar-section={item.id}
+            icon={item.icon}
             key={item.id}
+            label={item.label}
             onClick={() => onChange(item.id)}
-            type="button"
-          >
-            <Icon name={item.icon} />
-            <span>{item.label}</span>
-          </button>
+            shortcut={item.shortcut}
+          />
         ))}
       </nav>
 
       <div className="sidebar-footer">
-        <button
-          className={`nav-item ${active === 'settings' ? 'active' : ''}`}
+        <SidebarItem
+          active={active === 'settings'}
+          data-sidebar-section="settings"
+          icon="settings"
+          label="设置"
           onClick={() => onChange('settings')}
-          type="button"
-        >
-          <Icon name="settings" />
-          <span>设置</span>
-        </button>
+          shortcut="⌘,"
+        />
 
       </div>
     </aside>

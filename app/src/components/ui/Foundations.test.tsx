@@ -2,12 +2,88 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest executes this contract in Node, while the app tsconfig is browser-only.
 import { readFileSync } from 'node:fs'
-import { Badge, Button, Checkbox, DiscreteSlider, Heading, IconButton, Input, PageHeader, SearchField, SegmentedControl, StatusBadge, StatusTag, Surface, Tabs, Text } from './index'
+import {
+  Badge,
+  Breadcrumb,
+  Button,
+  Card,
+  Checkbox,
+  Combobox,
+  DetailHeader,
+  DiscreteSlider,
+  Dialog,
+  DialogFooter,
+  FlowingTaskSurface,
+  Heading,
+  IconButton,
+  Input,
+  ListRow,
+  LoadingState,
+  NavigationItem,
+  PageHeader,
+  Popover,
+  ProgressSteps,
+  RadioGroup,
+  SearchField,
+  SegmentedControl,
+  SettingRow,
+  Sheet,
+  Skeleton,
+  StatusBadge,
+  StatusTag,
+  Surface,
+  Switch,
+  Table,
+  TableCell,
+  TableRow,
+  Tabs,
+  Tag,
+  Text,
+  Tooltip,
+} from './index'
 import { discreteSliderIndexFromPointer } from './discreteSlider'
 import { nextEnabledTabIndex } from './tabNavigation'
 import { Icon } from '../Icon'
 
 describe('design system foundations', () => {
+  it('announces asynchronous work without fake progress or decorative glow', () => {
+    const html = renderToStaticMarkup(
+      <FlowingTaskSurface
+        progressCurrent={0}
+        progressLabel="正在识别教材结构"
+        progressTotal={1}
+        state="running"
+        title="正在识别教材结构"
+      />,
+    )
+    expect(html).toContain('role="status"')
+    expect(html).toContain('aria-labelledby=')
+    expect(html).not.toContain('0 / 1')
+    expect(html).not.toContain('__glow')
+    expect(html.match(/正在识别教材结构/gu)).toHaveLength(1)
+  })
+
+  it('supports a non-dismissible alert dialog for blocking recovery', () => {
+    const html = renderToStaticMarkup(
+      <Dialog dismissible={false} onClose={() => undefined} open role="alertdialog" title="修复数据连接">
+        <p>当前数据不会被修改。</p>
+        <DialogFooter><Button>安全退出</Button></DialogFooter>
+      </Dialog>,
+    )
+    expect(html).toContain('role="alertdialog"')
+    expect(html).toContain('修复数据连接')
+    expect(html).not.toContain('aria-label="关闭"')
+  })
+
+  it('defaults shared actions to non-submitting buttons', () => {
+    const html = renderToStaticMarkup(<>
+      <Button>普通操作</Button>
+      <Button type="submit">提交表单</Button>
+    </>)
+    expect(html).toContain('type="button"')
+    expect(html).toContain('type="submit"')
+  })
+
   it('renders accessible input metadata and category/status primitives', () => {
     const html = renderToStaticMarkup(<>
       <Input error="必填" label="教材" value="" readOnly />
@@ -174,5 +250,50 @@ describe('design system foundations', () => {
     expect(insightsCss).not.toContain('.insights-header')
     expect(library).toContain('<Button className="problem-ai-notice__action"')
     expect(library).not.toContain('<button className="problem-ai-notice__action"')
+  })
+
+  it('provides one semantic vocabulary for navigation, choice, content and overlays', () => {
+    const html = renderToStaticMarkup(<>
+      <NavigationItem active icon="today" label="今日" shortcut="⌘1" />
+      <Breadcrumb items={[{ label: '错题库', onClick: () => undefined }, { label: '勾股定理' }]} />
+      <DetailHeader actions={<Button>编辑</Button>} metadata="初二数学" title="勾股定理" />
+      <Card><ListRow description="2026-08-29" onClick={() => undefined} status={<StatusBadge>待复习</StatusBadge>} title="直角三角形" /></Card>
+      <RadioGroup
+        ariaLabel="外观"
+        onChange={() => undefined}
+        options={[{ value: 'system', label: '跟随系统' }, { value: 'light', label: '浅色' }]}
+        value="system"
+        variant="cards"
+      />
+      <Switch defaultChecked description="保存后立即生效" label="连续采集" />
+      <Combobox onValueChange={() => undefined} options={[{ value: 'math', label: '数学' }]} value="math" />
+      <SettingRow description="仅保存在本机" label="自动整理"><Switch label="启用自动整理" /></SettingRow>
+      <ProgressSteps current="confirm" steps={[{ value: 'source', label: '选择来源' }, { value: 'confirm', label: '确认结构' }]} />
+      <Table caption="教材列表" columns={[{ key: 'name', label: '教材' }, { key: 'status', label: '状态' }]}>
+        <TableRow><TableCell as="th">人教版数学</TableCell><TableCell>可用</TableCell></TableRow>
+      </Table>
+      <Tag onRemove={() => undefined}>全等三角形</Tag>
+      <Tooltip content="刷新数据"><IconButton label="刷新"><Icon name="refresh" /></IconButton></Tooltip>
+      <Popover label="筛选条件" trigger="筛选">按状态筛选</Popover>
+      <Sheet onClose={() => undefined} open title="筛选"><Checkbox label="只看待复习" /></Sheet>
+      <Skeleton lines={2} />
+      <LoadingState label="正在载入错题" />
+    </>)
+
+    expect(html).toContain('aria-current="page"')
+    expect(html).toContain('aria-label="面包屑"')
+    expect(html).toContain('ax-detail-header')
+    expect(html).toContain('ax-list-row')
+    expect(html).toContain('type="radio"')
+    expect(html).toContain('role="switch"')
+    expect(html).toContain('role="combobox"')
+    expect(html).toContain('aria-current="step"')
+    expect(html).toContain('<table')
+    expect(html).toContain('ax-tag')
+    expect(html).toContain('role="tooltip"')
+    expect(html).toContain('ax-popover__trigger')
+    expect(html).toContain('ax-sheet')
+    expect(html).toContain('ax-skeleton')
+    expect(html).toContain('正在载入错题')
   })
 })

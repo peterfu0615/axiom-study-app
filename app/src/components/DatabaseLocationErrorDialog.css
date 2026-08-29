@@ -1,0 +1,61 @@
+.database-recovery {
+  display: grid;
+  gap: var(--ax-space-5);
+}
+
+.database-recovery > p {
+  margin: 0;
+  color: var(--ax-text-primary);
+  font-size: var(--ax-type-body-size);
+  line-height: var(--ax-type-body-line);
+}
+
+.database-recovery__steps {
+  display: grid;
+  gap: var(--ax-space-2);
+  margin: 0;
+  padding-left: var(--ax-space-7);
+  color: var(--ax-text-secondary);
+  font-size: var(--ax-type-body-size);
+  line-height: var(--ax-type-body-line);
+}
+
+.database-recovery__details {
+  color: var(--ax-text-secondary);
+  font-size: var(--ax-type-meta-size);
+  line-height: var(--ax-type-meta-line);
+}
+
+.database-recovery__details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--ax-text-primary);
+  font-weight: var(--ax-type-label-weight);
+}
+
+.database-recovery__details summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.database-recovery__details dl {
+  display: grid;
+  gap: var(--ax-space-3);
+  margin: var(--ax-space-4) 0 0;
+}
+
+.database-recovery__details dl > div {
+  display: grid;
+  gap: var(--ax-space-1);
+}
+
+.database-recovery__details dt {
+  color: var(--ax-text-tertiary);
+}
+
+.database-recovery__details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ax-text-secondary);
+  font-family: var(--ax-font-mono);
+}

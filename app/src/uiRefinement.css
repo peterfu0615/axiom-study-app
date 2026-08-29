@@ -18,22 +18,26 @@
 }
 
 .sidebar {
-  width: 226px;
-  flex-basis: 226px;
-  padding-inline: 12px;
+  width: var(--ax-sidebar-width);
+  flex-basis: var(--ax-sidebar-width);
+  padding-inline: var(--ax-space-5);
   border-right-color: var(--ax-border-default);
   background: var(--ax-color-surface);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
+.sidebar .ax-navigation-item {
+  min-height: var(--ax-control-lg);
+}
+
 .brand {
-  padding: 8px 10px 24px;
+  padding: var(--ax-space-4) var(--ax-space-5) var(--ax-space-8);
 }
 
 .nav-item {
   min-height: 42px;
-  padding: 0 11px;
+  padding: 0 var(--ax-space-5);
   border-radius: var(--ax-radius-md);
   color: var(--ax-text-secondary);
   font-size: var(--ax-type-body-size);
@@ -52,7 +56,7 @@
 }
 
 .local-first-note {
-  padding-inline: 12px;
+  padding-inline: var(--ax-space-5);
   color: var(--ax-text-tertiary);
   font-size: var(--ax-type-secondary-size);
   line-height: var(--ax-type-secondary-line);
@@ -280,11 +284,11 @@
 
 .settings-tabs {
   min-width: 0;
-  padding: var(--ax-space-2);
-  border: 1px solid var(--ax-border-default);
-  border-radius: var(--ax-radius-lg);
-  background: var(--ax-color-surface);
-  box-shadow: var(--ax-shadow-card);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .settings-tabs .ax-tabs--rail {
@@ -322,8 +326,15 @@
 }
 
 .settings-pane {
-  padding: var(--ax-space-7);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
+
+.capture-card { background: transparent; box-shadow: none; }
+.capture-side-panel { box-shadow: none; }
 
 .ax-page-header__actions > .runtime-pill,
 .ax-page-header__actions > .settings-provider-badge {
@@ -338,14 +349,94 @@
 
 .provider-nav,
 .provider-detail {
-  border-radius: var(--ax-radius-md);
+  border: 0;
+  border-radius: 0;
   box-shadow: none;
+}
+
+.settings-providers-layout {
+  gap: 0;
+  border: 1px solid var(--ax-border-default);
+  border-radius: var(--ax-radius-md);
+  background: var(--ax-color-surface);
+}
+
+.provider-nav { border-right: 1px solid var(--ax-border-default); }
+
+.provider-nav-select {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: var(--ax-space-4);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.provider-nav-item:has(.provider-nav-select:focus-visible) {
+  outline: none;
+  box-shadow: var(--ax-focus-ring);
+}
+
+/* Master-detail is one continuous workspace, not two decorative cards. */
+.library-layout {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--ax-border-default);
+  border-radius: var(--ax-radius-md);
+  background: var(--ax-color-surface);
+}
+
+.problem-list-panel,
+.problem-detail-panel {
+  border: 0;
+  border-radius: 0;
+  background: var(--ax-color-surface);
+  box-shadow: none;
+}
+
+.problem-list-panel { border-right: 1px solid var(--ax-border-default); }
+
+.problem-card-list > .ax-empty-state {
+  border: 0;
+  border-radius: 0;
+  padding-inline: var(--ax-space-6);
+  background: transparent;
+}
+
+.library-view-tabs {
+  flex: 0 0 auto;
+  margin: calc(var(--ax-space-4) * -1) 0 var(--ax-space-5);
+}
+
+.problem-card-row {
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--ax-radius-md);
+}
+
+.problem-card-row.batch-selected { background: var(--ax-color-selected); }
+.problem-card-row > .problem-card { min-width: 0; flex: 1 1 auto; }
+.problem-card-selection { flex: 0 0 auto; padding-left: var(--ax-space-3); }
+.problem-card-selection .ax-checkbox__label { position: absolute; }
+.problem-detail-back { display: none; }
+
+.problem-learning-page[data-detail-tab='content'] > .problem-review-history,
+.problem-learning-page[data-detail-tab='content'] > .problem-variant-summary-card,
+.problem-learning-page[data-detail-tab='history'] > :not(.problem-review-history),
+.problem-learning-page[data-detail-tab='variants'] > :not(.problem-variant-summary-card) {
+  display: none;
 }
 
 .provider-nav-item:hover,
 .provider-nav-item.active {
-  border-color: var(--ax-accent-border);
-  background: var(--ax-color-hover);
+  border-color: transparent;
+  background: var(--ax-color-selected);
 }
 
 .provider-nav-index {
@@ -584,37 +675,22 @@
 /* Legacy editors still use feature-specific class names, but their controls
  * should read as the same Axiom system as the shared UI primitives. */
 .problem-detail-panel .segmented-control,
-.problem-detail-tabs,
 .document-toolbar .segmented-control {
   margin: 0 0 var(--ax-space-4);
 }
 
 .problem-detail-tabs {
-  display: inline-flex;
-  gap: var(--ax-space-1);
-  padding: var(--ax-space-1);
-  border: 1px solid var(--ax-border-default);
-  border-radius: var(--ax-radius-md);
-  background: var(--ax-color-inset);
+  flex: 0 0 auto;
+  margin: 0 0 var(--ax-space-5);
 }
 
 .problem-detail-tabs button {
-  min-height: var(--ax-control-md);
-  padding: 0 var(--ax-control-padding-inline);
-  border: 0;
-  border-radius: var(--ax-radius-sm);
-  color: var(--ax-text-secondary);
-  background: transparent;
-  font-size: var(--ax-type-control-size);
-  line-height: var(--ax-type-control-line);
-  font-weight: var(--ax-type-control-weight);
+  min-height: var(--ax-control-sm);
 }
 
 .problem-detail-tabs button:hover,
-.problem-detail-tabs button.active {
-  color: var(--ax-primary-control-ink);
-  background: var(--ax-accent);
-  box-shadow: var(--ax-shadow-card);
+.problem-detail-tabs button.is-selected {
+  color: var(--ax-text-primary);
 }
 
 .problem-metadata dt,
@@ -689,7 +765,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .capture-workspace {
+  .capture-workspace,
+  .app-section-panel > .capture-workspace {
     overflow-y: auto;
   }
 
@@ -701,16 +778,14 @@
   }
 }
 
+@media (max-width: 1024px) {
+  .sidebar {
+    width: var(--ax-sidebar-narrow-width);
+    flex-basis: var(--ax-sidebar-narrow-width);
+  }
+}
+
 @media (max-width: 820px) {
-  .ax-page-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .ax-page-header__actions {
-    justify-content: flex-start;
-  }
-
   .settings-shell {
     grid-template-columns: 1fr;
     overflow: auto;
@@ -739,8 +814,28 @@
     grid-template-columns: 1fr;
   }
 
+  .library-layout .problem-detail-panel { display: none; }
+  .library-layout.is-detail-open .problem-list-panel { display: none; }
+  .library-layout.is-detail-open .problem-detail-panel { display: flex; }
+  .problem-list-panel { border-right: 0; }
+  .problem-detail-back { display: inline-flex; }
+
   .today-header__cta {
     width: 100%;
+  }
+}
+
+/* Axiom is a desktop app with an 820px minimum window. Keep page identity and
+   its primary action on one predictable header row throughout that supported
+   range; only stack if a future compact/mobile shell removes the minimum. */
+@media (max-width: 700px) {
+  .ax-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ax-page-header__actions {
+    justify-content: flex-start;
   }
 }
 

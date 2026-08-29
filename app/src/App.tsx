@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { resumeProblemAIPipeline } from './ai/pipeline'
 import { resumeSolutionPipeline } from './ai/solutionPipeline'
@@ -7,7 +7,7 @@ import { resumeGeometryScenePipeline } from './platform/geometrySceneDatabase'
 import { migrateReviewSchedulerState } from './platform/reviewSchedulerMigration'
 import { configureAIProviders } from './ai/provider'
 import { Sidebar, type AppSection } from './components/Sidebar'
-import { Button, Dialog } from './components/ui'
+import { Button, Dialog, DialogFooter, ErrorState } from './components/ui'
 import { Toast } from './components/Toast'
 import { CaptureWorkspace } from './features/capture/CaptureWorkspace'
 import { ProblemLibrary } from './features/library/ProblemLibrary'
@@ -16,7 +16,6 @@ import { TodayWorkspace } from './features/today/TodayWorkspace'
 import { InsightsWorkspace } from './features/insights/InsightsWorkspace'
 import { CurriculumAnalysisProvider } from './features/curriculum/CurriculumAnalysisContext'
 import { AISettings } from './features/settings/AISettings'
-import { ModulePlaceholder } from './features/placeholder/ModulePlaceholder'
 import { CurriculumPreview } from './features/curriculum/CurriculumPreview'
 import { DiagramPreview } from './features/diagram/DiagramPreview'
 import { PracticeSubmissionPreview } from './features/practice/PracticeSubmissionPreview'
@@ -25,6 +24,7 @@ import { checkForUpdates } from './platform/native'
 import { hasUnsavedChanges } from './platform/unsavedGuard'
 import { useToast, type ToastState } from './platform/useToast'
 import { DatabaseLocationErrorDialog } from './components/DatabaseLocationErrorDialog'
+import { createAIError } from './domain/aiError'
 import './components/ui/ui.css'
 import './App.css'
 import './workspaceLayout.css'
@@ -59,6 +59,21 @@ function AppRuntimeShell({
   toastPause: () => void
   toastResume: () => void
 }) {
+  // Only mount a module after its first visit, then keep it mounted while it is
+  // hidden. This preserves list position, filters and editor context when users
+  // move between primary modules without paying every module's startup cost.
+  const visitedSections = useRef(new Set<AppSection>([section]))
+  visitedSections.current.add(section)
+  const panel = (id: AppSection, content: ReactNode) => visitedSections.current.has(id) && (
+    <div
+      aria-hidden={section !== id || undefined}
+      className="app-section-panel"
+      hidden={section !== id}
+      key={id}
+    >
+      {content}
+    </div>
+  )
   return (
     <div className="app-shell">
       <div
@@ -69,43 +84,61 @@ function AppRuntimeShell({
         active={section}
         onChange={setSection}
       />
-      {section === 'capture' ? (
-        <CaptureWorkspace onNavigateToLibrary={() => setSection('library')} />
-      ) : section === 'today' ? (
-        <TodayWorkspace onNavigate={setSection} />
-      ) : section === 'library' ? (
-        <ProblemLibrary />
-      ) : section === 'curriculum' ? (
-        <CurriculumWorkspace />
-      ) : section === 'settings' ? (
-        <AISettings />
-      ) : section === 'insights' ? (
-        <InsightsWorkspace />
-      ) : (
-        <ModulePlaceholder section={section} />
-      )}
+      <div className="app-section-stack">
+        {panel('today', <TodayWorkspace onNavigate={setSection} />)}
+        {panel('capture', <CaptureWorkspace onNavigateToLibrary={() => setSection('library')} />)}
+        {panel('library', <ProblemLibrary onNavigateToCapture={() => setSection('capture')} />)}
+        {panel('curriculum', <CurriculumWorkspace />)}
+        {panel('insights', <InsightsWorkspace />)}
+        {panel('settings', <AISettings />)}
+      </div>
       <Toast toast={toast} onClose={toastDismiss} onPause={toastPause} onResume={toastResume} />
     </div>
   )
 }
 
 function AppRuntime() {
-  const [section, setSection] = useState<AppSection>('capture')
+  const [section, setSection] = useState<AppSection>('today')
   const [pendingSection, setPendingSection] = useState<AppSection | null>(null)
   const [dbCheck, setDbCheck] = useState<DatabasePathCheck | null>(null)
-  const [schedulerError, setSchedulerError] = useState<string | null>(null)
+  const [schedulerFailed, setSchedulerFailed] = useState(false)
   const { toast, notify, dismiss, pauseAutoDismiss, resumeAutoDismiss } = useToast()
 
   // Navigation with an unsaved-changes guard: pages holding local form state
   // (currently AI settings) register in the guard registry before they can be
   // unmounted by a section switch.
-  const requestSection = (next: AppSection) => {
+  const requestSection = useCallback((next: AppSection) => {
     if (next !== section && hasUnsavedChanges()) {
       setPendingSection(next)
-      return
+      return false
     }
     setSection(next)
-  }
+    return true
+  }, [section])
+
+  useEffect(() => {
+    const shortcuts: Record<string, AppSection> = {
+      '1': 'today',
+      '2': 'capture',
+      '3': 'library',
+      '4': 'curriculum',
+      '5': 'insights',
+      ',': 'settings',
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return
+      const target = shortcuts[event.key]
+      if (!target) return
+      event.preventDefault()
+      if (requestSection(target)) {
+        window.requestAnimationFrame(() => {
+          document.querySelector<HTMLButtonElement>(`[data-sidebar-section="${target}"]`)?.focus()
+        })
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [requestSection])
 
   useEffect(() => {
     if (appBootStarted) return
@@ -122,7 +155,7 @@ function AppRuntime() {
         await migrateReviewSchedulerState()
       } catch (error) {
         console.error('升级学习状态失败', error)
-        setSchedulerError(String(error))
+        setSchedulerFailed(true)
         return
       }
       try {
@@ -156,14 +189,15 @@ function AppRuntime() {
   if (dbCheck && !dbCheck.ok) {
     return <DatabaseLocationErrorDialog check={dbCheck} />
   }
-  if (schedulerError) {
+  if (schedulerFailed) {
+    const error = {
+      ...createAIError('PERSISTENCE_ERROR'),
+      retryable: false,
+      title: '无法升级复习算法',
+      userMessage: '旧复习记录没有被改写。请重新启动 Axiom；如果问题仍然存在，请在设置中导出诊断信息。',
+    }
     return <main className="workspace placeholder-workspace">
-      <div className="module-placeholder">
-        <span>学习状态迁移已回滚</span>
-        <h2>无法升级复习算法</h2>
-        <p>{schedulerError}</p>
-        <p>旧复习记录未被改写。请查看日志并修复数据库问题后重新启动 Axiom。</p>
-      </div>
+      <ErrorState error={error} />
     </main>
   }
 
@@ -182,7 +216,7 @@ function AppRuntime() {
       title="离开此页面？"
     >
       <p>当前页面有未保存的修改，切换后将丢失这些修改。</p>
-      <div className="settings-confirm-actions">
+      <DialogFooter>
         <Button onClick={() => setPendingSection(null)} variant="ghost">留在本页</Button>
         <Button
           onClick={() => {
@@ -194,7 +228,7 @@ function AppRuntime() {
         >
           放弃修改并离开
         </Button>
-      </div>
+      </DialogFooter>
     </Dialog>
   </CurriculumAnalysisProvider>
 }

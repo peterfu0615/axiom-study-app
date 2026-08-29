@@ -1,7 +1,10 @@
 import {
+  cloneElement,
   createElement,
+  isValidElement,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -10,6 +13,7 @@ import {
   type InputHTMLAttributes,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactElement,
   type ReactNode,
   type Ref,
   type TextareaHTMLAttributes,
@@ -17,10 +21,11 @@ import {
 import type { AIErrorEnvelope } from '../../domain/aiError'
 import { Icon, type IconName } from '../Icon'
 import { discreteSliderIndexFromPointer } from './discreteSlider'
+import { ListboxSelect, type ListboxSelectProps, type SelectOption } from './ListboxSelect'
 import { isTabNavigationKey, nextEnabledTabIndex } from './tabNavigation'
 export { FlowingTaskSurface } from './FlowingTaskSurface'
 export type { FlowingTaskState, FlowingTaskSurfaceProps } from './FlowingTaskSurface'
-export { ListboxSelect } from './ListboxSelect'
+export { ListboxSelect }
 export type { ListboxSelectProps, SelectOption } from './ListboxSelect'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -41,6 +46,7 @@ export function Button({
       aria-busy={loading || undefined}
       className={`ax-button ax-button--${variant} ${className}`.trim()}
       disabled={loading || props.disabled}
+      type={props.type ?? 'button'}
     >
       {loading && <span aria-hidden="true" className="ax-spinner ax-button__spinner" />}
       <span className="ax-button__content">{children}</span>
@@ -78,6 +84,64 @@ export function PageHeader({
   )
 }
 
+export function NavigationItem({
+  active = false,
+  className = '',
+  icon,
+  label,
+  shortcut,
+  ...props
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> & {
+  active?: boolean
+  icon?: IconName
+  label: string
+  shortcut?: string
+}) {
+  const title = shortcut ? `${label}（${shortcut}）` : label
+  return (
+    <button
+      {...props}
+      aria-current={active ? 'page' : undefined}
+      className={`ax-navigation-item${active ? ' is-selected' : ''} ${className}`.trim()}
+      title={title}
+      type={props.type ?? 'button'}
+    >
+      {icon && <span aria-hidden="true" className="ax-navigation-item__icon"><Icon name={icon} size={20} /></span>}
+      <span className="ax-navigation-item__label">{label}</span>
+      {shortcut && <kbd aria-hidden="true" className="ax-navigation-item__shortcut">{shortcut}</kbd>}
+    </button>
+  )
+}
+
+export function SidebarItem(props: Parameters<typeof NavigationItem>[0]) {
+  return <NavigationItem {...props} className={`ax-sidebar-item ${props.className ?? ''}`.trim()} />
+}
+
+export interface BreadcrumbItem {
+  label: string
+  onClick?: () => void
+}
+
+export function Breadcrumb({ items, className = '' }: { items: BreadcrumbItem[]; className?: string }) {
+  return (
+    <nav aria-label="面包屑" className={`ax-breadcrumb ${className}`.trim()}>
+      <ol>
+        {items.map((item, index) => {
+          const current = index === items.length - 1
+          return (
+            <li key={`${item.label}-${index}`}>
+              {index > 0 && <Icon name="chevron" size={12} />}
+              {current || !item.onClick
+                ? <span aria-current={current ? 'page' : undefined}>{item.label}</span>
+                : <button onClick={item.onClick} type="button">{item.label}</button>}
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
+  )
+}
+
 export function IconButton({
   label,
   children,
@@ -101,6 +165,30 @@ export function IconButton({
     >
       {children}
     </button>
+  )
+}
+
+export function Tooltip({
+  children,
+  content,
+  placement = 'top',
+}: {
+  children: ReactElement<Record<string, unknown>>
+  content: string
+  placement?: 'top' | 'bottom'
+}) {
+  const id = useId()
+  const describedBy = typeof children.props['aria-describedby'] === 'string'
+    ? `${children.props['aria-describedby']} ${id}`
+    : id
+  const trigger = isValidElement(children)
+    ? cloneElement(children, { 'aria-describedby': describedBy })
+    : children
+  return (
+    <span className={`ax-tooltip ax-tooltip--${placement}`}>
+      {trigger}
+      <span className="ax-tooltip__content" id={id} role="tooltip">{content}</span>
+    </span>
   )
 }
 
@@ -323,6 +411,16 @@ export function Tabs<T extends string>({
   )
 }
 
+export function TabPanel({
+  active = true,
+  children,
+  className = '',
+  ...props
+}: HTMLAttributes<HTMLDivElement> & { active?: boolean }) {
+  if (!active) return null
+  return <div {...props} className={`ax-tab-panel ${className}`.trim()} role="tabpanel">{children}</div>
+}
+
 export function StatusBadge({
   children,
   tone = 'neutral',
@@ -343,6 +441,39 @@ export function StatusTag({ children, kind }: { children: ReactNode; kind: Statu
 
 export function Badge({ children }: { children: ReactNode }) {
   return <span className="ax-badge">{children}</span>
+}
+
+export function Tag({
+  children,
+  onRemove,
+  removeLabel = '移除标签',
+}: {
+  children: ReactNode
+  onRemove?: () => void
+  removeLabel?: string
+}) {
+  return (
+    <span className="ax-tag">
+      <span>{children}</span>
+      {onRemove && <IconButton appearance="plain" label={removeLabel} onClick={onRemove}><Icon name="close" size={12} /></IconButton>}
+    </span>
+  )
+}
+
+export function Card({
+  as = 'article',
+  children,
+  className = '',
+  padding = 'standard',
+  ...props
+}: HTMLAttributes<HTMLElement> & {
+  as?: 'article' | 'section' | 'div'
+  padding?: 'compact' | 'standard' | 'spacious'
+}) {
+  return createElement(as, {
+    ...props,
+    className: `ax-card ax-card--padding-${padding} ${className}`.trim(),
+  }, children)
 }
 
 export type TextRole = 'eyebrow' | 'body' | 'secondary' | 'label' | 'meta' | 'caption'
@@ -386,6 +517,10 @@ export function Heading({
   }, children)
 }
 
+export function Select(props: ListboxSelectProps) {
+  return <ListboxSelect {...props} />
+}
+
 export function Input({
   label,
   hint,
@@ -408,6 +543,10 @@ export function Input({
       {(error || hint) && <small className={error ? 'ax-field-error' : 'ax-field-hint'} id={descriptionId}>{error || hint}</small>}
     </label>
   )
+}
+
+export function TextField(props: Parameters<typeof Input>[0]) {
+  return <Input {...props} />
 }
 
 export function SearchField({
@@ -440,6 +579,201 @@ export function Checkbox({
   )
 }
 
+export interface RadioOption<T extends string> {
+  value: T
+  label: ReactNode
+  description?: ReactNode
+  disabled?: boolean
+}
+
+export function RadioGroup<T extends string>({
+  ariaLabel,
+  className = '',
+  name,
+  onChange,
+  options,
+  value,
+  variant = 'standard',
+}: {
+  ariaLabel: string
+  className?: string
+  name?: string
+  onChange: (value: T) => void
+  options: RadioOption<T>[]
+  value: T
+  variant?: 'standard' | 'cards'
+}) {
+  const generatedName = useId()
+  const groupName = name ?? generatedName
+  return (
+    <fieldset aria-label={ariaLabel} className={`ax-radio-group ax-radio-group--${variant} ${className}`.trim()}>
+      <legend className="sr-only">{ariaLabel}</legend>
+      {options.map((option) => (
+        <label className="ax-radio" key={option.value}>
+          <input
+            checked={value === option.value}
+            disabled={option.disabled}
+            name={groupName}
+            onChange={() => onChange(option.value)}
+            type="radio"
+            value={option.value}
+          />
+          <span aria-hidden="true" className="ax-radio__control"><span /></span>
+          <span className="ax-radio__copy">
+            <strong>{option.label}</strong>
+            {option.description && <small>{option.description}</small>}
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  )
+}
+
+export function Switch({
+  className = '',
+  description,
+  label,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & {
+  description?: ReactNode
+  label: ReactNode
+}) {
+  return (
+    <label className={`ax-switch ${className}`.trim()}>
+      <span className="ax-switch__copy">
+        <strong>{label}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      <input {...props} role="switch" type="checkbox" />
+      <span aria-hidden="true" className="ax-switch__track"><span /></span>
+    </label>
+  )
+}
+
+export function Combobox({
+  ariaLabel,
+  className = '',
+  disabled = false,
+  label,
+  onValueChange,
+  options,
+  placeholder = '输入以筛选',
+  value,
+}: {
+  ariaLabel?: string
+  className?: string
+  disabled?: boolean
+  label?: string
+  onValueChange: (value: string) => void
+  options: SelectOption[]
+  placeholder?: string
+  value: string
+}) {
+  const id = useId()
+  const listId = `${id}-listbox`
+  const selected = options.find((option) => option.value === value)
+  const [query, setQuery] = useState(selected?.label ?? '')
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase()
+    return options.filter((option) => !needle || option.label.toLocaleLowerCase().includes(needle))
+  }, [options, query])
+
+  useEffect(() => {
+    if (!open) setQuery(selected?.label ?? '')
+  }, [open, selected?.label])
+
+  const choose = (option: SelectOption) => {
+    if (option.disabled) return
+    onValueChange(option.value)
+    setQuery(option.label)
+    setOpen(false)
+  }
+  const enabledIndexFrom = (start: number, direction: 1 | -1) => {
+    if (!filtered.length) return 0
+    for (let offset = 1; offset <= filtered.length; offset += 1) {
+      const index = (start + direction * offset + filtered.length) % filtered.length
+      if (!filtered[index]?.disabled) return index
+    }
+    return Math.max(0, start)
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!open) setOpen(true)
+      const direction = event.key === 'ArrowDown' ? 1 : -1
+      setActiveIndex((current) => enabledIndexFrom(current, direction))
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      setOpen(true)
+      const start = event.key === 'Home' ? -1 : 0
+      setActiveIndex(enabledIndexFrom(start, event.key === 'Home' ? 1 : -1))
+    } else if (event.key === 'Enter' && open && filtered[activeIndex]) {
+      event.preventDefault()
+      choose(filtered[activeIndex])
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+      setQuery(selected?.label ?? '')
+    }
+  }
+
+  return (
+    <div
+      className={`ax-combobox ${className}`.trim()}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false)
+      }}
+    >
+      {label && <label className="ax-field-label" htmlFor={id}>{label}</label>}
+      <div className="ax-combobox__control">
+        <Icon name="search" size={16} />
+        <input
+          aria-activedescendant={open && filtered[activeIndex] ? `${listId}-option-${activeIndex}` : undefined}
+          aria-autocomplete="list"
+          aria-controls={open ? listId : undefined}
+          aria-expanded={open}
+          aria-label={ariaLabel ?? label}
+          autoComplete="off"
+          disabled={disabled}
+          id={id}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setActiveIndex(0)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          role="combobox"
+          value={query}
+        />
+      </div>
+      {open && !disabled && (
+        <div className="ax-combobox__popover" id={listId} role="listbox">
+          {filtered.length ? filtered.map((option, index) => (
+            <button
+              aria-selected={option.value === value}
+              className={index === activeIndex ? 'is-highlighted' : ''}
+              disabled={option.disabled}
+              id={`${listId}-option-${index}`}
+              key={option.value}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => choose(option)}
+              role="option"
+              type="button"
+            >
+              <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
+              {option.value === value && <Icon name="check" size={16} />}
+            </button>
+          )) : <div className="ax-combobox__empty">没有匹配项</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Textarea({
   label,
   hint,
@@ -464,27 +798,249 @@ export function Textarea({
   )
 }
 
+export function Toolbar({
+  children,
+  className = '',
+  label = '页面工具',
+  ...props
+}: HTMLAttributes<HTMLDivElement> & { label?: string }) {
+  return <div {...props} aria-label={label} className={`ax-toolbar ${className}`.trim()} role="toolbar">{children}</div>
+}
+
+export function DetailHeader({
+  actions,
+  className = '',
+  eyebrow,
+  leading,
+  metadata,
+  title,
+}: {
+  actions?: ReactNode
+  className?: string
+  eyebrow?: ReactNode
+  leading?: ReactNode
+  metadata?: ReactNode
+  title: ReactNode
+}) {
+  return (
+    <header className={`ax-detail-header ${className}`.trim()}>
+      <div className="ax-detail-header__main">
+        {leading && <div className="ax-detail-header__leading">{leading}</div>}
+        <div className="ax-detail-header__copy">
+          {eyebrow && <Text role="eyebrow" tone="secondary">{eyebrow}</Text>}
+          <Heading as="h2" role="section">{title}</Heading>
+          {metadata && <div className="ax-detail-header__metadata">{metadata}</div>}
+        </div>
+      </div>
+      {actions && <div className="ax-detail-header__actions">{actions}</div>}
+    </header>
+  )
+}
+
+export function ListRow({
+  actions,
+  className = '',
+  description,
+  leading,
+  metadata,
+  onClick,
+  selected = false,
+  selection,
+  status,
+  title,
+}: {
+  actions?: ReactNode
+  className?: string
+  description?: ReactNode
+  leading?: ReactNode
+  metadata?: ReactNode
+  onClick?: () => void
+  selected?: boolean
+  selection?: ReactNode
+  status?: ReactNode
+  title: ReactNode
+}) {
+  const content = <>
+    {leading && <span className="ax-list-row__leading">{leading}</span>}
+    <span className="ax-list-row__copy">
+      <strong>{title}</strong>
+      {description && <span className="ax-list-row__description">{description}</span>}
+      {metadata && <span className="ax-list-row__metadata">{metadata}</span>}
+    </span>
+    {status && <span className="ax-list-row__status">{status}</span>}
+  </>
+  return (
+    <article className={`ax-list-row${selected ? ' is-selected' : ''} ${className}`.trim()}>
+      {selection && <div className="ax-list-row__selection">{selection}</div>}
+      {onClick
+        ? <button aria-current={selected ? 'true' : undefined} className="ax-list-row__main" onClick={onClick} type="button">{content}</button>
+        : <div className="ax-list-row__main">{content}</div>}
+      {actions && <div className="ax-list-row__actions">{actions}</div>}
+    </article>
+  )
+}
+
+export interface TableColumn {
+  key: string
+  label: ReactNode
+  className?: string
+}
+
+export function Table({
+  caption,
+  children,
+  className = '',
+  columns,
+}: {
+  caption: string
+  children: ReactNode
+  className?: string
+  columns: TableColumn[]
+}) {
+  return (
+    <div className={`ax-table-wrap ${className}`.trim()}>
+      <table className="ax-table">
+        <caption className="sr-only">{caption}</caption>
+        <thead><tr>{columns.map((column) => <th className={column.className} key={column.key} scope="col">{column.label}</th>)}</tr></thead>
+        <tbody>{children}</tbody>
+      </table>
+    </div>
+  )
+}
+
+export function TableRow({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <tr className={className}>{children}</tr>
+}
+
+export function TableCell({
+  as = 'td',
+  children,
+  className = '',
+}: {
+  as?: 'td' | 'th'
+  children: ReactNode
+  className?: string
+}) {
+  return createElement(as, { className, ...(as === 'th' ? { scope: 'row' } : {}) }, children)
+}
+
+export function SettingsSection({
+  children,
+  className = '',
+  description,
+  eyebrow,
+  title,
+}: {
+  children: ReactNode
+  className?: string
+  description?: ReactNode
+  eyebrow?: ReactNode
+  title: ReactNode
+}) {
+  return (
+    <section className={`ax-settings-section ${className}`.trim()}>
+      <header>
+        {eyebrow && <Text role="eyebrow">{eyebrow}</Text>}
+        <Heading as="h2" role="section">{title}</Heading>
+        {description && <Text tone="secondary">{description}</Text>}
+      </header>
+      <div className="ax-settings-section__content">{children}</div>
+    </section>
+  )
+}
+
+export function SettingRow({
+  children,
+  className = '',
+  description,
+  label,
+}: {
+  children: ReactNode
+  className?: string
+  description?: ReactNode
+  label: ReactNode
+}) {
+  return (
+    <div className={`ax-setting-row ${className}`.trim()}>
+      <div className="ax-setting-row__copy">
+        <strong>{label}</strong>
+        {description && <small>{description}</small>}
+      </div>
+      <div className="ax-setting-row__control">{children}</div>
+    </div>
+  )
+}
+
+export interface ProgressStep<T extends string> {
+  value: T
+  label: string
+}
+
+export function ProgressSteps<T extends string>({
+  current,
+  label = '任务进度',
+  steps,
+}: {
+  current: T
+  label?: string
+  steps: ProgressStep<T>[]
+}) {
+  const currentIndex = Math.max(0, steps.findIndex((step) => step.value === current))
+  return (
+    <nav aria-label={label} className="ax-progress-steps">
+      <ol>
+        {steps.map((step, index) => (
+          <li className={index < currentIndex ? 'is-completed' : index === currentIndex ? 'is-current' : ''} key={step.value}>
+            <span aria-hidden="true" className="ax-progress-steps__marker">{index < currentIndex ? <Icon name="check" size={12} /> : index + 1}</span>
+            <span aria-current={index === currentIndex ? 'step' : undefined}>{step.label}</span>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  )
+}
+
 export function EmptyState({
   title,
   description,
   action,
   secondaryAction,
   icon,
+  size = 'standard',
 }: {
   title: string
   description: string
   action?: ReactNode
   secondaryAction?: ReactNode
   icon?: ReactNode
+  size?: 'compact' | 'standard'
 }) {
   return (
-    <section className="ax-empty-state">
+    <section className={`ax-empty-state ax-empty-state--${size}`}>
       {icon && <div aria-hidden="true" className="ax-empty-state__icon">{icon}</div>}
       <h2>{title}</h2>
       <p>{description}</p>
       {(action || secondaryAction) && <div className="ax-empty-state__actions">{action}{secondaryAction}</div>}
     </section>
   )
+}
+
+export function Skeleton({
+  label = '正在加载',
+  lines = 3,
+}: {
+  label?: string
+  lines?: number
+}) {
+  return (
+    <div aria-label={label} className="ax-skeleton" role="status">
+      {Array.from({ length: Math.max(1, lines) }, (_, index) => <span key={index} />)}
+    </div>
+  )
+}
+
+export function LoadingState({ label = '正在加载…' }: { label?: string }) {
+  return <div className="ax-loading-state" role="status"><span aria-hidden="true" className="ax-spinner" /><span>{label}</span></div>
 }
 
 export function AsyncState({
@@ -506,9 +1062,9 @@ export function AsyncState({
   if (error) {
     return (
       <div className="ax-async-state ax-async-state--error" role="alert">
-        <strong>暂时无法完成此操作</strong>
+        <strong>内容未能加载</strong>
         <span>{error}</span>
-        {onRetry && <Button onClick={onRetry}>重试</Button>}
+        {onRetry && <Button onClick={onRetry}>重新加载</Button>}
       </div>
     )
   }
@@ -571,13 +1127,17 @@ function dialogFocusableElements(dialog: HTMLElement | null) {
 
 export function Dialog({
   children,
+  dismissible = true,
   onClose,
   open,
+  role = 'dialog',
   title,
 }: {
   children: ReactNode
+  dismissible?: boolean
   onClose: () => void
   open: boolean
+  role?: 'dialog' | 'alertdialog'
   title: string
 }) {
   const titleId = useId()
@@ -592,7 +1152,7 @@ export function Dialog({
     document.body.style.overflow = 'hidden'
     dialogFocusableElements(dialogRef.current)[0]?.focus()
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && dismissible) {
         event.preventDefault()
         onClose()
         return
@@ -619,10 +1179,10 @@ export function Dialog({
       document.body.style.overflow = previousOverflow
       previouslyFocused?.focus()
     }
-  }, [onClose, open])
+  }, [dismissible, onClose, open])
   if (!open) return null
   return (
-    <div className="ax-dialog-backdrop" onMouseDown={onClose} role="presentation">
+    <div className="ax-dialog-backdrop" onMouseDown={dismissible ? onClose : undefined} role="presentation">
       <section
         aria-label={title}
         aria-labelledby={titleId}
@@ -630,11 +1190,122 @@ export function Dialog({
         className="ax-dialog"
         onMouseDown={(event) => event.stopPropagation()}
         ref={dialogRef}
+        role={role}
+      >
+        <header><h2 id={titleId}>{title}</h2>{dismissible && <IconButton label="关闭" onClick={onClose}><Icon name="close" size={16} /></IconButton>}</header>
+        <div className="ax-dialog__body">{children}</div>
+      </section>
+    </div>
+  )
+}
+
+export function DialogFooter({ children }: { children: ReactNode }) {
+  return <footer className="ax-dialog__footer">{children}</footer>
+}
+
+export function Sheet({
+  children,
+  onClose,
+  open,
+  side = 'right',
+  title,
+}: {
+  children: ReactNode
+  onClose: () => void
+  open: boolean
+  side?: 'left' | 'right'
+  title: string
+}) {
+  const titleId = useId()
+  const sheetRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    dialogFocusableElements(sheetRef.current)[0]?.focus()
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const elements = dialogFocusableElements(sheetRef.current)
+      if (!elements.length) return
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      previouslyFocused?.focus()
+    }
+  }, [onClose, open])
+  if (!open) return null
+  return (
+    <div className="ax-sheet-backdrop" onMouseDown={onClose} role="presentation">
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className={`ax-sheet ax-sheet--${side}`}
+        onMouseDown={(event) => event.stopPropagation()}
+        ref={sheetRef}
         role="dialog"
       >
         <header><h2 id={titleId}>{title}</h2><IconButton label="关闭" onClick={onClose}><Icon name="close" size={16} /></IconButton></header>
-        <div className="ax-dialog__body">{children}</div>
+        <div className="ax-sheet__body">{children}</div>
       </section>
+    </div>
+  )
+}
+
+export function Popover({
+  children,
+  label,
+  trigger,
+}: {
+  children: ReactNode
+  label: string
+  trigger: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const onPointerDown = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+  return (
+    <div className="ax-popover" ref={root}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className="ax-popover__trigger"
+        onClick={() => setOpen((current) => !current)}
+        ref={triggerRef}
+        type="button"
+      >{trigger}</button>
+      {open && <div aria-label={label} className="ax-popover__content" role="dialog">{children}</div>}
     </div>
   )
 }
@@ -672,6 +1343,10 @@ export function Menu({
     )
     if (items.length) items[Math.max(0, Math.min(index, items.length - 1))].focus()
   }
+  const openFromKeyboard = (index: number) => {
+    setOpen(true)
+    window.requestAnimationFrame(() => focusMenuItem(index))
+  }
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!open) return
     const items = Array.from(
@@ -700,6 +1375,15 @@ export function Menu({
         aria-haspopup="menu"
         label={label}
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            openFromKeyboard(0)
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            openFromKeyboard(Number.MAX_SAFE_INTEGER)
+          }
+        }}
         ref={triggerRef}
       >
         <Icon name="menu" size={16} />
@@ -719,6 +1403,14 @@ export function MenuItem({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button {...props} className={`ax-menu__item ${className}`.trim()} role="menuitem" type="button">{children}</button>
+}
+
+export function DropdownMenu(props: Parameters<typeof Menu>[0]) {
+  return <Menu {...props} />
+}
+
+export function DropdownMenuItem(props: Parameters<typeof MenuItem>[0]) {
+  return <MenuItem {...props} />
 }
 
 export function FileDropzone({

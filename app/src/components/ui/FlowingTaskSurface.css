@@ -9,7 +9,7 @@
   display: grid;
   gap: var(--ax-space-5);
   overflow: hidden;
-  padding: clamp(20px, 4vw, 28px);
+  padding: var(--ax-space-8);
   border: 1px solid color-mix(in srgb, var(--ax-ai-flow-strong) 22%, var(--border));
   border-radius: var(--panel-radius);
   color: var(--ink);
@@ -29,22 +29,6 @@
   max-width: none;
 }
 
-.flowing-task-surface__glow {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(
-    110deg,
-    transparent 12%,
-    var(--ax-ai-flow-soft) 35%,
-    var(--ax-ai-flow-highlight) 50%,
-    transparent 72%
-  );
-  background-size: 220% 100%;
-  pointer-events: none;
-  animation: flowing-task-surface-flow 3.8s linear infinite;
-}
-
 .flowing-task-surface__header {
   min-width: 0;
   display: flex;
@@ -61,14 +45,13 @@
   color: var(--ink);
   font-size: var(--ax-type-section-size);
   line-height: var(--ax-type-section-line);
-  letter-spacing: -.025em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .flowing-task-surface.is-compact h2 { font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .flowing-task-surface__spinner { width: 1em; height: 1em; margin-right: var(--ax-space-2); vertical-align: -.12em; }
 .flowing-task-surface p {
-  margin: 5px 0 0;
+  margin: var(--ax-space-2) 0 0;
   color: var(--muted);
   font-size: var(--ax-type-body-small-size);
   line-height: var(--ax-type-body-small-line);
@@ -85,7 +68,7 @@
 
 .flowing-task-surface__progress {
   position: relative;
-  height: 9px;
+  height: var(--ax-space-4);
   overflow: hidden;
   border-radius: var(--ax-radius-pill);
   background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
@@ -96,28 +79,19 @@
   height: 100%;
   border-radius: inherit;
   background: var(--ax-accent);
-  transition: width 260ms ease;
+  transition: width var(--ax-motion-standard) var(--ax-ease-out);
 }
 .flowing-task-surface__meta {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--ax-space-4);
   color: var(--muted);
   font-size: var(--ax-type-caption-size);
   font-variant-numeric: tabular-nums;
 }
 .flowing-task-surface__meta span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.flowing-task-surface__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.flowing-task-surface__actions { display: flex; flex-wrap: wrap; gap: var(--ax-space-4); }
 
-@keyframes flowing-task-surface-flow {
-  from { background-position: 110% 0; }
-  to { background-position: -110% 0; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .flowing-task-surface__glow,
-  .flowing-task-surface__progress > span {
-    animation: none;
-    background-position: 50% 0;
-  }
   .flowing-task-surface__progress > span { transition: none; }
 }
