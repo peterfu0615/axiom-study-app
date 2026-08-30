@@ -1,6 +1,6 @@
 [package]
 name = "axiom"
-version = "0.8.2"
+version = "0.8.3"
 description = "Axiom intelligent mistake-review workspace"
 authors = ["Axiom contributors"]
 license = "UNLICENSED"
