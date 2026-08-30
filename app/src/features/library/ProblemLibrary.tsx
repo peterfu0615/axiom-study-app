@@ -44,7 +44,7 @@ import type { ProblemRegion } from '../../domain/models'
 import { mediaAssetUrl } from '../../platform/native'
 import { Icon } from '../../components/Icon'
 import { Toast } from '../../components/Toast'
-import { Button, Checkbox, DetailHeader, Dialog, DialogFooter, DiscreteSlider, DropdownMenu, DropdownMenuItem, EmptyState, ErrorState, FlowingTaskSurface, IconButton, Input, ListboxSelect, LoadingState, PageHeader, SearchField, SegmentedControl, Tabs, Textarea } from '../../components/ui'
+import { Button, Checkbox, DetailHeader, Dialog, DialogFooter, DiscreteSlider, DropdownMenu, DropdownMenuItem, EmptyState, ErrorState, IconButton, Input, ListboxSelect, LoadingState, PageHeader, SearchField, SegmentedControl, Tabs, Textarea } from '../../components/ui'
 import { classifyAIError } from '../../domain/aiError'
 import { userFacingError } from '../../domain/userFacingError'
 import { useToast } from '../../platform/useToast'
@@ -335,6 +335,7 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
   // that floods the workspace with full-list reloads.  Coalesce them into a
   // single trailing refresh.
   const refreshTimerRef = useRef<number | null>(null)
+  const variantResultRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => () => {
     if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
@@ -568,11 +569,15 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
   const savedVariantCount = storedVariants.filter((item) => Boolean(item.candidate)).length
   const preferredStoredVariant = storedVariants.find((item) => Boolean(item.candidate)) ?? storedVariants[0] ?? null
   const activeStoredVariant = storedVariants.find((item) => (item.id ?? item.planId) === activeVariantKey) ?? preferredStoredVariant
-  const refreshStoredVariants = useCallback(async (problemId: string) => {
+  const refreshStoredVariants = useCallback(async (problemId: string, preferredPlanId?: string) => {
     const candidates = await listProblemVariantCandidates(problemId)
     if (selectedIdRef.current !== problemId) return
     setStoredVariants(candidates)
     setActiveVariantKey((current) => {
+      const generated = preferredPlanId
+        ? candidates.find((item) => item.planId === preferredPlanId)
+        : null
+      if (generated) return generated.id ?? generated.planId
       if (candidates.some((item) => (item.id ?? item.planId) === current)) return current
       const preferred = candidates.find((item) => Boolean(item.candidate)) ?? candidates[0]
       return preferred?.id ?? preferred?.planId ?? ''
@@ -589,6 +594,14 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
       if (selectedIdRef.current === selectedId) setStoredVariants([])
     })
   }, [refreshStoredVariants, selectedId])
+
+  useEffect(() => {
+    if (variantBusy || !singleVariantPreview?.outcome.variant) return
+    const frame = window.requestAnimationFrame(() => {
+      variantResultRef.current?.scrollIntoView({ block: 'nearest' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [singleVariantPreview, storedVariants.length, variantBusy])
 
   useEffect(() => {
     // Guard against out-of-order responses when switching problems quickly:
@@ -850,8 +863,9 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
     setVariantBusy(true)
     setVariantDialogError(null)
     try {
-      setSingleVariantPreview(await prepareSingleProblemVariant(selected.id, variantDraftDifficulty, variantLevel))
-      await refreshStoredVariants(selected.id)
+      const preview = await prepareSingleProblemVariant(selected.id, variantDraftDifficulty, variantLevel)
+      setSingleVariantPreview(preview)
+      await refreshStoredVariants(selected.id, preview.outcome.planId)
     } catch (error) {
       setVariantDialogError(variantProductError(error))
     } finally {
@@ -1626,7 +1640,8 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
                         </div>
 
                         {selected.aiStatus === 'failed' && (
-                          <ErrorState
+                          <div className="problem-ai-error-region">
+                            <ErrorState
                             error={activeModelRun?.error ?? classifyAIError(
                               activeModelRun?.errorMessage || 'AI 服务未返回错误详情',
                               { runId: activeModelRun?.id ?? null },
@@ -1642,7 +1657,8 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
                                 重试解析
                               </Button>
                             }
-                          />
+                            />
+                          </div>
                         )}
                       </section>
 
@@ -1840,7 +1856,7 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
             <div>
               <p className="eyebrow">创建变式</p>
               <h3>选择变化幅度</h3>
-              <p>只有点击生成按钮后才会开始；生成结果会保存到本题，不会自动开始练习。</p>
+              <p>只有点击生成按钮后才会开始；生成后会自动显示并保存到本题，不会自动开始练习。</p>
             </div>
             <DiscreteSlider
               ariaLabel="难度"
@@ -1861,7 +1877,6 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
             </Button>
           </section>
 
-          {variantBusy && <FlowingTaskSurface compact detail="正在出题并检查答案是否完整" state="running" title="正在生成变式题" />}
           {variantDialogError && !variantBusy && <div className="problem-variant-error" role="alert">
             <strong>暂时没有生成成功</strong>
             <p>{variantDialogError}</p>
@@ -1872,7 +1887,7 @@ export function ProblemLibrary({ onNavigateToCapture }: { onNavigateToCapture?: 
             <span>新变式已保存，可以继续生成或查看下方内容。</span>
           </div>}
 
-          {storedVariants.length ? <section className="problem-variant-library">
+          {storedVariants.length ? <section className="problem-variant-library" ref={variantResultRef}>
             <SegmentedControl
               ariaLabel="已保存变式"
               onChange={setActiveVariantKey}

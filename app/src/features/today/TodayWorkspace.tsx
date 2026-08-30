@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { MathMarkdown } from '../../components/MathMarkdown'
-import { AsyncState, Button, EmptyState, IconButton, PageHeader, ProgressSteps, SegmentedControl, StatusTag } from '../../components/ui'
+import { AsyncState, Button, EmptyState, IconButton, PageHeader, ProgressSteps, StatusTag, Tabs } from '../../components/ui'
 import type { AppSection } from '../../components/Sidebar'
 import type { ReviewForecastDay } from '../../domain/reviewForecast'
 import type { PracticeSet } from '../../domain/practice'
@@ -149,7 +149,7 @@ function ForecastStrip({
           <small className="today-forecast__subheading">预计复习组、题目与每日分钟数</small>
         </div>
         <div className="today-forecast__controls">
-          <SegmentedControl
+          <Tabs
             ariaLabel="预测时间范围"
             onChange={(value) => onRangeChange(Number(value) as ForecastRange)}
             options={forecastRangeOptions}

@@ -13,13 +13,12 @@ const items: Array<{
   id: AppSection
   label: string
   icon: Parameters<typeof Icon>[0]['name']
-  shortcut: string
 }> = [
-  { id: 'today', label: '今日', icon: 'today', shortcut: '⌘1' },
-  { id: 'capture', label: '采集', icon: 'capture', shortcut: '⌘2' },
-  { id: 'library', label: '错题库', icon: 'library', shortcut: '⌘3' },
-  { id: 'curriculum', label: '课程', icon: 'curriculum', shortcut: '⌘4' },
-  { id: 'insights', label: '洞察', icon: 'insights', shortcut: '⌘5' },
+  { id: 'today', label: '今日', icon: 'today' },
+  { id: 'capture', label: '采集', icon: 'capture' },
+  { id: 'library', label: '错题库', icon: 'library' },
+  { id: 'curriculum', label: '课程', icon: 'curriculum' },
+  { id: 'insights', label: '洞察', icon: 'insights' },
 ]
 
 export function Sidebar({
@@ -65,7 +64,6 @@ export function Sidebar({
             key={item.id}
             label={item.label}
             onClick={() => onChange(item.id)}
-            shortcut={item.shortcut}
           />
         ))}
       </nav>
@@ -77,7 +75,6 @@ export function Sidebar({
           icon="settings"
           label="设置"
           onClick={() => onChange('settings')}
-          shortcut="⌘,"
         />
 
       </div>

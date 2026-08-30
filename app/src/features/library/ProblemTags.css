@@ -10,7 +10,20 @@
   border: 0;
   background: transparent;
 }
-.problem-ai-error-region { display: grid; min-width: 0; max-width: 100%; place-items: center; padding: var(--ax-space-6) 0; }
+.problem-ai-error-region {
+  width: 100%;
+  min-width: 0;
+  min-height: calc(var(--ax-control-lg) * 3);
+  max-width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  padding: var(--ax-space-7) 0 0;
+}
+.problem-ai-error-region .ax-error-state {
+  margin: 0;
+  border-radius: var(--ax-radius-sm);
+}
 
 .problem-tags > header {
   display: flex;

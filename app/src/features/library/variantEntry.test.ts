@@ -29,6 +29,9 @@ describe('visible variant entry contract', () => {
     expect(library).not.toContain('type="range"')
     expect(library).not.toContain('实例指纹')
     expect(library).not.toContain('安全错误：')
+    expect(library).toContain('preview.outcome.planId')
+    expect(library).toContain("scrollIntoView({ block: 'nearest' })")
+    expect(library).not.toContain('FlowingTaskSurface')
   })
 
   it('explains automatic variants and visible fallback reasons', () => {

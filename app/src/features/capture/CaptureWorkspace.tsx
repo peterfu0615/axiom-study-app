@@ -33,7 +33,7 @@ import {
   saveSourceDocument,
 } from '../../platform/database'
 import { DocumentEditor } from './DocumentEditor'
-import { Button, EmptyState, IconButton, ListboxSelect, ListRow, PageHeader, SegmentedControl, Switch, Tooltip } from '../../components/ui'
+import { Button, EmptyState, IconButton, ListboxSelect, ListRow, PageHeader, Switch, Tabs, Tooltip } from '../../components/ui'
 
 type CaptureMode = 'camera' | 'import'
 
@@ -428,12 +428,12 @@ export function CaptureWorkspace({
 
       <section className="capture-layout">
         <div className="capture-card">
-          <SegmentedControl
+          <Tabs
             ariaLabel="采集方式"
             onChange={changeMode}
             options={[
-              { value: 'camera', label: <><Icon name="camera" size={16} /> iPhone 相机</> },
-              { value: 'import', label: <><Icon name="image" size={16} /> 导入图片</> },
+              { value: 'camera', label: 'iPhone 相机', icon: 'camera' },
+              { value: 'import', label: '导入图片', icon: 'image' },
             ]}
             value={mode}
           />

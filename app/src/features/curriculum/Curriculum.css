@@ -9,7 +9,8 @@
   max-width: none;
   margin: 0;
   overflow: hidden;
-  padding: var(--ax-space-9) clamp(var(--ax-space-6), 3vw, var(--ax-space-9)) var(--ax-space-8);
+  padding-top: var(--ax-space-10);
+  padding-bottom: var(--ax-space-9);
 }
 
 .app-shell:has(.curriculum-workspace) {

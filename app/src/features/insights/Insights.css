@@ -1,5 +1,6 @@
 .insights-workspace { width: 100%; }
-.insights-range { display: flex; gap: var(--ax-space-2); }
+.insights-range { display: flex; align-items: center; gap: var(--ax-space-5); }
+.insights-range .ax-tabs { flex: 0 0 auto; }
 .insights-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: var(--ax-space-7) 0; border-block: 1px solid var(--ax-border-default); }
 .insights-overview > div { display: grid; gap: var(--ax-space-2); padding: var(--ax-space-6); border-right: 1px solid var(--ax-border-subtle); }
 .insights-overview > div:last-child { border-right: 0; }

@@ -65,10 +65,10 @@ function providerSubtitle(profile: AIProviderProfile): string {
   return 'OpenAI Compatible'
 }
 
-const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string; description: string }> = [
-  { value: 'light', label: '浅色', description: '始终使用浅色外观' },
-  { value: 'dark', label: '深色', description: '始终使用深色外观' },
-  { value: 'system', label: '跟随系统', description: '随系统设置自动切换' },
+const APPEARANCE_OPTIONS: Array<{ value: Appearance; label: string }> = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+  { value: 'system', label: '跟随系统' },
 ]
 
 export function AISettings() {
@@ -550,7 +550,6 @@ export function AISettings() {
                 options={APPEARANCE_OPTIONS.map((option) => ({
                   value: option.value,
                   label: <span className="appearance-choice-label"><span aria-hidden="true" className={`swatch swatch-${option.value}`} />{option.label}</span>,
-                  description: option.description,
                 }))}
                 value={appearance}
                 variant="cards"

@@ -2038,6 +2038,7 @@
   line-height: var(--ax-type-body-small-line);
   font-weight: 620;
   white-space: nowrap;
+  overflow: hidden;
 }
 
 .problem-ai-notice .icon {
@@ -2047,14 +2048,17 @@
 
 .problem-ai-notice__action {
   min-width: 0;
+  min-height: 16px;
   height: 16px;
   display: inline-flex;
   align-items: center;
   padding: 0 0 0 var(--ax-space-3);
   border: 0;
   border-left: 1px solid var(--border);
+  border-radius: 0;
   color: var(--brand-ink);
   background: transparent;
+  box-shadow: none;
   font: inherit;
   cursor: pointer;
 }
@@ -3347,9 +3351,9 @@
 
 .problem-variant-summary-card {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--border));
+  border: 1px solid var(--ax-border-default);
   border-radius: var(--ax-radius-md);
-  background: color-mix(in srgb, var(--brand-wash) 48%, var(--surface));
+  background: var(--surface);
 }
 
 .problem-variant-summary-card > button {
@@ -3378,8 +3382,8 @@
 
 .problem-variant-summary-card h3,
 .problem-variant-summary-card p { margin: 0; }
-.problem-variant-summary-card h3 { margin-top: var(--ax-space-2); }
-.problem-variant-summary-card div > p:last-child { margin-top: var(--ax-space-4); color: var(--muted); line-height: var(--ax-type-body-line); }
+.problem-variant-summary-card h3 { margin-top: var(--ax-space-2); font-size: var(--ax-type-card-size); line-height: var(--ax-type-card-line); font-weight: var(--ax-type-card-weight); }
+.problem-variant-summary-card div > p:last-child { margin-top: var(--ax-space-4); color: var(--muted); font-size: var(--ax-type-body-size); line-height: var(--ax-type-body-line); }
 .problem-variant-summary-card__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: var(--ax-space-3); color: var(--brand-ink); white-space: nowrap; }
 
 .problem-variant-error,
@@ -3644,6 +3648,49 @@
 .model-run-history li > span.failed {
   color: color-mix(in srgb, var(--danger) 70%, var(--ink));
   background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+}
+
+/* Detail tabs expose peer sections. Review history and the variant entry use
+   one card geometry and the same semantic type roles, while their content and
+   interaction affordances remain distinct. */
+.problem-review-history {
+  margin-top: 0;
+  padding: var(--ax-space-7);
+  border-color: var(--ax-border-default);
+  background: var(--surface);
+}
+
+.problem-review-history h3 {
+  font-size: var(--ax-type-card-size);
+  line-height: var(--ax-type-card-line);
+  font-weight: var(--ax-type-card-weight);
+}
+
+.problem-review-history > p:not(.eyebrow) {
+  margin: var(--ax-space-4) 0 0;
+  color: var(--muted);
+  font-size: var(--ax-type-body-size);
+  line-height: var(--ax-type-body-line);
+}
+
+.problem-review-history li strong {
+  font-size: var(--ax-type-body-size);
+  line-height: var(--ax-type-body-line);
+  font-weight: var(--ax-type-body-strong-weight);
+}
+
+.problem-review-history li small {
+  margin: 0;
+  font-size: var(--ax-type-meta-size);
+  line-height: var(--ax-type-meta-line);
+}
+
+.problem-review-history li > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ax-type-body-small-size);
+  line-height: var(--ax-type-body-small-line);
 }
 
 .settings-workspace {

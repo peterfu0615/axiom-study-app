@@ -363,6 +363,13 @@
 
 .provider-nav { border-right: 1px solid var(--ax-border-default); }
 
+/* Scroll containers reserve one spacing step for the external focus ring, so
+   full-width fields do not lose the left and right edges of keyboard focus. */
+.provider-detail-body {
+  margin-inline: calc(var(--ax-space-2) * -1);
+  padding: var(--ax-space-6) var(--ax-space-2) var(--ax-space-2);
+}
+
 .provider-nav-select {
   min-width: 0;
   display: flex;
@@ -563,6 +570,48 @@
 .appearance-resolved-hint {
   font-size: var(--ax-type-meta-size);
   line-height: var(--ax-type-meta-line);
+}
+
+/* Appearance choices remain native radios for semantics and keyboard input,
+   but the selected card itself is the visible affordance. */
+.appearance-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.color-theme-picker__grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.appearance-options .ax-radio__control,
+.color-theme-picker__grid .ax-radio__control {
+  display: none;
+}
+
+.appearance-options.ax-radio-group--cards .ax-radio,
+.color-theme-picker__grid.ax-radio-group--cards .ax-radio {
+  min-height: var(--ax-control-lg);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.appearance-options .ax-radio__copy,
+.color-theme-picker__grid .ax-radio__copy {
+  width: 100%;
+  align-items: center;
+  justify-items: center;
+}
+
+.appearance-options .appearance-choice-label,
+.color-theme-picker__grid .appearance-choice-label {
+  width: 100%;
+  justify-content: center;
+}
+
+.appearance-options .ax-radio:has(input:focus-visible),
+.color-theme-picker__grid .ax-radio:has(input:focus-visible) {
+  outline: none;
+  box-shadow: var(--ax-focus-ring);
 }
 
 .settings-form input,
@@ -788,6 +837,8 @@
 @media (max-width: 820px) {
   .settings-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    align-content: start;
     overflow: auto;
   }
 

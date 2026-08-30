@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AsyncState, Badge, Button, EmptyState, ListboxSelect, PageHeader, StatusBadge } from '../../components/ui'
+import { AsyncState, Badge, EmptyState, ListboxSelect, PageHeader, StatusBadge, Tabs } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import type { InsightRangeDays, ReviewInsights } from '../../domain/reviewInsights'
 import type { InsightEvidenceSplit } from '../../domain/reviewInsights'
@@ -165,15 +165,22 @@ export function InsightsWorkspace() {
 
   return <main className="workspace insights-workspace">
     <PageHeader
-      actions={<div className="insights-range" role="group" aria-label="洞察时间范围">
+      actions={<div className="insights-range">
         <ListboxSelect
           ariaLabel="洞察科目"
           onValueChange={(value) => setSubject(value === 'all' ? null : value)}
           options={[{ value: 'all', label: '全部科目' }, ...(insights?.subjects ?? []).map((value) => ({ value, label: value }))]}
           value={subject ?? 'all'}
         />
-        <Button onClick={() => setRange(7)} variant={range === 7 ? 'primary' : 'secondary'}>最近 7 天</Button>
-        <Button onClick={() => setRange(30)} variant={range === 30 ? 'primary' : 'secondary'}>最近 30 天</Button>
+        <Tabs
+          ariaLabel="洞察时间范围"
+          onChange={(value) => setRange(Number(value) as InsightRangeDays)}
+          options={[
+            { value: '7', label: '最近 7 天' },
+            { value: '30', label: '最近 30 天' },
+          ]}
+          value={String(range)}
+        />
       </div>}
       eyebrow="学习趋势"
       summary="复习趋势与掌握变化"
